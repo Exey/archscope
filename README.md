@@ -34,7 +34,7 @@ Each language lands in its own **tab**, ordered by lines of code (largest first)
 
 2. **🧰 Tech Stack & Modules** — repo-wide tech-stack cloud (languages + frameworks auto-detected from imports: SwiftUI, Combine, React, Next, Django, FastAPI, net/http, gRPC, GORM, …) and a package grid sized by LOC.
 
-3. **🛡️ Danger Index** — the generalized ArchSwiftScope analyzer: **14 weighted categories summing to 1000 points**, a saturating violation-density curve per category, and bands Hardened / Minor exposure / Elevated risk / Critical exposure. Universal rules (hardcoded secrets, PEM keys, SQL interpolation) plus language-scoped rules for each platform. Findings are attributed to their last author via `git blame`.
+3. **🛡️ Danger Index** — **14 weighted security categories summing to 1000 points**, a saturating violation-density curve per category, and bands Hardened / Minor exposure / Elevated risk / Critical exposure. Universal rules (hardcoded secrets, PEM keys, SQL interpolation) plus language-scoped rules for each platform. Findings are attributed to their last author via `git blame`.
 
 4. **Per-platform tabs**, each with:
    - **🏛️ Architecture** — *client* languages (Swift, Objective-C, Kotlin, TS/JS) get **app-architecture pattern detection** (MVC, MVVM and its variants, VIPER, VIP, RIBs, Clean, Redux, TCA, MVP, MV) scored by role conventions. *Backend* languages (Go, Python) get a **goscope-style layered view** — API / Models / Services / Persistence / Auth / Config / CLI / Infra / Tests bars + detected components.
