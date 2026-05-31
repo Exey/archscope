@@ -50,6 +50,22 @@ Each language lands in its own **tab**, ordered by lines of code (largest first)
 
 ---
 
+## 🌐 Languages
+
+Each language is **one self-registering file** in `internal/lang/`. A `LanguageSpec` declares its extensions, detection markers, parse patterns, whether it is a `Client` (UI) language, and its module noun:
+
+| Language | Platform tab | Client? | Module noun |
+|----------|--------------|---------|-------------|
+| Swift / Objective-C | Swift + ObjC | ✅ | 📦 Packages & Modules |
+| Kotlin | Kotlin | ✅ | 📦 Packages & Modules |
+| TypeScript / JavaScript | TS + JS | ✅ | 📦 Packages |
+| Python | Python | — | 📦 Packages |
+| Go | Go | — | 🔧 Microservices |
+
+Adding a language (e.g. `rust.go`) needs no central edit — importing the package triggers its `init()`. The `Client` flag is what routes a tab to pattern detection vs. the layered backend view; the module noun/icon control how its modules are labeled.
+
+---
+
 ## 🚀 Quick Start
 
 ```bash
@@ -106,22 +122,6 @@ go install ./cmd/archscope               # 3) install system-wide ($GOBIN)
 ```
 
 Requires **Go 1.21+**. Module path: `github.com/exey/archscope`. `git` is needed for the git-analysis section and blame attribution (the report degrades gracefully without it).
-
----
-
-## 🌐 Languages
-
-Each language is **one self-registering file** in `internal/lang/`. A `LanguageSpec` declares its extensions, detection markers, parse patterns, whether it is a `Client` (UI) language, and its module noun:
-
-| Language | Platform tab | Client? | Module noun |
-|----------|--------------|---------|-------------|
-| Swift / Objective-C | Swift + ObjC | ✅ | 📦 Packages & Modules |
-| Kotlin | Kotlin | ✅ | 📦 Packages & Modules |
-| TypeScript / JavaScript | TS + JS | ✅ | 📦 Packages |
-| Python | Python | — | 📦 Packages |
-| Go | Go | — | 🔧 Microservices |
-
-Adding a language (e.g. `rust.go`) needs no central edit — importing the package triggers its `init()`. The `Client` flag is what routes a tab to pattern detection vs. the layered backend view; the module noun/icon control how its modules are labeled.
 
 ---
 
