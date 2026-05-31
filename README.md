@@ -56,11 +56,11 @@ Each language is **one self-registering file** in `internal/lang/`. A `LanguageS
 
 | Language | Platform tab | Client? | Module noun |
 |----------|--------------|---------|-------------|
-| Swift / Objective-C | Swift + ObjC | ✅ | 📦 Packages & Modules |
-| Kotlin | Kotlin | ✅ | 📦 Packages & Modules |
-| TypeScript / JavaScript | TS + JS | ✅ | 📦 Packages |
-| Python | Python | — | 📦 Packages |
 | Go | Go | — | 🔧 Microservices |
+| Python | Python | — | 📦 Packages |
+| TypeScript / JavaScript | TS + JS | ✅ | 📦 Packages |
+| Kotlin | Kotlin | ✅ | 📦 Packages & Modules |
+| Swift / Objective-C | Swift + ObjC | ✅ | 📦 Packages & Modules |
 
 Adding a language (e.g. `rust.go`) needs no central edit — importing the package triggers its `init()`. The `Client` flag is what routes a tab to pattern detection vs. the layered backend view; the module noun/icon control how its modules are labeled.
 
