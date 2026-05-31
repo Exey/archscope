@@ -1,3 +1,7 @@
+// Package config holds the global runtime configuration. The repository ships
+// a default config (embedded in Default); a user may place an .archscope.json
+// to override fields for their own needs. Load overlays the user's file on top
+// of the defaults, so a partial user file only changes the keys it sets.
 package config
 
 import (
@@ -6,64 +10,115 @@ import (
 	"os"
 )
 
-type Config struct {
-	ProjectName     string   `json:"project_name"`
-	ExcludePaths    []string `json:"excludePaths"`
-	MaxFilesAnalyze int      `json:"maxFilesAnalyze"`
-	GitCommitLimit  int      `json:"gitCommitLimit"`
-	EnableCache     bool     `json:"enableCache"`
-	EnableParallel  bool     `json:"enableParallel"`
-	HotspotCount    int      `json:"hotspotCount"`
-	FileExtensions  []string `json:"fileExtensions"`
+// DefaultConfigPath is the conventional location of the user override file.
+const DefaultConfigPath = ".archscope.json"
+
+// Output controls report output (requirement #3).
+type Output struct {
+	Format string `json:"format"` // "html" | "sarif" | "both"
+	Dir    string `json:"dir"`    // output directory
 }
 
-const DefaultConfigPath = ".goscope.json"
+// Languages toggles/extends the built-in language set at runtime. New languages
+// are still added by dropping a Go file in internal/lang; this only enables,
+// disables, or tweaks the ones already registered.
+type Languages struct {
+	Enabled         []string            `json:"enabled"`  // empty = all registered
+	Disabled        []string            `json:"disabled"` // IDs to skip
+	ExtraExtensions map[string][]string `json:"extraExtensions"`
+}
 
-func DefaultConfig() Config {
+// Security configures the security engine (replaces anti-patterns).
+type Security struct {
+	Enabled            bool     `json:"enabled"`
+	CommitLimit        int      `json:"commitLimit"`
+	MaxFindingsPerRule int      `json:"maxFindingsPerRule"`
+	DisabledRules      []string `json:"disabledRules"`
+	MinSeverity        string   `json:"minSeverity"` // "LOW" | "MEDIUM" | "HIGH"
+}
+
+// Fetch configures remote-repo cloning (requirement #5), used only for URLs.
+type Fetch struct {
+	Ref   string `json:"ref"`   // branch/tag/sha; "" = default branch
+	Depth int    `json:"depth"` // 0 = full history (needed for git stats)
+}
+
+// Config is the whole runtime configuration.
+type Config struct {
+	ProjectName     string    `json:"projectName"`
+	ExcludePaths    []string  `json:"excludePaths"`
+	MaxFilesAnalyze int       `json:"maxFilesAnalyze"`
+	GitCommitLimit  int       `json:"gitCommitLimit"`
+	EnableParallel  bool      `json:"enableParallel"`
+	EnableCache     bool      `json:"enableCache"`
+	HotspotCount    int       `json:"hotspotCount"`
+	Output          Output    `json:"output"`
+	Languages       Languages `json:"languages"`
+	Security        Security  `json:"security"`
+	Fetch           Fetch     `json:"fetch"`
+}
+
+// Default returns the repo-shipped defaults.
+func Default() Config {
 	return Config{
 		ProjectName: "",
 		ExcludePaths: []string{
-			".git", ".build", "node_modules", "vendor", "dist",
-			"build", ".idea", ".vscode", "__pycache__", ".cache",
-			"DerivedData", "Pods", "target",
+			".git", ".build", "node_modules", "vendor", "dist", "build",
+			".idea", ".vscode", "__pycache__", ".cache", "DerivedData",
+			"Pods", "target", ".venv", "venv", "env", "site-packages",
 		},
 		MaxFilesAnalyze: 50000,
 		GitCommitLimit:  1000,
-		EnableCache:     false,
 		EnableParallel:  true,
+		EnableCache:     false,
 		HotspotCount:    15,
-		FileExtensions:  []string{"go", "proto"},
+		Output:          Output{Format: "html", Dir: "output"},
+		Languages:       Languages{},
+		Security: Security{
+			Enabled:            true,
+			CommitLimit:        500,
+			MaxFindingsPerRule: 100,
+			MinSeverity:        "LOW",
+		},
+		Fetch: Fetch{Ref: "", Depth: 0},
 	}
 }
 
+// Load returns Default() overlaid with the user's file at path (or
+// DefaultConfigPath when path is empty). A missing file is not an error — the
+// defaults are returned. A malformed file logs a warning and returns defaults.
+//
+// The overlay is a straight JSON unmarshal onto a Default() value, so any key
+// the user omits keeps its default and any key they set wins.
 func Load(path string) Config {
 	if path == "" {
 		path = DefaultConfigPath
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return DefaultConfig()
+		return Default()
 	}
-	cfg := DefaultConfig()
+	cfg := Default()
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Failed to parse config, using defaults: %v\n", err)
-		return DefaultConfig()
+		fmt.Fprintf(os.Stderr, "archscope: failed to parse %s, using defaults: %v\n", path, err)
+		return Default()
 	}
 	return cfg
 }
 
+// CreateDefault writes the default config to path (or DefaultConfigPath),
+// giving users a starting point to edit.
 func CreateDefault(path string) error {
 	if path == "" {
 		path = DefaultConfigPath
 	}
-	cfg := DefaultConfig()
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := json.MarshalIndent(Default(), "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return err
 	}
-	fmt.Printf("✅ Created default config at %s\n", path)
+	fmt.Printf("Created default config at %s\n", path)
 	return nil
 }

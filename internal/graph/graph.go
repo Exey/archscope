@@ -1,235 +1,210 @@
+// Package graph builds a module-level dependency graph from parsed files and
+// ranks hotspots with PageRank, ported from goscope. Nodes are module names;
+// an edge A→B is inferred when a file in module A imports something whose final
+// path segment matches module B (a deliberately coarse, language-agnostic
+// heuristic — exact import resolution is out of scope for a static pass).
 package graph
 
 import (
 	"sort"
 	"strings"
 
-	"github.com/goscope/internal/parser"
+	"github.com/exey/archscope/internal/parser"
 )
 
-// DependencyGraph is a directed dependency graph with PageRank scoring.
+// DependencyGraph is a directed graph over module names.
 type DependencyGraph struct {
-	Vertices      map[string]bool
-	Edges         [][2]string // [source, target]
-	adjacency     map[string]map[string]bool
-	reverseAdj    map[string]map[string]bool
-	PageRankScores map[string]float64
+	nodes map[string]bool
+	out   map[string]map[string]bool // module -> set of modules it depends on
+	in    map[string]map[string]bool // module -> set of modules depending on it
+	rank  map[string]float64
 }
 
+// New returns an empty graph.
 func New() *DependencyGraph {
 	return &DependencyGraph{
-		Vertices:       make(map[string]bool),
-		adjacency:      make(map[string]map[string]bool),
-		reverseAdj:     make(map[string]map[string]bool),
-		PageRankScores: make(map[string]float64),
+		nodes: map[string]bool{},
+		out:   map[string]map[string]bool{},
+		in:    map[string]map[string]bool{},
+		rank:  map[string]float64{},
 	}
 }
 
-func (g *DependencyGraph) AddVertex(v string) {
-	g.Vertices[v] = true
-	if g.adjacency[v] == nil {
-		g.adjacency[v] = make(map[string]bool)
-	}
-	if g.reverseAdj[v] == nil {
-		g.reverseAdj[v] = make(map[string]bool)
-	}
-}
-
-func (g *DependencyGraph) AddEdge(source, target string) {
-	if source == target || !g.Vertices[source] || !g.Vertices[target] {
-		return
-	}
-	if g.adjacency[source][target] {
-		return
-	}
-	g.Edges = append(g.Edges, [2]string{source, target})
-	g.adjacency[source][target] = true
-	g.reverseAdj[target][source] = true
-}
-
-func (g *DependencyGraph) OutDegree(v string) int {
-	return len(g.adjacency[v])
-}
-
-func (g *DependencyGraph) InDegree(v string) int {
-	return len(g.reverseAdj[v])
-}
-
-// Build builds the graph from parsed files using import-based edges.
+// Build populates nodes and edges from the parsed files.
 func (g *DependencyGraph) Build(files []*parser.ParsedFile) {
-	nameToPath := make(map[string]string)
-
+	// Index module names (and a lowercase first/last-segment alias) for import
+	// matching. The first segment is what catches Go-style cross-service imports
+	// like "userservice/services" → module "userservice"; the last segment
+	// catches package-style imports.
+	alias := map[string]string{} // lowercased name/segment -> canonical module
+	var names []string
 	for _, f := range files {
-		g.AddVertex(f.FilePath)
-		nameToPath[f.FileNameWithoutExt()] = f.FilePath
-		if f.ModuleName != "" {
-			nameToPath[f.ModuleName] = f.FilePath
+		m := f.ModuleName
+		if m == "" {
+			m = "root"
 		}
+		g.nodes[m] = true
+		alias[strings.ToLower(m)] = m
+		alias[strings.ToLower(firstSegment(m))] = m
+		alias[strings.ToLower(lastSegment(m))] = m
+		names = append(names, m)
 	}
-
-	// Import-based edges
-	for _, src := range files {
-		for _, imp := range src.Imports {
-			// Try matching on last path segment
-			parts := strings.Split(imp, "/")
-			baseName := parts[len(parts)-1]
-			if targetPath, ok := nameToPath[baseName]; ok {
-				g.AddEdge(src.FilePath, targetPath)
+	resolve := func(imp string) (string, bool) {
+		low := strings.ToLower(imp)
+		if to, ok := alias[firstSegment(low)]; ok {
+			return to, true
+		}
+		if to, ok := alias[lastSegment(low)]; ok {
+			return to, true
+		}
+		// Prefix match (import path begins with a module name).
+		for _, m := range names {
+			ml := strings.ToLower(m)
+			if low == ml || strings.HasPrefix(low, ml+"/") {
+				return m, true
 			}
 		}
+		return "", false
 	}
-
-	// Type-reference edges within same microservice
-	byMS := make(map[string][]*parser.ParsedFile)
 	for _, f := range files {
-		ms := f.MicroserviceName
-		if ms == "" {
-			ms = "__root__"
+		from := f.ModuleName
+		if from == "" {
+			from = "root"
 		}
-		byMS[ms] = append(byMS[ms], f)
-	}
-
-	for _, msFiles := range byMS {
-		g.buildTypeRefEdges(msFiles)
-	}
-}
-
-func (g *DependencyGraph) buildTypeRefEdges(files []*parser.ParsedFile) {
-	type declInfo struct {
-		name string
-		path string
-	}
-
-	var decls []declInfo
-	for _, f := range files {
-		for _, d := range f.Declarations {
-			if d.Kind == parser.DeclStruct || d.Kind == parser.DeclInterface ||
-				d.Kind == parser.DeclMessage || d.Kind == parser.DeclService {
-				if len(d.Name) >= 3 {
-					decls = append(decls, declInfo{name: d.Name, path: f.FilePath})
-				}
-			}
-		}
-	}
-
-	if len(decls) > 500 {
-		decls = decls[:500]
-	}
-
-	// Read file contents and check for type references
-	for _, f := range files {
-		content, err := readFileContent(f.FilePath)
-		if err != nil {
-			continue
-		}
-		for _, d := range decls {
-			if d.path == f.FilePath {
+		for _, imp := range f.Imports {
+			to, ok := resolve(imp)
+			if !ok || to == from {
 				continue
 			}
-			if containsTypeName(content, d.name) {
-				g.AddEdge(f.FilePath, d.path)
-			}
+			g.addEdge(from, to)
 		}
 	}
 }
 
-func containsTypeName(content, typeName string) bool {
-	idx := 0
-	for {
-		pos := strings.Index(content[idx:], typeName)
-		if pos < 0 {
-			return false
-		}
-		pos += idx
-		// Check word boundaries
-		before := pos > 0 && isWordChar(content[pos-1])
-		after := pos+len(typeName) < len(content) && isWordChar(content[pos+len(typeName)])
-		if !before && !after {
-			return true
-		}
-		idx = pos + len(typeName)
-		if idx >= len(content) {
-			return false
-		}
+// firstSegment returns the first path component of a slash/dot path.
+func firstSegment(s string) string {
+	s = strings.ReplaceAll(s, "\\", "/")
+	if i := strings.IndexAny(s, "/."); i >= 0 {
+		return s[:i]
 	}
+	return s
 }
 
-func isWordChar(b byte) bool {
-	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
-}
-
-func readFileContent(path string) (string, error) {
-	data, err := ReadFile(path)
-	return string(data), err
-}
-
-// ReadFile reads a file with size limit.
-func ReadFile(path string) ([]byte, error) {
-	const maxSize = 512 * 1024 // 512KB
-	f, err := openFile(path)
-	if err != nil {
-		return nil, err
+func (g *DependencyGraph) addEdge(from, to string) {
+	if g.out[from] == nil {
+		g.out[from] = map[string]bool{}
 	}
-	defer f.Close()
-
-	buf := make([]byte, maxSize)
-	n, _ := f.Read(buf)
-	return buf[:n], nil
+	if g.in[to] == nil {
+		g.in[to] = map[string]bool{}
+	}
+	g.out[from][to] = true
+	g.in[to][from] = true
 }
 
-// Analyze computes PageRank.
+// Analyze runs PageRank (damping 0.85, 40 iterations) over the module graph.
 func (g *DependencyGraph) Analyze() {
-	g.computePageRank(0.85, 100)
-}
-
-func (g *DependencyGraph) computePageRank(damping float64, iterations int) {
-	n := float64(len(g.Vertices))
+	n := len(g.nodes)
 	if n == 0 {
 		return
 	}
-
-	scores := make(map[string]float64)
-	for v := range g.Vertices {
-		scores[v] = 1.0 / n
+	const damping = 0.85
+	const iters = 40
+	init := 1.0 / float64(n)
+	for node := range g.nodes {
+		g.rank[node] = init
 	}
-
-	for i := 0; i < iterations; i++ {
-		newScores := make(map[string]float64)
-		for v := range g.Vertices {
-			newScores[v] = (1.0 - damping) / n
+	for i := 0; i < iters; i++ {
+		next := make(map[string]float64, n)
+		dangling := 0.0
+		for node := range g.nodes {
+			if len(g.out[node]) == 0 {
+				dangling += g.rank[node]
+			}
 		}
-		for v := range g.Vertices {
-			neighbors := g.adjacency[v]
-			if len(neighbors) == 0 {
+		base := (1.0-damping)/float64(n) + damping*dangling/float64(n)
+		for node := range g.nodes {
+			next[node] = base
+		}
+		for node := range g.nodes {
+			outs := g.out[node]
+			if len(outs) == 0 {
 				continue
 			}
-			share := scores[v] / float64(len(neighbors))
-			for neighbor := range neighbors {
-				newScores[neighbor] += damping * share
+			share := damping * g.rank[node] / float64(len(outs))
+			for dst := range outs {
+				next[dst] += share
 			}
 		}
-		scores = newScores
+		g.rank = next
 	}
-	g.PageRankScores = scores
 }
 
-// HotspotEntry holds a path and its PageRank score.
+// HotspotEntry is one ranked module.
 type HotspotEntry struct {
-	Path  string
-	Score float64
+	Name     string  `json:"name"`
+	PageRank float64 `json:"pageRank"`
+	InDeg    int     `json:"inDegree"`
+	OutDeg   int     `json:"outDegree"`
 }
 
-// GetTopHotspots returns the top N files by PageRank.
+// GetTopHotspots returns the highest-PageRank modules (limit<=0 = all).
 func (g *DependencyGraph) GetTopHotspots(limit int) []HotspotEntry {
-	var entries []HotspotEntry
-	for path, score := range g.PageRankScores {
-		entries = append(entries, HotspotEntry{Path: path, Score: score})
+	out := make([]HotspotEntry, 0, len(g.nodes))
+	for node := range g.nodes {
+		out = append(out, HotspotEntry{
+			Name:     node,
+			PageRank: g.rank[node],
+			InDeg:    len(g.in[node]),
+			OutDeg:   len(g.out[node]),
+		})
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Score > entries[j].Score
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].PageRank != out[j].PageRank {
+			return out[i].PageRank > out[j].PageRank
+		}
+		if out[i].InDeg != out[j].InDeg {
+			return out[i].InDeg > out[j].InDeg
+		}
+		return out[i].Name < out[j].Name
 	})
-	if len(entries) > limit {
-		entries = entries[:limit]
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
-	return entries
+	return out
+}
+
+// NodeCount / EdgeCount expose graph size for the report summary.
+// Edges returns module→module dependency pairs ({from, to}: from depends on to).
+func (g *DependencyGraph) Edges() [][2]string {
+	var out [][2]string
+	for from, tos := range g.out {
+		for to := range tos {
+			out = append(out, [2]string{from, to})
+		}
+	}
+	return out
+}
+
+// InDegree returns how many modules depend on the named module.
+func (g *DependencyGraph) InDegree(module string) int { return len(g.in[module]) }
+
+func (g *DependencyGraph) NodeCount() int { return len(g.nodes) }
+func (g *DependencyGraph) EdgeCount() int {
+	n := 0
+	for _, outs := range g.out {
+		n += len(outs)
+	}
+	return n
+}
+
+func lastSegment(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.ReplaceAll(s, "\\", "/")
+	if i := strings.LastIndexByte(s, '/'); i >= 0 {
+		s = s[i+1:]
+	}
+	if i := strings.LastIndexByte(s, '.'); i >= 0 && i < len(s)-1 {
+		s = s[i+1:]
+	}
+	return s
 }

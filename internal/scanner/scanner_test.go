@@ -1,172 +1,74 @@
-package scanner
+package scanner_test
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/exey/archscope/internal/config"
+	_ "github.com/exey/archscope/internal/lang"
+	"github.com/exey/archscope/internal/langspec"
+	"github.com/exey/archscope/internal/scanner"
 )
 
-func setupTestTree(t *testing.T) string {
-	t.Helper()
-	root := t.TempDir()
-
-	// Create multi-repo layout
-	dirs := []string{
-		"api-gateway",
-		"user-service",
-		"proto",
-		"src/payment-service",
-		"src/notification-service",
-		"services/auth",
-		"not-a-service",
-	}
-	for _, d := range dirs {
-		os.MkdirAll(filepath.Join(root, d), 0755)
+func TestScanMultiLanguage(t *testing.T) {
+	root := filepath.Join("..", "..", "testdata", "multi")
+	res, err := scanner.Scan(root, config.Default(), langspec.Default)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
 	}
 
-	// Add service markers
-	markers := map[string]string{
-		"api-gateway/go.mod":                "module api-gateway",
-		"api-gateway/main.go":               "package main",
-		"user-service/Dockerfile":           "FROM golang",
-		"proto/user.proto":                  "syntax = \"proto3\";",
-		"src/payment-service/go.mod":        "module payment",
-		"src/payment-service/main.go":       "package main",
-		"src/notification-service/Makefile": "build:",
-		"services/auth/Dockerfile":          "FROM golang",
+	// Four platforms present.
+	wantPlatforms := map[langspec.Platform]int{
+		langspec.PlatformSwiftObjC: 1, // Auth.swift (Package.swift counts too)
+		langspec.PlatformPython:    1, // app.py
+		langspec.PlatformTSJS:      1, // index.ts
+		langspec.PlatformGo:        1, // main.go
 	}
-	for path, content := range markers {
-		full := filepath.Join(root, path)
-		os.WriteFile(full, []byte(content), 0644)
-	}
-
-	return root
-}
-
-func TestIsServiceDir(t *testing.T) {
-	root := setupTestTree(t)
-
-	tests := []struct {
-		dir  string
-		want bool
-	}{
-		{filepath.Join(root, "api-gateway"), true},     // has go.mod + main.go
-		{filepath.Join(root, "user-service"), true},     // has Dockerfile
-		{filepath.Join(root, "not-a-service"), false},   // no markers
-		{filepath.Join(root, "src/payment-service"), true}, // has go.mod
-		{filepath.Join(root, "services/auth"), true},    // has Dockerfile
-	}
-
-	for _, tt := range tests {
-		got := isServiceDir(tt.dir)
-		name, _ := filepath.Rel(root, tt.dir)
-		if got != tt.want {
-			t.Errorf("isServiceDir(%q) = %v, want %v", name, got, tt.want)
+	for p, min := range wantPlatforms {
+		g := res.Platforms[p]
+		if g == nil {
+			t.Errorf("platform %s missing", p)
+			continue
 		}
-	}
-}
-
-func TestDiscoverServiceDirs(t *testing.T) {
-	root := setupTestTree(t)
-	dirs := discoverServiceDirs(root, map[string]bool{})
-
-	// Should find: api-gateway, user-service, src/payment-service, src/notification-service, services/auth
-	// proto has no standard marker (only .proto file) unless it has go.mod etc
-	found := make(map[string]bool)
-	for _, d := range dirs {
-		name, _ := filepath.Rel(root, d)
-		found[name] = true
-	}
-
-	expect := []string{"api-gateway", "user-service"}
-	for _, e := range expect {
-		if !found[e] {
-			t.Errorf("discoverServiceDirs missing %q, found: %v", e, found)
+		if g.FileCount < min {
+			t.Errorf("platform %s fileCount = %d, want >= %d", p, g.FileCount, min)
 		}
 	}
 
-	// src/payment-service should be found (src is a container dir)
-	if !found[filepath.Join("src", "payment-service")] {
-		t.Errorf("discoverServiceDirs missing src/payment-service, found: %v", found)
+	// Module attribution via marker files.
+	wantModule := map[string]string{ // a file substring -> expected module
+		"main.go":    "backend",
+		"app.py":     "web",
+		"index.ts":   "web",
+		"Auth.swift": "ios",
 	}
-}
-
-func TestDetectMicroservice(t *testing.T) {
-	root := "/code/backend"
-	serviceDirs := []string{
-		"/code/backend/api-gateway",
-		"/code/backend/user-service",
-		"/code/backend/src/payment",
-	}
-
-	tests := []struct {
-		filePath string
-		want     string
-	}{
-		{"/code/backend/api-gateway/main.go", "api-gateway"},
-		{"/code/backend/api-gateway/internal/handler.go", "api-gateway"},
-		{"/code/backend/user-service/pkg/models.go", "user-service"},
-		{"/code/backend/src/payment/service.go", "payment"},
-		{"/code/backend/standalone.go", "root"},
-	}
-
-	for _, tt := range tests {
-		got := detectMicroservice(root, tt.filePath, serviceDirs)
-		if got != tt.want {
-			t.Errorf("detectMicroservice(%q) = %q, want %q", tt.filePath, got, tt.want)
+	for _, fe := range res.Files {
+		base := filepath.Base(fe.Path)
+		if want, ok := wantModule[base]; ok {
+			if fe.ModuleName != want {
+				t.Errorf("%s module = %q, want %q", base, fe.ModuleName, want)
+			}
 		}
 	}
-}
 
-func TestDetectServicesRoot(t *testing.T) {
-	root := "/code"
-	// 3 services under src/, 1 at root level
-	dirs := []string{
-		"/code/src/svc-a",
-		"/code/src/svc-b",
-		"/code/src/svc-c",
-		"/code/standalone",
+	// Project types detected.
+	wantPT := map[string]bool{"Go module": true, "Node": true, "SwiftPM": true, "Gradle": true}
+	for _, pt := range res.ProjectTypes {
+		if !wantPT[pt] {
+			t.Errorf("unexpected project type %q", pt)
+		}
+		delete(wantPT, pt)
 	}
-	got := detectServicesRoot(root, dirs)
-	if got != "src" {
-		t.Errorf("detectServicesRoot = %q, want src", got)
+	if len(wantPT) > 0 {
+		t.Errorf("missing project types: %v", wantPT)
 	}
-}
 
-func TestDetectServicesRoot_NoPattern(t *testing.T) {
-	root := "/code"
-	dirs := []string{"/code/a", "/code/b"}
-	got := detectServicesRoot(root, dirs)
-	if got != "" {
-		t.Errorf("detectServicesRoot with flat layout = %q, want empty", got)
+	// Canonical tab order (Kotlin sits between Swift+ObjC and Python).
+	ordered := res.PlatformsOrdered()
+	if len(ordered) != 5 {
+		t.Fatalf("ordered platforms = %d, want 5", len(ordered))
 	}
-}
-
-func TestCountFileLines(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.txt")
-	os.WriteFile(path, []byte("line1\nline2\nline3\n"), 0644)
-
-	got := countFileLines(path)
-	if got != 3 {
-		t.Errorf("countFileLines = %d, want 3", got)
-	}
-}
-
-func TestCountFileLines_Empty(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "empty.txt")
-	os.WriteFile(path, []byte(""), 0644)
-
-	got := countFileLines(path)
-	if got != 0 {
-		t.Errorf("countFileLines empty = %d, want 0", got)
-	}
-}
-
-func TestCountFileLines_Missing(t *testing.T) {
-	got := countFileLines("/nonexistent/file.txt")
-	if got != 0 {
-		t.Errorf("countFileLines missing file = %d, want 0", got)
+	if ordered[0].Platform != langspec.PlatformSwiftObjC || ordered[len(ordered)-1].Platform != langspec.PlatformGo {
+		t.Errorf("tab order wrong: %v", []langspec.Platform{ordered[0].Platform, ordered[len(ordered)-1].Platform})
 	}
 }

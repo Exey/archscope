@@ -1,0 +1,306 @@
+// Package result also hosts the pipeline that produces an AnalysisResult.
+// Run wires the stages together: scan → parse → dependency graph → git history
+// → security (with blame enrichment) → per-platform report modules → assemble.
+package result
+
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+
+	"github.com/exey/archscope/internal/config"
+	"github.com/exey/archscope/internal/git"
+	"github.com/exey/archscope/internal/graph"
+	"github.com/exey/archscope/internal/langspec"
+	"github.com/exey/archscope/internal/modules"
+	"github.com/exey/archscope/internal/parser"
+	"github.com/exey/archscope/internal/scanner"
+	"github.com/exey/archscope/internal/security"
+)
+
+// cachingLoader reads each file's lines once and memoizes them. It satisfies
+// both parser.SourceLoader and security.LineLoader, so the parse phase, the
+// security phase and blame all share a single read per file.
+type cachingLoader struct {
+	base  parser.FileLoader
+	cache map[string][]string
+}
+
+func newCachingLoader() *cachingLoader {
+	return &cachingLoader{cache: map[string][]string{}}
+}
+
+func (l *cachingLoader) Load(path string) ([]string, error) {
+	if v, ok := l.cache[path]; ok {
+		return v, nil
+	}
+	lines, err := l.base.Load(path)
+	if err != nil {
+		return nil, err
+	}
+	l.cache[path] = lines
+	return lines, nil
+}
+
+// Run executes the full analysis over an already-local root path and returns
+// the assembled AnalysisResult. Remote URLs are resolved by the caller (cmd)
+// before this point, so the pipeline only ever sees a directory on disk.
+func Run(rootPath string, cfg config.Config) (*AnalysisResult, error) {
+	return RunWithProgress(rootPath, cfg, nil)
+}
+
+// RunWithProgress is Run with an optional progress callback invoked at the start
+// of each stage (and with running counts), so a CLI can report progress.
+func RunWithProgress(rootPath string, cfg config.Config, progress func(string)) (*AnalysisResult, error) {
+	step := func(msg string) {
+		if progress != nil {
+			progress(msg)
+		}
+	}
+	reg := langspec.Default
+	loader := newCachingLoader()
+
+	// 1) Scan.
+	step("Scanning source tree…")
+	scan, err := scanner.Scan(rootPath, cfg, reg)
+	if err != nil {
+		return nil, err
+	}
+	step(fmt.Sprintf("Found %d files across %d platform(s), %d module(s)",
+		len(scan.Files), len(scan.PlatformsOrdered()), len(scan.Modules)))
+
+	// 2) Parse every owned file once (shared loader).
+	step(fmt.Sprintf("Parsing %d files…", len(scan.Files)))
+	p := &parser.Parser{Reg: reg, Loader: loader}
+	var files []*parser.ParsedFile
+	for _, fe := range scan.Files {
+		pf, err := p.Parse(fe.Path, fe.ModuleName, fe.ProjectType)
+		if err != nil || pf == nil {
+			continue
+		}
+		files = append(files, pf)
+	}
+
+	// 3) Dependency graph + hotspots.
+	step("Building dependency graph…")
+	g := graph.New()
+	g.Build(files)
+	g.Analyze()
+	hotspots := g.GetTopHotspots(hotspotCount(cfg))
+
+	// 4) Git history (repo-wide), degrading gracefully when absent.
+	if len(scan.GitRepos) > 0 {
+		step(fmt.Sprintf("Analyzing git history (%d repo(s))…", len(scan.GitRepos)))
+	} else {
+		step("No git repository — skipping history")
+	}
+	gitBundle := buildGitBundle(scan.GitRepos, cfg)
+
+	// 5) Security + score.
+	var results []security.RuleResult
+	var score security.Score
+	if cfg.Security.Enabled {
+		step(fmt.Sprintf("Running %d security rules…", len(security.Default.Rules())))
+		eng := security.Default
+		eng.MaxFindingsPerRule = cfg.Security.MaxFindingsPerRule
+		eng.MinSeverity = security.Severity(strings.ToUpper(cfg.Security.MinSeverity))
+		eng.DisabledRules = toSet(cfg.Security.DisabledRules)
+
+		srcs := make([]security.SourceFile, 0, len(files))
+		for _, f := range files {
+			srcs = append(srcs, security.SourceFile{Path: f.FilePath, LanguageID: f.LanguageID})
+		}
+		results, score = eng.RunWithScore(srcs, loader, rootPath)
+		if gitBundle.Available {
+			step("Attributing findings via git blame…")
+			enrichWithBlame(results, scan.GitRepos, cfg)
+		}
+	}
+
+	// 6) Report modules, run per platform tab.
+	step("Running report modules…")
+	panels := runModules(scan, files)
+
+	projectName := cfg.ProjectName
+	if projectName == "" {
+		projectName = filepath.Base(rootPath)
+	}
+
+	return &AnalysisResult{
+		ProjectName:   projectName,
+		RootPath:      rootPath,
+		Files:         files,
+		Scan:          scan,
+		Graph:         g,
+		Hotspots:      hotspots,
+		Security:      results,
+		SecurityScore: score,
+		Git:           gitBundle,
+		ModulePanels:  panels,
+	}, nil
+}
+
+// runModules executes each registered report module against every platform tab
+// whose files include a language the module applies to, rendering its panel.
+func runModules(scan *scanner.ScanResult, files []*parser.ParsedFile) []ModulePanel {
+	byPlatform := map[langspec.Platform][]*parser.ParsedFile{}
+	for _, f := range files {
+		byPlatform[langspec.Platform(f.Platform)] = append(byPlatform[langspec.Platform(f.Platform)], f)
+	}
+	var panels []ModulePanel
+	for _, pg := range scan.PlatformsOrdered() {
+		plat := pg.Platform
+		pfs := byPlatform[plat]
+		if len(pfs) == 0 {
+			continue
+		}
+		langIDs := map[string]bool{}
+		for _, f := range pfs {
+			langIDs[f.LanguageID] = true
+		}
+		for _, m := range modules.Default.All() {
+			applies := false
+			for id := range langIDs {
+				if m.AppliesTo(id) {
+					applies = true
+					break
+				}
+			}
+			if !applies {
+				continue
+			}
+			res := m.Analyze(pfs)
+			html := m.RenderHTML(res)
+			if strings.TrimSpace(html) == "" {
+				continue
+			}
+			panels = append(panels, ModulePanel{
+				Platform: plat,
+				ModuleID: m.ID(),
+				Title:    m.Title(),
+				HTML:     html,
+				Cards:    m.SummaryCards(res),
+			})
+		}
+	}
+	return panels
+}
+
+// buildGitBundle gathers the repo-wide git surface, or an empty (Available:false)
+// bundle when git or history is absent.
+func buildGitBundle(repos []string, cfg config.Config) GitBundle {
+	if len(repos) == 0 {
+		return GitBundle{}
+	}
+	anyAvailable := false
+	for _, r := range repos {
+		if git.Available(r) {
+			anyAvailable = true
+			break
+		}
+	}
+	if !anyAvailable {
+		return GitBundle{Repos: repos}
+	}
+	limit := cfg.GitCommitLimit
+	if limit <= 0 {
+		limit = 1000
+	}
+	return GitBundle{
+		Available: true,
+		Authors:   git.GetAuthorStatsMultiRepo(repos, limit),
+		Churn:     git.GetChurnStats(repos, limit, hotspotCount(cfg)),
+		Tags:      git.GetTagStats(repos),
+		Commits:   git.GetCommitMessageStats(repos, limit),
+		Branch:    git.GetBranchStats(repos, 90),
+		Repos:     repos,
+	}
+}
+
+// enrichWithBlame fills Finding.Author by running git blame for the exact lines
+// that produced findings, grouped per file and per enclosing repository.
+func enrichWithBlame(results []security.RuleResult, repos []string, cfg config.Config) {
+	if len(repos) == 0 {
+		return
+	}
+	// Collect finding line numbers per file path.
+	wantByFile := map[string]map[int]bool{}
+	for i := range results {
+		for _, f := range results[i].Findings {
+			if f.FullPath == "" || f.Line <= 0 {
+				continue
+			}
+			if wantByFile[f.FullPath] == nil {
+				wantByFile[f.FullPath] = map[int]bool{}
+			}
+			wantByFile[f.FullPath][f.Line] = true
+		}
+	}
+	if len(wantByFile) == 0 {
+		return
+	}
+	limit := cfg.GitCommitLimit
+	if limit <= 0 {
+		limit = 1000
+	}
+	// Resolve author per (file,line).
+	authorByFileLine := map[string]map[int]string{}
+	for path, want := range wantByFile {
+		repo := enclosingRepo(path, repos)
+		if repo == "" || !git.Available(repo) {
+			continue
+		}
+		a := git.NewAnalyzer(repo, limit)
+		if got := a.BlameLinesSubset(path, want); len(got) > 0 {
+			authorByFileLine[path] = got
+		}
+	}
+	if len(authorByFileLine) == 0 {
+		return
+	}
+	for i := range results {
+		for j := range results[i].Findings {
+			f := &results[i].Findings[j]
+			if m := authorByFileLine[f.FullPath]; m != nil {
+				if author, ok := m[f.Line]; ok {
+					f.Author = author
+				}
+			}
+		}
+	}
+}
+
+// enclosingRepo returns the longest repo path that contains file.
+func enclosingRepo(file string, repos []string) string {
+	best := ""
+	for _, r := range repos {
+		if r == file || strings.HasPrefix(file, ensureSep(r)) {
+			if len(r) > len(best) {
+				best = r
+			}
+		}
+	}
+	return best
+}
+
+func ensureSep(dir string) string {
+	if strings.HasSuffix(dir, string(filepath.Separator)) {
+		return dir
+	}
+	return dir + string(filepath.Separator)
+}
+
+func hotspotCount(cfg config.Config) int {
+	if cfg.HotspotCount > 0 {
+		return cfg.HotspotCount
+	}
+	return 15
+}
+
+func toSet(xs []string) map[string]bool {
+	m := make(map[string]bool, len(xs))
+	for _, x := range xs {
+		m[x] = true
+	}
+	return m
+}

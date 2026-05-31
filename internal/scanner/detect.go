@@ -1,185 +1,168 @@
 package scanner
 
 import (
-	"bufio"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/exey/archscope/internal/langspec"
 )
 
-func discoverServiceDirs(rootPath string, excludeSet map[string]bool) []string {
-	var dirs []string
+// maxRootDepth bounds how deep below the repo root we look for module markers,
+// matching goscope's 3-level service discovery.
+const maxRootDepth = 3
 
-	// Level 1: direct children
-	l1, _ := os.ReadDir(rootPath)
-	for _, e := range l1 {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || excludeSet[e.Name()] {
-			continue
-		}
-		l1Path := filepath.Join(rootPath, e.Name())
+// discoverModuleRoots finds directories that hold a module for some language,
+// identified by that language's ModuleDetection.MarkerFiles (and ProjectTypes).
+// It searches up to maxRootDepth levels below rootPath. Deeper, more specific
+// roots are kept so attributeModule can pick the nearest one.
+func discoverModuleRoots(rootPath string, reg *langspec.Registry, excl map[string]bool) []moduleRoot {
+	// Build marker -> (languageID) and marker -> projectType indexes once.
+	type markerInfo struct {
+		languageID  string
+		glob        bool // marker begins with "*." (e.g. *.xcodeproj)
+		projectType string
+	}
+	markers := map[string]markerInfo{} // exact filename -> info
+	globMarkers := []struct {          // suffix-glob markers (*.csproj)
+		suffix      string
+		languageID  string
+		projectType string
+	}{}
 
-		if isServiceDir(l1Path) {
-			dirs = append(dirs, l1Path)
-			continue
-		}
-
-		// Level 2: if l1 is a service container, check children
-		if serviceContainerDirs[strings.ToLower(e.Name())] {
-			l2, _ := os.ReadDir(l1Path)
-			for _, e2 := range l2 {
-				if !e2.IsDir() || strings.HasPrefix(e2.Name(), ".") || excludeSet[e2.Name()] {
-					continue
-				}
-				l2Path := filepath.Join(l1Path, e2.Name())
-				if isServiceDir(l2Path) {
-					dirs = append(dirs, l2Path)
-				}
+	for _, spec := range reg.All() {
+		// project-type markers give us a label
+		ptByMarker := map[string]string{}
+		for _, pt := range spec.ProjectTypes {
+			for _, mf := range pt.MarkerFiles {
+				ptByMarker[mf] = pt.Name
 			}
-			continue
 		}
+		add := func(mf string) {
+			if strings.HasPrefix(mf, "*.") {
+				globMarkers = append(globMarkers, struct {
+					suffix      string
+					languageID  string
+					projectType string
+				}{strings.TrimPrefix(mf, "*"), spec.ID, ptByMarker[mf]})
+				return
+			}
+			// don't overwrite a more specific earlier mapping
+			if _, ok := markers[mf]; !ok {
+				markers[mf] = markerInfo{languageID: spec.ID, projectType: ptByMarker[mf]}
+			}
+		}
+		for _, mf := range spec.Modules.MarkerFiles {
+			add(mf)
+		}
+		for _, pt := range spec.ProjectTypes {
+			for _, mf := range pt.MarkerFiles {
+				add(mf)
+			}
+		}
+	}
 
-		// Level 2: check children for service containers
-		l2, _ := os.ReadDir(l1Path)
-		for _, e2 := range l2 {
-			if !e2.IsDir() || strings.HasPrefix(e2.Name(), ".") || excludeSet[e2.Name()] {
+	var roots []moduleRoot
+	seen := map[string]bool{}
+
+	var visit func(dir string, depth int)
+	visit = func(dir string, depth int) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		// check this dir for any marker
+		for _, e := range entries {
+			if e.IsDir() {
 				continue
 			}
-			l2Path := filepath.Join(l1Path, e2.Name())
-
-			if serviceContainerDirs[strings.ToLower(e2.Name())] {
-				// Level 3: children of the container
-				l3, _ := os.ReadDir(l2Path)
-				for _, e3 := range l3 {
-					if !e3.IsDir() || strings.HasPrefix(e3.Name(), ".") || excludeSet[e3.Name()] {
-						continue
-					}
-					l3Path := filepath.Join(l2Path, e3.Name())
-					if isServiceDir(l3Path) {
-						dirs = append(dirs, l3Path)
-					}
+			fn := e.Name()
+			if mi, ok := markers[fn]; ok && !seen[dir] {
+				roots = append(roots, moduleRoot{
+					dir:         dir,
+					name:        filepath.Base(dir),
+					languageID:  mi.languageID,
+					projectType: mi.projectType,
+				})
+				seen[dir] = true
+			}
+			for _, gm := range globMarkers {
+				if strings.HasSuffix(fn, gm.suffix) && !seen[dir] {
+					roots = append(roots, moduleRoot{
+						dir:         dir,
+						name:        filepath.Base(dir),
+						languageID:  gm.languageID,
+						projectType: gm.projectType,
+					})
+					seen[dir] = true
 				}
 			}
 		}
-	}
-
-	return dirs
-}
-
-// isServiceDir checks if a directory looks like a microservice.
-func isServiceDir(dir string) bool {
-	for _, marker := range serviceMarkers {
-		// Check both exact file and glob pattern (.csproj)
-		if strings.HasPrefix(marker, ".") {
-			// Glob for *.csproj etc
-			matches, _ := filepath.Glob(filepath.Join(dir, "*"+marker))
-			if len(matches) > 0 {
-				return true
+		if depth >= maxRootDepth {
+			return
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
 			}
-		} else {
-			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
-				return true
+			name := e.Name()
+			if name == ".git" || strings.HasPrefix(name, ".") || excl[name] {
+				continue
 			}
+			visit(filepath.Join(dir, name), depth+1)
 		}
 	}
-	// Check for .git
-	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-		return true
-	}
-	return false
+	visit(rootPath, 0)
+	return roots
 }
 
-// detectServicesRoot finds the common parent directory pattern for services.
-func detectServicesRoot(rootPath string, serviceDirs []string) string {
-	parents := make(map[string]int)
-	for _, sd := range serviceDirs {
-		rel, _ := filepath.Rel(rootPath, sd)
-		parts := strings.Split(rel, string(filepath.Separator))
-		if len(parts) >= 2 {
-			parents[parts[0]]++
-		}
-	}
+// attributeModule assigns a file to the nearest enclosing module root. If none
+// applies, it derives a module name from the path using the owning language's
+// ModuleNameFromPath hook, then container-dir heuristics, then the first path
+// segment (or "root").
+func attributeModule(rootPath, filePath string, spec *langspec.LanguageSpec, roots []moduleRoot) (module, projectType string) {
+	// nearest (deepest) module root whose dir is a prefix of filePath
 	best := ""
-	bestCount := 0
-	for p, c := range parents {
-		if c > bestCount {
-			best = p
-			bestCount = c
+	var bestRoot *moduleRoot
+	for i := range roots {
+		r := &roots[i]
+		prefix := r.dir + string(filepath.Separator)
+		if strings.HasPrefix(filePath, prefix) {
+			if len(r.dir) > len(best) {
+				best = r.dir
+				bestRoot = r
+			}
 		}
 	}
-	if bestCount >= 2 {
-		return best
-	}
-	return ""
-}
-
-// detectMicroservice infers the microservice name from the file path.
-func detectMicroservice(rootPath, filePath string, serviceDirs []string) string {
-	// Check if file belongs to a discovered service dir
-	for _, sd := range serviceDirs {
-		if strings.HasPrefix(filePath, sd+string(filepath.Separator)) || filePath == sd {
-			return filepath.Base(sd)
-		}
+	if bestRoot != nil {
+		return bestRoot.name, bestRoot.projectType
 	}
 
-	rel, _ := filepath.Rel(rootPath, filePath)
-	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) < 2 {
-		return "root"
-	}
-
-	// Multi-repo: first-level dir with markers is a repo
-	firstDir := filepath.Join(rootPath, parts[0])
-	for _, marker := range []string{".git", "go.mod", "Dockerfile", "Makefile", "docker-compose.yml"} {
-		if _, err := os.Stat(filepath.Join(firstDir, marker)); err == nil {
-			return parts[0]
+	// language-supplied derivation
+	if spec.Modules.ModuleNameFromPath != nil {
+		if n := spec.Modules.ModuleNameFromPath(rootPath, filePath); n != "" {
+			return n, ""
 		}
 	}
 
-	for i, p := range parts {
-		if p == "cmd" && i+1 < len(parts) {
-			return parts[i+1]
-		}
-	}
-	knownContainers := map[string]bool{"services": true, "service": true, "apps": true, "microservices": true, "svc": true}
-	for i, p := range parts {
-		if knownContainers[p] && i+1 < len(parts) {
-			return parts[i+1]
-		}
-	}
-	for i, p := range parts {
-		if (p == "proto" || p == "api" || p == "pkg") && i+1 < len(parts) {
-			return parts[i+1]
-		}
-	}
-	for i, p := range parts {
-		if p == "internal" && i+1 < len(parts) {
-			return parts[i+1]
-		}
-	}
-	return parts[0]
-}
-
-// findServiceDir finds which service directory a file belongs to.
-func findServiceDir(rootPath, filePath string, serviceDirs []string) string {
-	for _, sd := range serviceDirs {
-		if strings.HasPrefix(filePath, sd+string(filepath.Separator)) {
-			return sd
-		}
-	}
-	return ""
-}
-
-func countFileLines(path string) int {
-	f, err := os.Open(path)
+	rel, err := filepath.Rel(rootPath, filePath)
 	if err != nil {
-		return 0
+		return "root", ""
 	}
-	defer f.Close()
-	n := 0
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		n++
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) < 2 {
+		return "root", ""
 	}
-	return n
-}
 
+	// container-dir heuristic: name is the segment AFTER a known container dir
+	containers := map[string]bool{}
+	for _, c := range spec.Modules.ContainerDirs {
+		containers[strings.ToLower(c)] = true
+	}
+	for i, p := range parts {
+		if containers[strings.ToLower(p)] && i+1 < len(parts) {
+			return parts[i+1], ""
+		}
+	}
+	return parts[0], ""
+}

@@ -1,162 +1,162 @@
-# 🔬 goscope
+# 🔭 ArchScope
 
-**CLI tool for Go backend codebase intelligence** — analyze microservices, generate dependency graphs, detect tech stack, and produce an interactive HTML report.
+**Universal CLI for multi-language codebase intelligence** — analyze architecture, security, dependencies and git history across Swift/Objective-C, Kotlin, TypeScript/JavaScript, Python and Go, and produce one interactive HTML report (+ SARIF).
 
-Built in pure Go with zero external dependencies.
+Built in pure Go. One engine, every language: drop a file in `internal/lang/` to add another.
+
+It generalizes [ArchSwiftScope](https://github.com/Exey/ArchSwiftScope) (Swift) and [goscope](https://github.com/Exey/goscope) (Go) into a single language-agnostic tool — the danger index, the architecture/design-pattern detectors, the OOP-vs-POP analysis and the git branching-model classifier are all reworked to span languages.
 
 ---
 
 ## ⚡ Generate Report in 10 Seconds
 
 ```bash
-cd goscope
-go run ./cmd/goscope ~/backend --open
+cd archscope
+go run ./cmd/archscope ~/code --open
 ```
 
-Where `~/backend` is the **parent folder** where all your backend service repositories are cloned:
+`~/code` is any directory: a single app, a service repo, or a **parent folder** where several repositories are cloned side by side. Modules/services are auto-detected up to 3 levels deep, so `services/<svc>/`, `src/<module>/` and monorepo layouts all work. `--open` launches the finished report in your browser.
 
 ```text
-~/backend/
-├── api-gateway/      ← cloned repo (.git inside)
-├── user-service/     ← cloned repo
-├── payment-service/  ← cloned repo
-├── proto/            ← shared proto definitions
-├── auth-service/     ← cloned repo
-└── docker-compose.yml
+~/code/
+├── api-gateway/      ← Go service (.git inside)
+├── user-service/     ← Go service
+├── ios-app/          ← Swift app
+├── android-app/      ← Kotlin app
+└── web/              ← TypeScript frontend
 ```
 
-Services are auto-detected up to 3 levels deep, so layouts like `src/<service>/` or `services/<service>/` also work. Non-Go services (Python, Java, PHP, etc.) are detected and shown in the report with language badges.
-
-![Result](https://i.postimg.cc/TTfttRWk/goscope.png)
+Each language lands in its own **tab**, ordered by lines of code (largest first). Output is a single self-contained `*.html` file — no external assets, no network. A SARIF 2.1.0 log is also available via `--format sarif` or `--format both`.
 
 ---
 
 ### What the Report Contains
 
-1. **📊 Summary** — microservice count, Go files, lines of code, declarations by type (structs, interfaces, enums, functions), proto files, gRPC services. Non-Go services detected in the repo tree get line count cards per language (Python, Java, etc.)
+1. **📊 Summary** — lines of code, files, declarations, modules, the 0–1000 danger index, and platform count, with one tab per language present.
 
-2. **🐙 Git Analysis** — three sub-sections pulled from each cloned repo's `.git` independently:
-   - **👥 Team Contribution Map** — per-developer: files modified, commit count, LOC per commit, first/last change date, and top-3 microservices worked on
-   - **🔥 Code Churn** — most frequently modified files across all repos, with change count and top authors
-   - **📐 Semantic Standards** — semver tag adoption rate (with latest tag), conventional commit coverage with a type breakdown (`feat`, `fix`, `chore`, `refactor`, `docs`, `test`, …), and samples of non-standard commit messages
+2. **🧰 Tech Stack & Modules** — repo-wide tech-stack cloud (languages + frameworks auto-detected from imports: SwiftUI, Combine, React, Next, Django, FastAPI, net/http, gRPC, GORM, …) and a package grid sized by LOC.
 
-3. **🏛️ Architecture** — four-column layout plus an interactive graph:
-   - **Layers** — detected architectural layers (API, service, repository, etc.) with file counts and a proportional bar
-   - **Components** — identified Go components (HTTP server, gRPC server, message queue consumer, etc.)
-   - **Technologies** — auto-detected from Go imports (`pgx` → PostgreSQL, `sarama` → Kafka, etc.), `go.mod`, `docker-compose.yml`, and `Makefile`. Non-Go languages shown with orange badges
-   - **Microservices** — clickable grid of all services including non-Go ones with language/LOC badges
-   - **Architecture Graph** — interactive force-directed graph connecting microservices to their technologies
+3. **🛡️ Danger Index** — the generalized ArchSwiftScope analyzer: **14 weighted categories summing to 1000 points**, a saturating violation-density curve per category, and bands Hardened / Minor exposure / Elevated risk / Critical exposure. Universal rules (hardcoded secrets, PEM keys, SQL interpolation) plus language-scoped rules for each platform. Findings are attributed to their last author via `git blame`.
 
-4. **🔗 Microservices Penetration** — which microservice is imported by the most other microservices, plus TODO/FIXME density per microservice
+4. **Per-platform tabs**, each with:
+   - **🏛️ Architecture** — *client* languages (Swift, Objective-C, Kotlin, TS/JS) get **app-architecture pattern detection** (MVC, MVVM and its variants, VIPER, VIP, RIBs, Clean, Redux, TCA, MVP, MV) scored by role conventions. *Backend* languages (Go, Python) get a **goscope-style layered view** — API / Models / Services / Persistence / Auth / Config / CLI / Infra / Tests bars + detected components.
+   - **🧩 Design Patterns** — Gang-of-Four detection from declaration-name conventions, grouped Creational / Structural / Behavioral.
+   - **⚖️ OOP vs POP** *(Swift)* — places the codebase on the object↔protocol spectrum (Protocol Design 55% · Value Semantics 30% · Anti-inheritance 15%) with a metrics table.
+   - **🔧 Microservices** *(Go)* / **📦 Packages & Modules** *(Swift, Kotlin)* — the module grid, labeled per language.
+   - **🕸️ Dependency Hotspots** — modules ranked by **Uses** (how many others depend on them), with Lines & Decl; backend tabs also get an inline **dependency graph** (SVG, node size = dependents).
+   - **🔎 Security Findings** — this platform's findings grouped by rule, with severity, location and blame author. File locations are **VS Code deep links** (`vscode://`) — click to jump straight to the line.
 
-5. **🔥 Hot Zones** — top 10 most interconnected files by PageRank dependency score, with clickable microservice badges
+5. **🐙 Git Analysis** (repo-wide) — top contributors, file churn, semver tags, conventional-commit hygiene, branch inventory with stale detection, and a **branching-model classifier** scoring Gitflow / Trunk-Based / GitHub Flow / GitLab Flow / OneFlow.
 
-6. **📏 Longest Functions** — ranked list of functions by line count, with clickable microservice badges
-
-7. **⚠️ Anti-patterns** — static analysis across the codebase with 22 Go-specific checks grouped by severity. Passed checks shown in a compact 3-column grid; failed checks listed with file locations, code snippets, and git-blame author attribution. Protobuf-generated files (`.pb.go`) are excluded automatically. Checks include:
-   - **HIGH** — hardcoded secrets, SQL injection via string concatenation, `math/rand` for security, `panic()` in business logic, unsafe type assertions, unclosed HTTP response bodies, loop variable capture in goroutines, copying `sync.Mutex`
-   - **MEDIUM** — error not wrapped with `%w`, defer inside loops, missing `rows.Err()` / `rows.Close()`, `time.Sleep` for goroutine sync
-   - **LOW** — large channel buffers, naked returns, pointer-to-interface, missing slice pre-allocation, package underscore naming, `init()` functions, `fmt.Sprintf` for integer conversion, `[]byte` conversion in loops
-
-8. **🔧 Microservices** — detailed breakdown of each microservice (starting with API Gateway, then Proto, then by size):
-   - Complete file inventory sorted by lines of code
-   - Declaration statistics (structs, interfaces, enums, funcs, gRPC services/RPCs)
-   - Interactive force-directed dependency graph per microservice (includes big functions ≥50 lines)
+6. **📂 Modules & Microservices** — a per-module breakdown at the bottom: each module's project-type badge, declaration mix (🟢 struct · 🔵 class · 🟣 protocol · 🟡 enum · 🔴 actor · 🔹 extension · 🟠 func), and a file inventory (lines, declarations, decl chips) with VS Code links. The per-tab module chips link down to these sections.
 
 ---
 
 ## 🚀 Quick Start
 
 ```bash
-cd goscope
+# Analyze a local directory and open the report
+go run ./cmd/archscope ~/code --open
 
-# Build
-go build -o goscope ./cmd/goscope
+# Write both HTML and SARIF to ./reports/
+go run ./cmd/archscope ~/code --format both --output ./reports
 
-# Analyze a Go backend (point to the parent folder with all repos)
-./goscope ~/backend
+# Analyze a remote repository (cloned to a temp dir; full history for git insights)
+go run ./cmd/archscope https://github.com/owner/repo --open
 
-# See help
-./goscope --help
+# Pin a specific branch or tag when analyzing a remote repo
+go run ./cmd/archscope https://github.com/owner/repo --ref main --open
+
+# Build a binary
+go build -o archscope ./cmd/archscope
+./archscope ~/code --open
+```
+
+### Flags
+
+| Flag | Meaning | Default |
+|------|---------|---------|
+| `--open` | open the HTML report in the browser when done | off |
+| `--format` | `html` \| `sarif` \| `both` | from config (`html`) |
+| `--output`, `-o` | output directory | from config (`output/`) |
+| `--config` | path to an `.archscope.json` override file | `.archscope.json` |
+| `--ref` | git branch/tag/sha to check out (remote URLs only) | default branch |
+| `--depth` | shallow-clone depth (remote URLs only; `0` = full history) | `0` |
+
+Outputs are written as `<project-name>.html` and/or `<project-name>.sarif` inside the output directory. Progress is printed per stage:
+
+```text
+ → Scanning source tree…
+ → Found 24 files across 5 platform(s), 4 module(s)
+ → Parsing 24 files…
+ → Building dependency graph…
+ → Analyzing git history (4 repo(s))…
+ → Running 18 security rules…
+ → Attributing findings via git blame…
+ → Running report modules…
+HTML  → output/myproject.html
 ```
 
 ---
 
 ## 🏗️ Build & Install
 
-### Option 1: Go Run (Recommended for first try)
-
 ```bash
-go run ./cmd/goscope ~/backend --open
+go run ./cmd/archscope ~/code --open     # 1) try it instantly
+go build -o archscope ./cmd/archscope    # 2) build a binary
+go install ./cmd/archscope               # 3) install system-wide ($GOBIN)
 ```
 
-### Option 2: Build Binary
+Requires **Go 1.21+**. Module path: `github.com/exey/archscope`. `git` is needed for the git-analysis section and blame attribution (the report degrades gracefully without it).
 
-```bash
-go build -o goscope ./cmd/goscope
-./goscope ~/backend --open
-```
+---
 
-### Option 3: Install System-Wide
+## 🌐 Languages
 
-```bash
-go build -o goscope ./cmd/goscope
-sudo mv goscope /usr/local/bin/
-goscope ~/backend --open
-```
+Each language is **one self-registering file** in `internal/lang/`. A `LanguageSpec` declares its extensions, detection markers, parse patterns, whether it is a `Client` (UI) language, and its module noun:
+
+| Language | Platform tab | Client? | Module noun |
+|----------|--------------|---------|-------------|
+| Swift / Objective-C | Swift + ObjC | ✅ | 📦 Packages & Modules |
+| Kotlin | Kotlin | ✅ | 📦 Packages & Modules |
+| TypeScript / JavaScript | TS + JS | ✅ | 📦 Packages |
+| Python | Python | — | 📦 Packages |
+| Go | Go | — | 🔧 Microservices |
+
+Adding a language (e.g. `rust.go`) needs no central edit — importing the package triggers its `init()`. The `Client` flag is what routes a tab to pattern detection vs. the layered backend view; the module noun/icon control how its modules are labeled.
 
 ---
 
 ## ⚙️ Configuration
 
-Create `.goscope.json` in your project root (or run `goscope init`):
-
-```json
-{
-  "excludePaths": [".git", "node_modules", "vendor", "dist", "build", ".idea"],
-  "maxFilesAnalyze": 50000,
-  "gitCommitLimit": 1000,
-  "enableCache": false,
-  "enableParallel": true,
-  "hotspotCount": 15,
-  "fileExtensions": ["go", "proto"]
-}
-```
+`config.Default()` is the baseline; `config.Load` overlays a user `.archscope.json`, so a partial file only changes the keys it sets (output format/dir, security thresholds and disabled rules, fetch depth, hotspot count).
 
 ---
 
 ## 📁 Project Structure
 
-```text
-goscope/
-├── go.mod
-├── cmd/goscope/
-│   └── main.go                  # CLI entry point
-├── internal/
-│   ├── config/
-│   │   └── config.go            # Config models + loader
-│   ├── scanner/
-│   │   ├── scanner.go           # Directory walker, scan orchestration
-│   │   ├── detect.go            # Service detection, microservice inference
-│   │   ├── techdetect.go        # Technology detection (docker-compose, go.mod, Makefile)
-│   │   └── scanner_test.go
-│   ├── parser/
-│   │   ├── models.go            # ParsedFile, Declaration, GitMetadata
-│   │   ├── parser.go            # Go + Proto file parsers
-│   │   └── parser_test.go
-│   ├── git/
-│   │   └── analyzer.go          # Multi-repo batch git log analysis
-│   ├── graph/
-│   │   ├── graph.go             # Dependency graph + PageRank
-│   │   ├── util.go              # File helpers
-│   │   └── graph_test.go
-│   └── report/
-│       ├── report.go            # HTML report generator (Generate)
-│       ├── antipatterns.go      # 22 Go anti-pattern checks + HTML builder
-│       ├── graphs.go            # Architecture + declaration graph builders
-│       ├── helpers.go           # Formatting, escaping, tech detection
-│       └── helpers_test.go
-└── README.md
+```
+cmd/archscope/main.go        CLI entry point — flags, progress, --open, --format, remote URL support
+internal/
+  config/      global config + user-override overlay
+  langspec/    LanguageSpec, Platform, Registry (Client / ModuleNoun helpers)
+  lang/        one file per language (+ *_security.go rule files)
+  parser/      universal model + line scanner + dispatch
+  scanner/     tree walk, module detection, platform bucketing
+  security/    engine, 14 categories, model, helpers
+    universal/   cross-language rules (secrets, private keys, SQLi)
+  graph/       module dependency graph + PageRank + edges
+  git/         history, blame, branching-model classifier
+  fetch/       remote git-URL resolution (clone + cleanup)
+  modules/     pluggable report modules
+    arch/        architecture: client pattern detection + backend layered view
+    designpattern/ universal GoF detector
+    oopvspop/    Swift-only OOP↔POP analyzer
+  result/      AnalysisResult aggregate + pipeline (Run / RunWithProgress)
+  report/      shared HTML theme
+    html/        HTML writer (tabs, panels, SVG dependency graph, git section)
+    sarif/       SARIF 2.1.0 writer
+testdata/      go-sample · multi (5-language) · arch-sample (MVVM + patterns)
 ```
 
 ---
@@ -164,25 +164,19 @@ goscope/
 ## 🧪 Testing
 
 ```bash
-# Run all tests
-go test ./...
-
-# Run tests with verbose output
-go test -v ./...
-
-# Run specific package tests
-go test -v ./internal/parser/
-go test -v ./internal/scanner/
-go test -v ./internal/graph/
-go test -v ./internal/report/
-
-# Run a specific test
-go test -v -run TestMatchGoTypeRef ./internal/report/
+go test ./...                 # all tests
+go vet ./...                  # vet
+gofmt -l .                    # formatting (should print nothing)
+go test ./internal/git/...    # one package
 ```
 
 ---
 
 ## Requirements
 
-- **Go 1.22+** (uses standard library only — no external dependencies)
-- **git** (for repository history analysis)
+- Go 1.21+
+- `git` on PATH (optional; only for the git-analysis section and blame attribution)
+
+---
+
+Built by **Exey Panteleev** · generalizes [ArchSwiftScope](https://github.com/Exey/ArchSwiftScope) and [goscope](https://github.com/Exey/goscope).

@@ -1,3 +1,3 @@
-module github.com/goscope
+module github.com/exey/archscope
 
-go 1.22
+go 1.21

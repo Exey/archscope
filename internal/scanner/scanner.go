@@ -1,3 +1,6 @@
+// Package scanner walks a repository tree, decides which files each registered
+// language owns, groups files into modules and into report-tab platform
+// buckets, and locates git repositories and project types.
 package scanner
 
 import (
@@ -6,220 +9,213 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/goscope/internal/config"
+	"github.com/exey/archscope/internal/config"
+	"github.com/exey/archscope/internal/langspec"
 )
 
-// ForeignService represents a non-Go microservice detected in the repo tree.
-type ForeignService struct {
-	Name      string
-	Language  string // "Python", "Java", "C#", etc.
-	Path      string
-	LineCount int
+// FileEntry is one source file the scanner decided to analyze.
+type FileEntry struct {
+	Path        string            // absolute path
+	LanguageID  string            // owning LanguageSpec.ID
+	Platform    langspec.Platform // report-tab bucket
+	ModuleName  string            // package / module / microservice
+	ProjectType string            // "Go module", "SwiftPM", ... ("" if unknown)
+}
+
+// PlatformGroup buckets files for one report tab.
+type PlatformGroup struct {
+	Platform  langspec.Platform
+	Files     []FileEntry
 	FileCount int
+	Modules   []string // distinct module names in this platform, sorted
 }
 
-// ScanResult holds the scanned files grouped by microservice.
+// ScanResult is the scanner's product.
 type ScanResult struct {
-	Files           []string            // all Go/proto file paths
-	Microservices   map[string][]string // microservice name -> Go/proto file paths
-	RootSubdirs     []string            // first-level subdirectories of the root
-	GitRepos        []string            // paths to directories containing .git
-	ForeignServices []ForeignService    // non-Go services detected
-	ServicesRoot    string              // detected services root dir (e.g. "src", "services", or "")
+	Root         string
+	Files        []FileEntry
+	Platforms    map[langspec.Platform]*PlatformGroup
+	Modules      map[string][]FileEntry // moduleName -> files
+	GitRepos     []string               // dirs containing .git
+	ProjectTypes []string               // distinct detected project types, sorted
 }
 
-// serviceContainerDirs are directory names that typically hold microservices inside them.
-var serviceContainerDirs = map[string]bool{
-	"src": true, "services": true, "service": true, "apps": true,
-	"microservices": true, "svc": true, "cmd": true, "modules": true,
-	"components": true, "backend": true, "packages": true, "deploy": false,
-	"projects": true, "server": true, "servers": true,
+// moduleRoot records a detected module-root directory and the language/project
+// type that claimed it, so files beneath it can be attributed.
+type moduleRoot struct {
+	dir         string
+	name        string
+	languageID  string
+	projectType string
 }
 
-// serviceMarkers are files/dirs that signal a directory is a microservice.
-var serviceMarkers = []string{
-	"Dockerfile", "go.mod", "main.go", "package.json", "requirements.txt",
-	"setup.py", "pyproject.toml", "pom.xml", "build.gradle", "build.gradle.kts",
-	"Cargo.toml", "composer.json", "Gemfile", "mix.exs", "CMakeLists.txt",
-	"Makefile", ".csproj", "Program.cs",
-}
-
-// langExtensions maps file extensions to programming languages.
-var langExtensions = map[string]string{
-	".py":    "Python",
-	".java":  "Java",
-	".kt":    "Kotlin",
-	".scala": "Scala",
-	".php":   "PHP",
-	".rb":    "Ruby",
-	".rs":    "Rust",
-	".cs":    "C#",
-	".ts":    "TypeScript",
-	".js":    "JavaScript",
-	".c":     "C",
-	".cpp":   "C++",
-	".cc":    "C++",
-	".h":     "C/C++ Header",
-	".hpp":   "C++",
-	".ex":    "Elixir",
-	".exs":   "Elixir",
-	".swift": "Swift",
-	".dart":  "Dart",
-}
-
-// Scan walks the directory tree looking for Go/proto files and foreign services.
-func Scan(rootPath string, cfg config.Config) (*ScanResult, error) {
-	rootPath, err := filepath.Abs(rootPath)
+// Scan walks rootPath and produces a ScanResult. It consults the registry to
+// decide file ownership and module detection, skips cfg.ExcludePaths and dotted
+// dirs, and respects cfg.MaxFilesAnalyze. Files no language owns are ignored.
+func Scan(rootPath string, cfg config.Config, reg *langspec.Registry) (*ScanResult, error) {
+	abs, err := filepath.Abs(rootPath)
 	if err != nil {
 		return nil, err
 	}
-	info, err := os.Stat(rootPath)
+	info, err := os.Stat(abs)
 	if err != nil {
 		return nil, err
 	}
 	if !info.IsDir() {
-		return nil, err
+		return nil, &os.PathError{Op: "scan", Path: abs, Err: os.ErrInvalid}
 	}
 
-	excludeSet := make(map[string]bool)
+	excl := make(map[string]bool, len(cfg.ExcludePaths))
 	for _, p := range cfg.ExcludePaths {
-		excludeSet[p] = true
+		excl[p] = true
 	}
-	extSet := make(map[string]bool)
-	for _, ext := range cfg.FileExtensions {
-		extSet["."+ext] = true
-	}
+	enabled := enabledSet(cfg, reg)
 
-	result := &ScanResult{Microservices: make(map[string][]string)}
-
-	// ── Phase 1: Discover service directories (up to 3 levels deep) ──
-	serviceDirs := discoverServiceDirs(rootPath, excludeSet)
-
-	// Determine services root for CLI output
-	if len(serviceDirs) > 0 {
-		result.ServicesRoot = detectServicesRoot(rootPath, serviceDirs)
+	res := &ScanResult{
+		Root:      abs,
+		Platforms: map[langspec.Platform]*PlatformGroup{},
+		Modules:   map[string][]FileEntry{},
 	}
 
-	// Collect root-level subdirs and find .git repos
-	entries, _ := os.ReadDir(rootPath)
-	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && !excludeSet[e.Name()] {
-			result.RootSubdirs = append(result.RootSubdirs, e.Name())
-			gitDir := filepath.Join(rootPath, e.Name(), ".git")
-			if _, err := os.Stat(gitDir); err == nil {
-				result.GitRepos = append(result.GitRepos, filepath.Join(rootPath, e.Name()))
-			}
-		}
-	}
-	sort.Strings(result.RootSubdirs)
-
-	// Also check for .git in discovered service dirs (e.g. src/<service>/.git)
-	for _, sd := range serviceDirs {
-		gitDir := filepath.Join(sd, ".git")
-		if _, err := os.Stat(gitDir); err == nil {
-			alreadyHave := false
-			for _, r := range result.GitRepos {
-				if r == sd {
-					alreadyHave = true
-					break
-				}
-			}
-			if !alreadyHave {
-				result.GitRepos = append(result.GitRepos, sd)
-			}
+	// ── Phase 1: discover module roots and git repos ──
+	roots := discoverModuleRoots(abs, reg, excl)
+	projTypeSet := map[string]bool{}
+	for _, r := range roots {
+		if r.projectType != "" {
+			projTypeSet[r.projectType] = true
 		}
 	}
 
-	// Also check root-level .git
-	if _, err := os.Stat(filepath.Join(rootPath, ".git")); err == nil {
-		hasRoot := false
-		for _, r := range result.GitRepos {
-			if r == rootPath {
-				hasRoot = true
-				break
-			}
-		}
-		if !hasRoot {
-			result.GitRepos = append([]string{rootPath}, result.GitRepos...)
-		}
-	}
-
-	// ── Phase 2: Walk and collect Go/proto files + detect foreign services ──
-	foreignStats := make(map[string]*ForeignService) // service dir path -> stats
-
-	err = filepath.WalkDir(rootPath, func(path string, d os.DirEntry, err error) error {
+	// ── Phase 2: walk files, attribute each to a module + platform ──
+	count := 0
+	walkErr := filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		name := d.Name()
-		if d.IsDir() && strings.HasPrefix(name, ".") {
-			return filepath.SkipDir
-		}
-		if d.IsDir() && excludeSet[name] {
-			return filepath.SkipDir
-		}
 		if d.IsDir() {
+			if name == ".git" {
+				res.GitRepos = append(res.GitRepos, filepath.Dir(path))
+				return filepath.SkipDir
+			}
+			if strings.HasPrefix(name, ".") || excl[name] {
+				return filepath.SkipDir
+			}
 			return nil
+		}
+		if cfg.MaxFilesAnalyze > 0 && count >= cfg.MaxFilesAnalyze {
+			return filepath.SkipDir
 		}
 
 		ext := strings.ToLower(filepath.Ext(name))
-
-		// Go/proto files
-		if extSet[ext] {
-			result.Files = append(result.Files, path)
-			ms := detectMicroservice(rootPath, path, serviceDirs)
-			result.Microservices[ms] = append(result.Microservices[ms], path)
+		spec := reg.Lookup(ext)
+		if spec == nil || !enabled[spec.ID] {
 			return nil
 		}
 
-		// Foreign language files — count lines per service dir
-		if lang, ok := langExtensions[ext]; ok {
-			svcDir := findServiceDir(rootPath, path, serviceDirs)
-			if svcDir == "" {
-				return nil
-			}
-			svcName := filepath.Base(svcDir)
-			key := svcDir
-			fs, exists := foreignStats[key]
-			if !exists {
-				fs = &ForeignService{Name: svcName, Language: lang, Path: svcDir}
-				foreignStats[key] = fs
-			}
-			fs.FileCount++
-			lc := countFileLines(path)
-			fs.LineCount += lc
+		mod, projType := attributeModule(abs, path, spec, roots)
+		entry := FileEntry{
+			Path:        path,
+			LanguageID:  spec.ID,
+			Platform:    spec.Platform,
+			ModuleName:  mod,
+			ProjectType: projType,
 		}
+		res.Files = append(res.Files, entry)
+		res.Modules[mod] = append(res.Modules[mod], entry)
 
+		g := res.Platforms[spec.Platform]
+		if g == nil {
+			g = &PlatformGroup{Platform: spec.Platform}
+			res.Platforms[spec.Platform] = g
+		}
+		g.Files = append(g.Files, entry)
+
+		count++
 		return nil
 	})
-
-	// Filter foreign services: only keep dirs that have NO Go files (pure foreign)
-	for key, fs := range foreignStats {
-		if _, hasGo := result.Microservices[fs.Name]; hasGo {
-			continue // This service has Go files, skip as foreign
-		}
-		// Also skip if very few files (probably not a real service)
-		if fs.FileCount < 2 {
-			continue
-		}
-		_ = key
-		result.ForeignServices = append(result.ForeignServices, *fs)
-	}
-	sort.Slice(result.ForeignServices, func(i, j int) bool {
-		return result.ForeignServices[i].LineCount > result.ForeignServices[j].LineCount
-	})
-
-	// ── Phase 3: Filter out microservices with no real content ──
-	for ms, files := range result.Microservices {
-		if ms == "root" && len(files) <= 1 {
-			// Keep root only if it has real files
-			continue
-		}
-		// Keep all detected microservices that have files
+	if walkErr != nil {
+		return res, walkErr
 	}
 
-	return result, err
+	// ── Phase 3: finalize derived fields ──
+	for _, g := range res.Platforms {
+		g.FileCount = len(g.Files)
+		seen := map[string]bool{}
+		for _, f := range g.Files {
+			if !seen[f.ModuleName] {
+				seen[f.ModuleName] = true
+				g.Modules = append(g.Modules, f.ModuleName)
+			}
+		}
+		sort.Strings(g.Modules)
+	}
+	for t := range projTypeSet {
+		res.ProjectTypes = append(res.ProjectTypes, t)
+	}
+	sort.Strings(res.ProjectTypes)
+	sort.Strings(res.GitRepos)
+	res.GitRepos = dedupeSorted(res.GitRepos)
+
+	return res, nil
 }
 
-// discoverServiceDirs finds directories that look like microservices.
-// Searches up to 3 levels deep from root.
+// PlatformsOrdered returns the platform groups in canonical tab order.
+func (r *ScanResult) PlatformsOrdered() []*PlatformGroup {
+	var out []*PlatformGroup
+	seen := map[langspec.Platform]bool{}
+	for _, p := range langspec.PlatformOrder {
+		if g := r.Platforms[p]; g != nil {
+			out = append(out, g)
+			seen[p] = true
+		}
+	}
+	// any platforms not in canonical order, appended alphabetically
+	var rest []langspec.Platform
+	for p := range r.Platforms {
+		if !seen[p] {
+			rest = append(rest, p)
+		}
+	}
+	sort.Slice(rest, func(i, j int) bool { return rest[i] < rest[j] })
+	for _, p := range rest {
+		out = append(out, r.Platforms[p])
+	}
+	return out
+}
+
+func enabledSet(cfg config.Config, reg *langspec.Registry) map[string]bool {
+	disabled := map[string]bool{}
+	for _, id := range cfg.Languages.Disabled {
+		disabled[id] = true
+	}
+	enabled := map[string]bool{}
+	if len(cfg.Languages.Enabled) > 0 {
+		for _, id := range cfg.Languages.Enabled {
+			if !disabled[id] {
+				enabled[id] = true
+			}
+		}
+		return enabled
+	}
+	// empty Enabled = all registered (minus disabled)
+	for _, s := range reg.All() {
+		if !disabled[s.ID] {
+			enabled[s.ID] = true
+		}
+	}
+	return enabled
+}
+
+func dedupeSorted(in []string) []string {
+	if len(in) == 0 {
+		return in
+	}
+	out := in[:1]
+	for _, s := range in[1:] {
+		if s != out[len(out)-1] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
