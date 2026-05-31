@@ -4,8 +4,6 @@
 
 Built in pure Go. One engine, every language: drop a file in `internal/lang/` to add another.
 
-It generalizes [ArchSwiftScope](https://github.com/Exey/ArchSwiftScope) (Swift) and [goscope](https://github.com/Exey/goscope) (Go) into a single language-agnostic tool — the danger index, the architecture/design-pattern detectors, the OOP-vs-POP analysis and the git branching-model classifier are all reworked to span languages.
-
 ---
 
 ## ⚡ Generate Report in 10 Seconds
@@ -176,7 +174,3 @@ go test ./internal/git/...    # one package
 
 - Go 1.21+
 - `git` on PATH (optional; only for the git-analysis section and blame attribution)
-
----
-
-Built by **Exey Panteleev** · generalizes [ArchSwiftScope](https://github.com/Exey/ArchSwiftScope) and [goscope](https://github.com/Exey/goscope).
