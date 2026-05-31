@@ -54,13 +54,13 @@ Each language lands in its own **tab**, ordered by lines of code (largest first)
 
 Each language is **one self-registering file** in `internal/lang/`. A `LanguageSpec` declares its extensions, detection markers, parse patterns, whether it is a `Client` (UI) language, and its module noun:
 
-| Language | Platform tab | Security | UI support | Module noun |
-| --- | --- | --- | --- | --- |
-| Go | Go | ✅ language rules + universal | — | 🔧 Microservices |
-| Python | Python | ✅ language rules + universal | — | 📦 Packages |
-| TypeScript / JavaScript | TS + JS | ✅ language rules + universal | ✅ | 📦 Packages |
-| Kotlin | Kotlin | universal only | ✅ | 📦 Packages & Modules |
-| Swift / Objective-C | Swift + ObjC | ✅ language rules + universal | ✅ | 📦 Packages & Modules |
+| Language | Security | UI scan | Module noun |
+| --- | --- | --- | --- |
+| Go | ✅ language rules + universal | — | 🔧 Microservices |
+| Python | ✅ language rules + universal | — | 📦 Packages |
+| TypeScript / JavaScript | ✅ language rules + universal | ✅ | 📦 Packages |
+| Kotlin | universal only | ✅ | 📦 Packages & Modules |
+| Swift / Objective-C | ✅ language rules + universal | ✅ | 📦 Packages & Modules |
 
 Adding a language (e.g. `rust.go`) needs no central edit — importing the package triggers its `init()`. The `Client` flag is what routes a tab to pattern detection vs. the layered backend view; the module noun/icon control how its modules are labeled.
 
