@@ -6,6 +6,7 @@ package result
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/exey/archscope/internal/config"
@@ -126,17 +127,36 @@ func RunWithProgress(rootPath string, cfg config.Config, progress func(string)) 
 		projectName = filepath.Base(rootPath)
 	}
 
+	// 7) Merge tech: docker/go.mod/Makefile hits + import-level hits.
+	techSet := make(map[string]bool)
+	for _, t := range scan.Technologies {
+		techSet[t] = true
+	}
+	for _, f := range files {
+		for _, imp := range f.Imports {
+			scanner.DetectTechFromImport(imp, techSet)
+		}
+	}
+	var technologies []string
+	for t := range techSet {
+		technologies = append(technologies, t)
+	}
+	sort.Strings(technologies)
+
 	return &AnalysisResult{
-		ProjectName:   projectName,
-		RootPath:      rootPath,
-		Files:         files,
-		Scan:          scan,
-		Graph:         g,
-		Hotspots:      hotspots,
-		Security:      results,
-		SecurityScore: score,
-		Git:           gitBundle,
-		ModulePanels:  panels,
+		ProjectName:    projectName,
+		RootPath:       rootPath,
+		Files:          files,
+		Scan:           scan,
+		Graph:          g,
+		Hotspots:       hotspots,
+		Security:       results,
+		SecurityScore:  score,
+		Git:            gitBundle,
+		ModulePanels:   panels,
+		Technologies:   technologies,
+		DockerServices: scan.DockerServices,
+		DevOpsTools:    scan.DevOpsTools,
 	}, nil
 }
 

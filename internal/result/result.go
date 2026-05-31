@@ -16,17 +16,20 @@ import (
 
 // AnalysisResult is the single product of the pipeline; both writers read it.
 type AnalysisResult struct {
-	ProjectName   string
-	RootPath      string
-	IsRemote      bool
-	SourceURL     string
-	Files         []*parser.ParsedFile
-	Scan          *scanner.ScanResult
-	Graph         *graph.DependencyGraph
-	Hotspots      []graph.HotspotEntry
-	Security      []security.RuleResult
-	SecurityScore security.Score
-	Git           GitBundle
+	ProjectName    string
+	RootPath       string
+	IsRemote       bool
+	SourceURL      string
+	Files          []*parser.ParsedFile
+	Scan           *scanner.ScanResult
+	Graph          *graph.DependencyGraph
+	Hotspots       []graph.HotspotEntry
+	Security       []security.RuleResult
+	SecurityScore  security.Score
+	Git            GitBundle
+	Technologies   []string              // merged tech from imports + docker-compose/go.mod/Makefile
+	DockerServices []string              // service names from docker-compose
+	DevOpsTools    []scanner.DevOpsTool  // CI/CD, container, orchestration tools
 
 	// ModulePanels are report-module outputs already rendered to HTML, grouped
 	// per platform tab. This is the pragmatic form of DESIGN's ModuleResults:

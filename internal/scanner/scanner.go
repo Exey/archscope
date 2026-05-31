@@ -32,12 +32,15 @@ type PlatformGroup struct {
 
 // ScanResult is the scanner's product.
 type ScanResult struct {
-	Root         string
-	Files        []FileEntry
-	Platforms    map[langspec.Platform]*PlatformGroup
-	Modules      map[string][]FileEntry // moduleName -> files
-	GitRepos     []string               // dirs containing .git
-	ProjectTypes []string               // distinct detected project types, sorted
+	Root          string
+	Files         []FileEntry
+	Platforms     map[langspec.Platform]*PlatformGroup
+	Modules       map[string][]FileEntry // moduleName -> files
+	GitRepos      []string               // dirs containing .git
+	ProjectTypes  []string               // distinct detected project types, sorted
+	Technologies   []string               // tech detected from docker-compose/go.mod/Makefile
+	DockerServices []string               // service names from docker-compose files
+	DevOpsTools    []DevOpsTool           // CI/CD, container, orchestration tools
 }
 
 // moduleRoot records a detected module-root directory and the language/project
@@ -156,6 +159,9 @@ func Scan(rootPath string, cfg config.Config, reg *langspec.Registry) (*ScanResu
 	sort.Strings(res.ProjectTypes)
 	sort.Strings(res.GitRepos)
 	res.GitRepos = dedupeSorted(res.GitRepos)
+
+	res.DockerServices, res.Technologies = ScanDockerCompose(abs)
+	res.DevOpsTools = ScanDevOps(abs)
 
 	return res, nil
 }

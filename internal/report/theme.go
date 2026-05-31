@@ -290,6 +290,55 @@ a.as-mod:hover{border-color:var(--accent)}
 .as-graph{border:1px solid var(--border); border-radius:var(--radius); background:var(--bg-inset); margin:4px 0 14px; overflow:hidden}
 .as-graph__svg{display:block; width:100%; height:auto}
 .as-graph__lbl{fill:var(--text-dim); font-family:var(--mono); font-size:9.5px}
+.as-fg-container{width:100%; height:460px; border:1px solid var(--border); border-radius:var(--radius); margin:4px 0 14px; overflow:hidden; background:var(--bg-inset)}
+.as-fg-container--decl{height:380px; margin:0 0 10px}
+
+/* Danger Index — half-gauge + weight bars + platform row */
+.as-sec-toprow{display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap; margin-top:8px}
+.as-sec-gauge-wrap{display:flex; flex-direction:column; align-items:center; padding:14px 18px;
+  background:var(--bg-inset); border-radius:var(--radius); flex:0 0 220px}
+.as-sec-gauge-svg{width:200px; height:124px}
+.as-sec-gauge-label{font-family:var(--mono); font-size:10px; color:var(--text-faint); letter-spacing:.08em; margin-top:6px; text-transform:uppercase}
+.as-sec-gauge-val{font-size:26px; font-weight:700; margin-top:2px; font-family:var(--mono)}
+.as-sec-gauge-band{font-size:11px; font-weight:600; margin-top:6px; padding:2px 8px; border-radius:6px}
+.as-sec-gauge-band.band-good{background:rgba(90,138,122,.18); color:#5a8a7a}
+.as-sec-gauge-band.band-warn{background:rgba(160,160,48,.18); color:#a0a030}
+.as-sec-gauge-band.band-bad{background:rgba(192,160,48,.18); color:#c0a030}
+.as-sec-gauge-band.band-crit{background:rgba(192,80,64,.18); color:#c05040}
+.as-sec-gauge-desc{font-size:11px; margin-top:10px; align-self:stretch; line-height:2}
+.as-sec-weight-bars{flex:1; min-width:260px}
+.as-sec-weight-title{font-size:10px; font-weight:600; color:var(--text-faint); letter-spacing:.06em; text-transform:uppercase; margin-bottom:8px}
+.as-sec-wb-row{display:flex; align-items:center; gap:8px; margin-bottom:4px}
+.as-sec-wb-name{font-size:11px; color:var(--text2); min-width:200px; display:flex; align-items:center; gap:4px}
+.as-sec-wb-num{display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px;
+  border-radius:4px; background:var(--bg-elev3,#444); color:var(--text-faint); font-size:9px; font-weight:700; flex-shrink:0}
+.as-sec-wb-track{flex:1; height:6px; background:var(--bg-inset); border-radius:3px; overflow:hidden; min-width:50px}
+.as-sec-wb-fill{height:100%; border-radius:3px}
+.as-sec-wb-na{height:100%; background:repeating-linear-gradient(45deg,var(--border),var(--border) 3px,transparent 3px,transparent 6px)}
+.as-sec-wb-pts{font-family:var(--mono); font-size:11px; font-weight:600; min-width:50px; text-align:right}
+.as-sec-wb-na{font-size:10px; color:var(--text-faint); font-style:italic; min-width:50px; text-align:right}
+.as-sec-wb-w{font-family:var(--mono); font-size:10px; color:var(--text-faint); min-width:30px; text-align:right}
+.as-sec-plat-row{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px}
+.as-sec-plat-card{background:var(--bg-inset); border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:8px 12px; min-width:100px}
+.as-sec-plat-name{font-size:11px; color:var(--text-faint); font-weight:600; text-transform:uppercase; letter-spacing:.04em}
+.as-sec-plat-count{font-size:20px; font-weight:700; font-family:var(--mono); margin-top:2px; display:flex; align-items:center; gap:6px}
+
+/* Architecture layers */
+.arch-layers{display:flex; flex-direction:column; gap:5px; margin-top:8px}
+.arch-layer{display:flex; flex-direction:column; gap:3px}
+.layer-bar-row{display:flex; align-items:center; gap:8px; font-size:12px}
+.layer-icon{font-size:13px; width:20px; flex-shrink:0}
+.layer-name{color:var(--text2); font-size:12px; min-width:160px}
+.layer-count{color:var(--text-faint); font-size:11px; font-family:var(--mono); margin-left:auto}
+.layer-bar-track{height:5px; background:var(--bg-inset); border-radius:3px; overflow:hidden}
+.layer-bar-fill{height:100%; background:var(--accent); border-radius:3px; opacity:0.75}
+
+/* Tech components */
+.arch-components{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px}
+.arch-component{display:inline-flex; align-items:center; gap:5px; background:var(--bg-elev-2);
+  border:1px solid var(--border); border-radius:var(--radius-sm); padding:4px 10px; font-size:12px}
+.comp-icon{font-size:14px}
 
 
 /* OOP vs POP — ArchSwiftScope report style */
@@ -333,9 +382,15 @@ a.as-mod:hover{border-color:var(--accent)}
 .as-pkg{display:flex; align-items:center; justify-content:space-between; gap:8px;
   background:var(--bg-elev-2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 11px}
 .as-pkg__name{font-family:var(--mono); font-size:12.5px; font-weight:600; overflow:hidden;
-  text-overflow:ellipsis; white-space:nowrap}
-.as-pkg__badge{background:var(--bg-inset); color:var(--text-faint); font-size:9.5px; font-family:var(--mono);
-  padding:1px 6px; border-radius:4px; margin-left:auto; flex-shrink:0; font-weight:400}
+  text-overflow:ellipsis; white-space:nowrap; min-width:0}
+.as-pkg__meta{display:flex; align-items:center; gap:4px; margin-left:auto; flex-shrink:0}
+.as-pkg__loc{color:var(--text-faint); font-size:9.5px; font-family:var(--mono); font-weight:400}
+.as-plat-badge{font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; letter-spacing:.02em}
+.as-plat-go{background:#00acd7,20%; background:rgba(0,172,215,.18); color:#00acd7}
+.as-plat-swift_objc{background:rgba(250,95,30,.18); color:#fa5f1e}
+.as-plat-kotlin{background:rgba(127,82,255,.18); color:#7f52ff}
+.as-plat-python{background:rgba(55,118,171,.18); color:#3776ab}
+.as-plat-ts_js{background:rgba(49,120,198,.18); color:#3178c6}
 
 `
 

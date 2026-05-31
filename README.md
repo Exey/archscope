@@ -159,6 +159,59 @@ testdata/      go-sample · multi (5-language) · arch-sample (MVVM + patterns)
 
 ---
 
+## 🔐 SARIF & CI/CD Integration
+
+ArchScope can emit a **SARIF 2.1.0** log alongside (or instead of) the HTML report. SARIF is the standard format consumed by GitHub Code Scanning, GitLab SAST, VS Code's SARIF Viewer extension, and most security dashboards.
+
+### GitHub Actions
+
+```yaml
+- name: Run ArchScope
+  run: |
+    go run ./cmd/archscope . --format both --output reports
+
+- name: Upload SARIF to GitHub Code Scanning
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: reports/${{ github.event.repository.name }}.sarif
+  if: always()
+```
+
+Findings appear inline on pull requests under the **Security → Code scanning** tab.
+
+### GitLab CI
+
+```yaml
+archscope:
+  stage: test
+  script:
+    - go run ./cmd/archscope . --format sarif --output gl-reports
+  artifacts:
+    reports:
+      sast: gl-reports/*.sarif
+    paths:
+      - gl-reports/
+    when: always
+```
+
+### VS Code SARIF Viewer
+
+1. Install the [SARIF Viewer](https://marketplace.visualstudio.com/items?itemName=MS-SarifVSCode.sarif-viewer) extension.
+2. Run `archscope . --format sarif`.
+3. Open `output/<project>.sarif` — findings appear in the Problems panel with file links.
+
+### Output files
+
+| Flag | Files written |
+| --- | --- |
+| `--format html` | `<output>/<project>.html` |
+| `--format sarif` | `<output>/<project>.sarif` |
+| `--format both` | both of the above |
+
+The SARIF log maps each security rule to a `reportingDescriptor`, each finding to a `result` with `physicalLocation` (file + line), and severity to SARIF levels (`error` = HIGH, `warning` = MEDIUM, `note` = LOW).
+
+---
+
 ## 🧪 Testing
 
 ```bash

@@ -38,7 +38,7 @@ var langLabels = map[string]string{
 }
 
 func renderStackAndModules(res *result.AnalysisResult) string {
-	// Tech stack: languages present + frameworks detected from imports.
+	// Tech stack: languages present + frameworks detected from imports + scanner.
 	langSet := map[string]bool{}
 	frameworkSet := map[string]bool{}
 	for _, f := range res.Files {
@@ -53,6 +53,10 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 				}
 			}
 		}
+	}
+	// Merge in Technologies from docker-compose / go.mod / Makefile.
+	for _, t := range res.Technologies {
+		frameworkSet[t] = true
 	}
 	if len(langSet)+len(frameworkSet) == 0 && len(res.Scan.Modules) == 0 {
 		return ""
@@ -76,19 +80,19 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 
 	// Packages & modules grid, sized by LOC.
 	type modAgg struct {
-		name  string
-		files int
-		loc   int
+		name      string
+		loc       int
+		platforms map[langspec.Platform]bool
 	}
 	aggs := map[string]*modAgg{}
 	for _, f := range res.Files {
 		a := aggs[f.ModuleName]
 		if a == nil {
-			a = &modAgg{name: f.ModuleName}
+			a = &modAgg{name: f.ModuleName, platforms: map[langspec.Platform]bool{}}
 			aggs[f.ModuleName] = a
 		}
-		a.files++
 		a.loc += f.LineCount
+		a.platforms[langspec.Platform(f.Platform)] = true
 	}
 	var list []*modAgg
 	for _, a := range aggs {
@@ -110,12 +114,57 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 			if name == "" {
 				name = "(root)"
 			}
-			fmt.Fprintf(&b, `<div class="as-pkg"><span class="as-pkg__name">📦 %s</span><span class="as-pkg__badge">%d files · %s loc</span></div>`,
-				esc(name), a.files, fmtNum(a.loc))
+			platBadges := platformBadges(a.platforms)
+			fmt.Fprintf(&b, `<div class="as-pkg"><span class="as-pkg__name">📦 %s</span><span class="as-pkg__meta">%s<span class="as-pkg__loc">%s loc</span></span></div>`,
+				esc(name), platBadges, fmtNum(a.loc))
 		}
 		b.WriteString(`</div>`)
 	}
+
+	// DevOps card
+	if devops := renderDevOpsCard(res); devops != "" {
+		b.WriteString(devops)
+	}
+
 	b.WriteString(`</div>`)
+	return b.String()
+}
+
+func renderDevOpsCard(res *result.AnalysisResult) string {
+	if len(res.DevOpsTools) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="as-sub" style="margin-top:16px">DevOps</div><div class="arch-components">`)
+	for _, t := range res.DevOpsTools {
+		fmt.Fprintf(&b, `<span class="arch-component"><span class="comp-icon">%s</span><span>%s</span></span>`, t.Icon, esc(t.Name))
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// platformBadges renders compact language label chips for a set of platforms.
+func platformBadges(platforms map[langspec.Platform]bool) string {
+	order := []langspec.Platform{
+		langspec.PlatformSwiftObjC,
+		langspec.PlatformKotlin,
+		langspec.PlatformTSJS,
+		langspec.PlatformPython,
+		langspec.PlatformGo,
+	}
+	short := map[langspec.Platform]string{
+		langspec.PlatformSwiftObjC: "Swift",
+		langspec.PlatformKotlin:    "Kotlin",
+		langspec.PlatformTSJS:      "JS",
+		langspec.PlatformPython:    "Python",
+		langspec.PlatformGo:        "Go",
+	}
+	var b strings.Builder
+	for _, p := range order {
+		if platforms[p] {
+			fmt.Fprintf(&b, `<span class="as-plat-badge as-plat-%s">%s</span>`, string(p), short[p])
+		}
+	}
 	return b.String()
 }
 
@@ -194,7 +243,7 @@ func renderGlobalCards(res *result.AnalysisResult) string {
 	card(&b, fmt.Sprintf("%d", len(res.Files)), "source files", false)
 	card(&b, fmt.Sprintf("%d", decls), "declarations", false)
 	card(&b, fmt.Sprintf("%d", len(res.Scan.Modules)), "modules", false)
-	card(&b, fmt.Sprintf("%d", res.SecurityScore.Total), "danger index", true)
+	card(&b, fmt.Sprintf("%d/1000", res.SecurityScore.Total), "danger index", true)
 	card(&b, fmt.Sprintf("%d", len(platforms)), plural(len(platforms), "platform", "platforms"), false)
 	b.WriteString(`</div>`)
 	return b.String()
@@ -213,33 +262,141 @@ func card(b *strings.Builder, num, label string, accent bool) {
 
 func renderSecurityIndex(res *result.AnalysisResult) string {
 	sc := res.SecurityScore
-	pct := sc.Total * 100 / 1000
 	var b strings.Builder
 	b.WriteString(`<div class="as-section">`)
 	b.WriteString(`<div class="as-section__head"><span class="ico">🛡️</span><h2>Danger Index</h2></div>`)
 	b.WriteString(`<p class="as-section__sub">Weighted exposure across 14 categories (0 = hardened, 1000 = critical). Risk per category saturates with finding density.</p>`)
 
-	b.WriteString(`<div class="as-gauge">`)
-	fmt.Fprintf(&b, `<div><span class="as-gauge__num">%d</span><span class="as-gauge__den"> / 1000</span></div>`, sc.Total)
-	fmt.Fprintf(&b, `<span class="as-gauge__band %s">%s</span>`, bandClass(sc.Band), esc(sc.Band))
-	fmt.Fprintf(&b, `<div class="as-gauge__bar"><div class="as-bar" style="height:10px"><span class="as-bar__fill %s" style="width:%d%%"></span></div></div>`,
-		fillClass(pct), pct)
-	b.WriteString(`</div>`)
+	gaugeID := "as-sec-gauge"
+	descID := "as-sec-gauge-desc"
 
-	b.WriteString(`<div class="as-cats">`)
+	// ── Top row: gauge (left) + weight bars (right) ──
+	b.WriteString(`<div class="as-sec-toprow">`)
+
+	// Gauge
+	fmt.Fprintf(&b, `<div class="as-sec-gauge-wrap">`+
+		`<svg class="as-sec-gauge-svg" id="%s" viewBox="0 0 200 124"></svg>`+
+		`<div class="as-sec-gauge-label">DANGER INDEX</div>`+
+		`<div class="as-sec-gauge-val">%d / 1000</div>`+
+		`<div class="as-sec-gauge-band %s">%s</div>`+
+		`<div class="as-sec-gauge-desc" id="%s"></div>`+
+		`</div>`, gaugeID, sc.Total, bandClass(sc.Band), esc(sc.Band), descID)
+
+	// Category weight bars
+	b.WriteString(`<div class="as-sec-weight-bars"><div class="as-sec-weight-title">Category Weights · 1000 Index</div>`)
 	for _, cs := range sc.Categories {
+		rp := cs.RiskPercent()
+		col := secRiskColor(rp)
+		var fill, valHTML string
 		if cs.NotAssessed() {
-			fmt.Fprintf(&b, `<div class="as-cat as-cat--na"><span class="as-cat__ico">%s</span><div class="as-cat__body"><div class="as-cat__top"><span class="as-cat__name">%s</span><span class="as-cat__na">not assessed</span></div></div><span class="as-cat__pts">0/%d</span></div>`,
-				esc(cs.Category.Icon), esc(cs.Category.Title), cs.Category.Weight)
+			fill = `<div class="as-sec-wb-fill as-sec-wb-na" style="width:100%"></div>`
+			valHTML = `<span class="as-sec-wb-na">not assessed</span>`
+		} else {
+			fill = fmt.Sprintf(`<div class="as-sec-wb-fill" style="width:%d%%;background:%s"></div>`, rp, col)
+			valHTML = fmt.Sprintf(`<span class="as-sec-wb-pts" style="color:%s">%d/%d</span>`, col, cs.Points, cs.Category.Weight)
+		}
+		fmt.Fprintf(&b,
+			`<div class="as-sec-wb-row">`+
+				`<span class="as-sec-wb-name"><span class="as-sec-wb-num">%d</span>%s %s</span>`+
+				`<div class="as-sec-wb-track">%s</div>`+
+				`%s<span class="as-sec-wb-w">W%d</span>`+
+				`</div>`,
+			cs.Category.ID, esc(cs.Category.Icon), esc(cs.Category.Title),
+			fill, valHTML, cs.Category.Weight)
+	}
+	b.WriteString(`</div>`) // weight-bars
+	b.WriteString(`</div>`) // toprow
+
+	// ── Per-platform security breakdown ──
+	filePlatform := map[string]langspec.Platform{}
+	for _, f := range res.Files {
+		filePlatform[f.FilePath] = langspec.Platform(f.Platform)
+	}
+	platFindings := map[langspec.Platform]int{}
+	platHigh := map[langspec.Platform]int{}
+	for _, rr := range res.Security {
+		if rr.Passed() {
 			continue
 		}
-		rp := cs.RiskPercent()
-		fmt.Fprintf(&b, `<div class="as-cat"><span class="as-cat__ico">%s</span><div class="as-cat__body"><div class="as-cat__top"><span class="as-cat__name">%s</span><span class="as-cat__pts">%d pts · %d</span></div><div class="as-bar"><span class="as-bar__fill %s" style="width:%d%%"></span></div></div><span class="as-cat__pts">%d/%d</span></div>`,
-			esc(cs.Category.Icon), esc(cs.Category.Title), cs.Points, cs.Violations,
-			fillClass(rp), rp, cs.Points, cs.Category.Weight)
+		for _, f := range rr.Findings {
+			p := filePlatform[f.FullPath]
+			if p != "" {
+				platFindings[p]++
+				if rr.Rule.Severity == security.SevHigh {
+					platHigh[p]++
+				}
+			}
+		}
 	}
-	b.WriteString(`</div></div>`)
+	if len(platFindings) > 0 {
+		b.WriteString(`<div class="as-sub" style="margin-top:18px;margin-bottom:8px">Findings by Platform</div>`)
+		b.WriteString(`<div class="as-sec-plat-row">`)
+		for _, pg := range res.Scan.PlatformsOrdered() {
+			total := platFindings[pg.Platform]
+			if total == 0 {
+				continue
+			}
+			hi := platHigh[pg.Platform]
+			hiHTML := ""
+			if hi > 0 {
+				fmt.Fprintf(&b, ``)
+				hiHTML = fmt.Sprintf(` <span class="as-sev sev-high" style="font-size:10px">%d HIGH</span>`, hi)
+			}
+			fmt.Fprintf(&b,
+				`<div class="as-sec-plat-card">`+
+					`<div class="as-sec-plat-name">%s</div>`+
+					`<div class="as-sec-plat-count">%d%s</div>`+
+					`</div>`,
+				esc(langspec.PlatformTitle(pg.Platform)), total, hiHTML)
+		}
+		b.WriteString(`</div>`)
+	}
+
+	// ── Gauge JS ──
+	fmt.Fprintf(&b, `<script>(function(){`+
+		`var score=%d;`+
+		`var svg=document.getElementById('%s');`+
+		`if(!svg)return;`+
+		`var ns='http://www.w3.org/2000/svg',r=80,cx=100,cy=104;`+
+		`var bg=document.createElementNS(ns,'path');`+
+		`bg.setAttribute('d','M '+(cx-r)+','+cy+' A '+r+','+r+' 0 0 1 '+(cx+r)+','+cy);`+
+		`bg.setAttribute('fill','none');bg.setAttribute('stroke','rgba(128,128,128,0.25)');`+
+		`bg.setAttribute('stroke-width','16');bg.setAttribute('stroke-linecap','round');`+
+		`svg.appendChild(bg);`+
+		`var pct=Math.min(Math.max(score/1000,0.001),0.999);`+
+		`var ang=Math.PI*(1-pct);`+
+		`var ex=cx+r*Math.cos(ang),ey=cy-r*Math.sin(ang);`+
+		`var col=pct<0.2?'#5a8a7a':pct<0.5?'#a0a030':pct<0.8?'#c0a030':'#c05040';`+
+		`var fg=document.createElementNS(ns,'path');`+
+		`fg.setAttribute('d','M '+(cx-r)+','+cy+' A '+r+','+r+' 0 0 1 '+ex.toFixed(2)+','+ey.toFixed(2));`+
+		`fg.setAttribute('fill','none');fg.setAttribute('stroke',col);`+
+		`fg.setAttribute('stroke-width','16');fg.setAttribute('stroke-linecap','round');`+
+		`svg.appendChild(fg);`+
+		`var ranges=[{lo:0,hi:199,col:'#5a8a7a',label:'Hardened'},{lo:200,hi:499,col:'#a0a030',label:'Minor exposure'},{lo:500,hi:799,col:'#c0a030',label:'Elevated risk'},{lo:800,hi:1000,col:'#c05040',label:'Critical exposure'}];`+
+		`var desc='',cur;`+
+		`for(var i=0;i<ranges.length;i++){cur=score>=ranges[i].lo&&score<=ranges[i].hi;`+
+		`desc+='<div'+(cur?' style="font-weight:600;color:var(--text)"':' style="color:var(--text-faint)"')+'>'`+
+		`+'<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+ranges[i].col+';margin-right:5px;vertical-align:middle"></span>'`+
+		`+ranges[i].lo+'–'+ranges[i].hi+': '+ranges[i].label+(cur?' ◀':'')+'</div>';}`+
+		`var el=document.getElementById('%s');if(el)el.innerHTML=desc;`+
+		`})()</script>`,
+		sc.Total, gaugeID, descID)
+
+	b.WriteString(`</div>`)
 	return b.String()
+}
+
+func secRiskColor(pct int) string {
+	switch {
+	case pct < 25:
+		return "#5a8a7a"
+	case pct < 50:
+		return "#a0a030"
+	case pct < 75:
+		return "#c0a030"
+	default:
+		return "#c05040"
+	}
 }
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
@@ -309,6 +466,16 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 	card(&b, fmt.Sprintf("%d", len(pg.Modules)), plural(len(pg.Modules), "module", "modules"), false)
 	b.WriteString(`</div>`)
 
+	// Architecture layers + tech components (all platforms)
+	if layersHTML := renderArchLayers(files); layersHTML != "" {
+		techSet := buildTechSet(res, files)
+		componentsHTML := renderArchComponents(files, techSet)
+		b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">🏛️</span><h3>Architecture</h3></div>`)
+		b.WriteString(layersHTML)
+		b.WriteString(componentsHTML)
+		b.WriteString(`</div>`)
+	}
+
 	// module/package grid — labeled per the platform's language
 	// (Go → 🔧 Microservices, Swift → 📦 Packages & Modules).
 	if len(pg.Modules) > 0 {
@@ -332,8 +499,15 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 		b.WriteString(`</div></div>`)
 	}
 
-	// dependency hotspots scoped to this platform's modules
+	// dependency hotspots + per-module declaration graphs
 	b.WriteString(renderHotspots(res, pg))
+
+	// Penetration matrix + TODOs/FIXMEs
+	b.WriteString(renderPenetrationMatrix(files))
+	b.WriteString(renderTodosFixmes(files))
+
+	// Longest functions
+	b.WriteString(renderLongestFunctions(files, res.RootPath))
 
 	// security findings scoped to this platform
 	b.WriteString(renderPlatformSecurity(res, pg.Platform))
@@ -341,6 +515,25 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 	// language-scoped + universal report-module panels
 	b.WriteString(renderModulePanels(res.PanelsForPlatform(pg.Platform)))
 	return b.String()
+}
+
+// buildTechSet builds a technology set from the result and a file list.
+func buildTechSet(res *result.AnalysisResult, files []*parser.ParsedFile) map[string]bool {
+	ts := map[string]bool{}
+	for _, t := range res.Technologies {
+		ts[t] = true
+	}
+	for _, f := range files {
+		for _, imp := range f.Imports {
+			low := strings.ToLower(imp)
+			for _, t := range techImportMap {
+				if strings.Contains(low, t.needle) {
+					ts[t.label] = true
+				}
+			}
+		}
+	}
+	return ts
 }
 
 func renderHotspots(res *result.AnalysisResult, pg *scanner.PlatformGroup) string {
@@ -939,6 +1132,11 @@ func renderModuleDetails(res *result.AnalysisResult) string {
 		}
 		if len(parts) > 0 {
 			fmt.Fprintf(&b, `<p class="as-pkg-detail">%s</p>`, strings.Join(parts, " · "))
+		}
+
+		// per-module declaration graph
+		if g := renderDeclGraph(m.name, m.files); g != "" {
+			b.WriteString(g)
 		}
 
 		// file inventory table

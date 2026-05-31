@@ -31,7 +31,10 @@ func Render(res *result.AnalysisResult) string {
 	fmt.Fprintf(&b, "<title>ArchScope — %s</title>", esc(res.ProjectName))
 	b.WriteString("<style>")
 	b.WriteString(report.CSS)
-	b.WriteString("</style></head><body><div class=\"as-wrap\">")
+	b.WriteString("</style>")
+	b.WriteString(`<script src="https://unpkg.com/d3-force@3"></script>`)
+	b.WriteString(`<script src="https://unpkg.com/force-graph"></script>`)
+	b.WriteString("</head><body><div class=\"as-wrap\">")
 
 	// Header
 	b.WriteString(`<div class="as-head"><div class="as-head__title">`)
@@ -55,6 +58,9 @@ func Render(res *result.AnalysisResult) string {
 
 	// Tech stack + packages & modules (repo-wide)
 	b.WriteString(renderStackAndModules(res))
+
+	// Global architecture graph (modules + tech nodes)
+	b.WriteString(renderGlobalArchGraph(res))
 
 	// Global security index (gauge + categories)
 	b.WriteString(renderSecurityIndex(res))
