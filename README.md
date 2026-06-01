@@ -1,4 +1,4 @@
-# 🔭 ArchScope
+# 🏛️🔭 ArchScope
 
 **Universal CLI for multi-language codebase intelligence** — analyze architecture, security, dependencies and git history across Swift/Objective-C, Kotlin, TypeScript/JavaScript, Python and Go, and produce one interactive HTML report (+ SARIF).
 
