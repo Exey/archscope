@@ -5,6 +5,7 @@ import (
 	"html"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/exey/archscope/internal/git"
@@ -243,7 +244,7 @@ func renderGlobalCards(res *result.AnalysisResult) string {
 	card(&b, fmt.Sprintf("%d", len(res.Files)), "source files", false)
 	card(&b, fmt.Sprintf("%d", decls), "declarations", false)
 	card(&b, fmt.Sprintf("%d", len(res.Scan.Modules)), "modules", false)
-	card(&b, fmt.Sprintf("%d/1000", res.SecurityScore.Total), "danger index", true)
+	cardDangerIndex(&b, fmt.Sprintf("%d/1000", res.SecurityScore.Total))
 	card(&b, fmt.Sprintf("%d", len(platforms)), plural(len(platforms), "platform", "platforms"), false)
 	b.WriteString(`</div>`)
 	return b.String()
@@ -256,6 +257,14 @@ func card(b *strings.Builder, num, label string, accent bool) {
 	}
 	fmt.Fprintf(b, `<div class="%s"><span class="as-card__num">%s</span><span class="as-card__label">%s</span></div>`,
 		cls, esc(num), esc(label))
+}
+
+// cardDangerIndex renders the accented Danger Index summary card.
+func cardDangerIndex(b *strings.Builder, score string) {
+	b.WriteString(`<div class="as-card as-card--accent">`)
+	fmt.Fprintf(b, `<span class="as-card__num">%s</span>`, esc(score))
+	b.WriteString(`<span class="as-card__label">danger index</span>`)
+	b.WriteString(`</div>`)
 }
 
 // ── Security index (global gauge + category breakdown) ──────────────────────
@@ -328,8 +337,11 @@ func renderSecurityIndex(res *result.AnalysisResult) string {
 			}
 		}
 	}
+	// ── Security rules / CWE reference ──
+	b.WriteString(renderSecurityRules(res.Security))
+
 	if len(platFindings) > 0 {
-		b.WriteString(`<div class="as-sub" style="margin-top:18px;margin-bottom:8px">Findings by Platform</div>`)
+		b.WriteString(`<div class="as-sub" style="margin-bottom:8px">Findings by Platform</div>`)
 		b.WriteString(`<div class="as-sec-plat-row">`)
 		for _, pg := range res.Scan.PlatformsOrdered() {
 			total := platFindings[pg.Platform]
@@ -382,6 +394,136 @@ func renderSecurityIndex(res *result.AnalysisResult) string {
 		`})()</script>`,
 		sc.Total, gaugeID, descID)
 
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// renderSecurityRules derives the CWE reference grid directly from the live
+// rule set. Each rule's Rule.CWE field provides the primary CWE ID; the grid
+// aggregates counts automatically so it stays in sync when rules are added.
+func renderSecurityRules(results []security.RuleResult) string {
+	// Display names for known CWE IDs. Unknown IDs fall back to "CWE-NNN".
+	cweNames := map[string]string{
+		"16":   "Security Misconfiguration",
+		"22":   "Path Traversal",
+		"78":   "Command Injection",
+		"79":   "Cross-Site Scripting",
+		"89":   "SQL Injection",
+		"94":   "Code Injection",
+		"119":  "Memory Corruption",
+		"272":  "Least Privilege Violation",
+		"295":  "Certificate Validation",
+		"311":  "Missing Encryption",
+		"319":  "Cleartext Transmission",
+		"321":  "Hard-coded Crypto Key",
+		"327":  "Broken Crypto Algorithm",
+		"328":  "Weak Hash Algorithm",
+		"329":  "Hardcoded IV / Nonce",
+		"338":  "Weak PRNG",
+		"346":  "WebView Isolation",
+		"477":  "Deprecated API",
+		"489":  "Active Debug Code",
+		"502":  "Insecure Deserialization",
+		"522":  "Insecure Credentials",
+		"532":  "Sensitive Data in Logs",
+		"798":  "Hardcoded Credentials",
+		"922":  "Insecure Web Storage",
+		"926":  "Exported Android Component",
+		"942":  "CORS Wildcard",
+		"943":  "NoSQL Injection",
+		"476":  "Null Pointer Dereference",
+		"611":  "XML External Entity (XXE)",
+		"614":  "Insecure Cookie — No Secure Flag",
+		"918":  "Server-Side Request Forgery",
+		"1004": "HttpOnly Cookie",
+		"1321": "Prototype Pollution",
+	}
+
+	// Language display order and their platform-badge CSS classes.
+	type langMeta struct{ id, cls, label string }
+	langOrder := []langMeta{
+		{"go", "as-plat-go", "Go"},
+		{"swift", "as-plat-swift_objc", "Swift"},
+		{"python", "as-plat-python", "Python"},
+		{"ts", "as-plat-ts_js", "JS/TS"},
+		{"kotlin", "as-plat-kotlin", "Kotlin"},
+	}
+
+	// Aggregate per CWE: check count + which language IDs cover it.
+	type cweInfo struct {
+		n           int
+		isUniversal bool
+		langs       map[string]bool
+	}
+	info := map[string]*cweInfo{}
+	for _, rr := range results {
+		if rr.Rule.CWE == "" {
+			continue
+		}
+		ci := info[rr.Rule.CWE]
+		if ci == nil {
+			ci = &cweInfo{langs: map[string]bool{}}
+			info[rr.Rule.CWE] = ci
+		}
+		ci.n++
+		if len(rr.Rule.Languages) == 0 {
+			ci.isUniversal = true
+		} else {
+			for _, l := range rr.Rule.Languages {
+				ci.langs[l] = true
+			}
+		}
+	}
+
+	type entry struct{ id string; ci *cweInfo }
+	list := make([]entry, 0, len(info))
+	for id, ci := range info {
+		list = append(list, entry{id, ci})
+	}
+	sort.Slice(list, func(i, j int) bool {
+		ni, _ := strconv.Atoi(list[i].id)
+		nj, _ := strconv.Atoi(list[j].id)
+		return ni < nj
+	})
+
+	var b strings.Builder
+	fmt.Fprintf(&b,
+		`<div class="as-sub" style="margin-top:18px;margin-bottom:8px">`+
+			`Security Rules <span style="color:var(--text-faint);font-weight:400;text-transform:none;letter-spacing:0">(%d total checks)</span>`+
+			`</div>`,
+		len(results))
+	if len(list) == 0 {
+		return b.String()
+	}
+	b.WriteString(`<div class="as-cwe-grid">`)
+	for _, e := range list {
+		name, ok := cweNames[e.id]
+		if !ok {
+			name = "CWE-" + e.id
+		}
+		url := fmt.Sprintf("https://cwe.mitre.org/data/definitions/%s.html", e.id)
+		word := "check"
+		if e.ci.n != 1 {
+			word = "checks"
+		}
+		// Build language badge HTML.
+		var langHTML strings.Builder
+		if e.ci.isUniversal {
+			langHTML.WriteString(`<span class="as-plat-badge as-plat-universal">All</span>`)
+		} else {
+			for _, lm := range langOrder {
+				if e.ci.langs[lm.id] {
+					fmt.Fprintf(&langHTML, `<span class="as-plat-badge %s">%s</span>`, lm.cls, lm.label)
+				}
+			}
+		}
+		fmt.Fprintf(&b,
+			`<div class="as-cwe-item">`+
+				`<div class="as-cwe-top"><a class="as-cwe-item-id" href="%s" target="_blank" rel="noopener noreferrer">CWE-%s</a>%s</div>`+
+				`<span class="as-cwe-item-name">%s <span class="as-cwe-count">(%d %s)</span></span>`+
+				`</div>`,
+			url, e.id, langHTML.String(), esc(name), e.ci.n, word)
+	}
 	b.WriteString(`</div>`)
 	return b.String()
 }
@@ -476,8 +618,20 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 		b.WriteString(`</div>`)
 	}
 
-	// module/package grid — labeled per the platform's language
-	// (Go → 🔧 Microservices, Swift → 📦 Packages & Modules).
+	// 1. 🛡️ Danger Details — security findings for this platform
+	b.WriteString(renderPlatformSecurity(res, pg.Platform))
+
+	// 2. 📝 TODOs & FIXMEs
+	b.WriteString(renderPenetrationMatrix(files))
+	b.WriteString(renderTodosFixmes(files))
+
+	// 3. 🕸️ Dependency Hotspots
+	b.WriteString(renderHotspots(res, pg))
+
+	// 4. 📏 Longest Functions
+	b.WriteString(renderLongestFunctions(files, res.RootPath))
+
+	// 5. 🔧 Microservices / 📦 Packages & Modules — module/package grid (last)
 	if len(pg.Modules) > 0 {
 		icon, label := langspec.Default.ModuleNoun(pg.Platform)
 		fmt.Fprintf(&b, `<div class="as-section"><div class="as-section__head"><span class="ico">%s</span><h3>%s <span class="as-count">(%d)</span></h3></div><div class="as-modgrid">`,
@@ -498,19 +652,6 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 		}
 		b.WriteString(`</div></div>`)
 	}
-
-	// dependency hotspots + per-module declaration graphs
-	b.WriteString(renderHotspots(res, pg))
-
-	// Penetration matrix + TODOs/FIXMEs
-	b.WriteString(renderPenetrationMatrix(files))
-	b.WriteString(renderTodosFixmes(files))
-
-	// Longest functions
-	b.WriteString(renderLongestFunctions(files, res.RootPath))
-
-	// security findings scoped to this platform
-	b.WriteString(renderPlatformSecurity(res, pg.Platform))
 
 	// language-scoped + universal report-module panels
 	b.WriteString(renderModulePanels(res.PanelsForPlatform(pg.Platform)))
@@ -716,7 +857,7 @@ func renderPlatformSecurity(res *result.AnalysisResult, plat langspec.Platform) 
 		}
 	}
 	var b strings.Builder
-	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">🔎</span><h3>Security Findings</h3></div>`)
+	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">🛡️</span><h3>Danger Details</h3></div>`)
 	if total == 0 {
 		b.WriteString(`<p class="as-clean">✓ No findings in this platform's sources.</p></div>`)
 		return b.String()
@@ -750,8 +891,14 @@ func renderFindings(results []security.RuleResult) string {
 	var b strings.Builder
 	for _, rr := range results {
 		b.WriteString(`<div class="as-rule">`)
-		fmt.Fprintf(&b, `<div class="as-rule__head"><span class="as-sev %s">%s</span><span class="as-rule__name">%s</span><span class="as-rule__id">%s</span><span class="as-rule__count">%d %s</span></div>`,
-			sevClass(rr.Rule.Severity), esc(string(rr.Rule.Severity)), esc(rr.Rule.Name), esc(rr.Rule.ID),
+		cweLink := ""
+		if rr.Rule.CWE != "" {
+			cweURL := fmt.Sprintf("https://cwe.mitre.org/data/definitions/%s.html", rr.Rule.CWE)
+			cweLink = fmt.Sprintf(`<a class="as-rule__cwe" href="%s" target="_blank" rel="noopener noreferrer">[CWE-%s]</a>`,
+				esc(cweURL), rr.Rule.CWE)
+		}
+		fmt.Fprintf(&b, `<div class="as-rule__head"><span class="as-sev %s">%s</span><span class="as-rule__name">%s</span><span class="as-rule__id">%s</span>%s<span class="as-rule__count">%d %s</span></div>`,
+			sevClass(rr.Rule.Severity), esc(string(rr.Rule.Severity)), esc(rr.Rule.Name), esc(rr.Rule.ID), cweLink,
 			rr.TotalCount, plural(rr.TotalCount, "finding", "findings"))
 		if rr.Rule.Description != "" {
 			fmt.Fprintf(&b, `<div class="as-rule__desc">%s</div>`, esc(rr.Rule.Description))
@@ -1162,7 +1309,7 @@ func renderModuleDetails(res *result.AnalysisResult) string {
 				fileCell += fmt.Sprintf(`<div class="as-file-desc">💡 %s</div>`, esc(d))
 			}
 			fmt.Fprintf(&b, `<tr><td>%s</td><td class="mono">%d</td><td class="mono">%d</td><td class="as-decl-tags">%s</td></tr>`,
-				fileCell, f.LineCount, len(f.Declarations), declTags(f.Declarations))
+				fileCell, f.LineCount, len(f.Declarations), declTags(f.FilePath, f.Declarations))
 		}
 		b.WriteString(`</tbody></table></div>`)
 	}
@@ -1171,7 +1318,8 @@ func renderModuleDetails(res *result.AnalysisResult) string {
 }
 
 // declTags renders up to 14 declaration chips (icon + name) for a file.
-func declTags(decls []parser.Declaration) string {
+// When absPath is non-empty each chip links directly to the declaration in VS Code.
+func declTags(absPath string, decls []parser.Declaration) string {
 	if len(decls) == 0 {
 		return "—"
 	}
@@ -1182,7 +1330,12 @@ func declTags(decls []parser.Declaration) string {
 			parts = append(parts, fmt.Sprintf(`<span class="as-decl-more">+%d</span>`, len(decls)-limit))
 			break
 		}
-		parts = append(parts, fmt.Sprintf(`%s&thinsp;%s`, kindIcon(d.Kind), esc(d.Name)))
+		chip := fmt.Sprintf(`%s&thinsp;%s`, kindIcon(d.Kind), esc(d.Name))
+		if href := vscodeHref(absPath, d.Line); href != "" {
+			chip = fmt.Sprintf(`<a class="as-vs as-decl-link" href="%s" title="Open in VS Code (line %d)">%s</a>`,
+				esc(href), d.Line, chip)
+		}
+		parts = append(parts, chip)
 	}
 	return strings.Join(parts, "&ensp;")
 }

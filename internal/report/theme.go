@@ -69,6 +69,16 @@ code,.mono{font-family:var(--mono)}
 .as-card__label{color:var(--text-dim); font-size:12px; margin-top:3px}
 .as-card--accent{border-color:var(--accent-dim)}
 .as-card--accent .as-card__num{color:var(--accent)}
+/* CWE reference grid (3 columns) inside Danger Index section */
+.as-cwe-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:0 18px; margin-bottom:14px}
+.as-cwe-item{padding:5px 0; border-bottom:1px solid var(--border)}
+.as-cwe-item-id{font-family:var(--mono); font-size:11px; font-weight:700; color:var(--accent); display:block; text-decoration:none; margin-bottom:2px}
+.as-cwe-item-id:hover{text-decoration:underline}
+.as-cwe-item-name{font-size:11.5px; color:var(--text-dim); display:block; line-height:1.3}
+.as-cwe-count{font-family:var(--mono); font-size:10px; color:var(--text-faint)}
+.as-cwe-top{display:flex; align-items:center; gap:5px; flex-wrap:wrap; margin-bottom:2px}
+.as-cwe-langs{display:flex; flex-wrap:wrap; gap:2px}
+.as-plat-universal{background:rgba(78,161,255,.18); color:#4ea1ff}
 
 /* Section shell */
 .as-section{
@@ -160,6 +170,8 @@ code,.mono{font-family:var(--mono)}
 .as-rule__head{display:flex; align-items:center; gap:10px; padding:10px 13px; background:var(--bg-elev-2); flex-wrap:wrap}
 .as-rule__name{font-weight:650; font-size:13.5px}
 .as-rule__id{font-family:var(--mono); font-size:11px; color:var(--text-faint)}
+.as-rule__cwe{font-family:var(--mono); font-size:11px; color:var(--accent); text-decoration:none; opacity:.75}
+.as-rule__cwe:hover{opacity:1; text-decoration:underline}
 .as-rule__count{margin-left:auto; font-family:var(--mono); font-size:12px; color:var(--text-dim)}
 .as-rule__desc{padding:0 13px 11px; color:var(--text-dim); font-size:12.5px; background:var(--bg-elev-2)}
 .as-find{display:grid; grid-template-columns:1fr auto; gap:6px 12px; padding:8px 13px; border-top:1px solid var(--border); align-items:baseline}
@@ -269,6 +281,8 @@ a.as-mod:hover{border-color:var(--accent)}
 .as-file-desc{color:var(--text-faint); font-size:11.5px; font-style:italic; margin-top:2px}
 .as-decl-tags{font-size:11.5px; line-height:1.9; color:var(--text-dim); font-family:var(--mono)}
 .as-decl-more{color:var(--text-faint)}
+.as-decl-link{color:var(--text-dim); text-decoration:none}
+.as-decl-link:hover{color:var(--accent); text-decoration:none}
 
 
 /* Backend architecture (goscope-style layered view) */

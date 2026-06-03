@@ -53,9 +53,9 @@ var privateKeyHeader = regexp.MustCompile(
 )
 
 func init() {
-	security.Default.RegisterRule(HardcodedSecrets())
-	security.Default.RegisterRule(PrivateKeyInSource())
-	security.Default.RegisterRule(SQLStringInterpolation())
+	security.Default.RegisterRule(HardcodedSecrets())    // CWE-798 set inside
+	security.Default.RegisterRule(PrivateKeyInSource())  // CWE-321 set inside
+	security.Default.RegisterRule(SQLStringInterpolation()) // CWE-89 set inside
 }
 
 // HardcodedSecrets is the canonical universal rule: a credential assigned to a
@@ -69,6 +69,7 @@ func init() {
 func HardcodedSecrets() security.Rule {
 	return security.Rule{
 		ID:       "universal.hardcoded_secrets",
+		CWE:      "798",
 		Name:     "Hardcoded Secrets",
 		Severity: security.SevHigh,
 		Category: "insecure_data_storage",
@@ -122,6 +123,7 @@ func detectHardcodedSecrets(filePath string, lines []string) []security.Finding 
 func PrivateKeyInSource() security.Rule {
 	return security.Rule{
 		ID:       "universal.private_key_in_source",
+		CWE:      "321",
 		Name:     "Private Key Committed to Source",
 		Severity: security.SevHigh,
 		Category: "cryptography",
@@ -158,6 +160,7 @@ var interpolationMarker = regexp.MustCompile(`\\\(|\$\{|f["'][^"']*\{`)
 func SQLStringInterpolation() security.Rule {
 	return security.Rule{
 		ID:       "universal.sql_string_interpolation",
+		CWE:      "89",
 		Name:     "Unsafe String Interpolation in SQL Queries",
 		Severity: security.SevHigh,
 		Category: "io_validation",

@@ -70,6 +70,7 @@ type Rule struct {
 	Description string
 	Severity    Severity
 	Category    string // Category.Key
+	CWE         string // primary CWE ID, e.g. "89" (no "CWE-" prefix); "" = not mapped
 
 	// Languages this rule applies to (by LanguageSpec.ID). Empty = universal:
 	// the rule runs against files of every language (e.g. hardcoded secrets).
@@ -86,6 +87,13 @@ type Rule struct {
 	// ProjectOnly marks a rule whose findings come solely from ProjectDetect;
 	// Detect may be nil. Used so the runner skips it in the per-file phase.
 	ProjectOnly bool
+}
+
+// WithCWE returns a copy of the rule with the given primary CWE ID set.
+// Intended for fluent chaining: reRule(...).WithCWE("89").
+func (r Rule) WithCWE(cwe string) Rule {
+	r.CWE = cwe
+	return r
 }
 
 // AppliesToLanguage reports whether this rule should run for a given language.

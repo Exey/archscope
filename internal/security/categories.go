@@ -6,7 +6,7 @@ package security
 var Categories = []Category{
 	{ID: 1, Key: "insecure_data_storage", Title: "Insecure Data Storage", Icon: "🗄️", Weight: 130,
 		Blurb: "Hardcoded secrets, unprotected local storage, sensitive logging."},
-	{ID: 2, Key: "crash_factors", Title: "Crash Factors", Icon: "💥", Weight: 120,
+	{ID: 2, Key: "crash_factors", Title: "Crash & Stability", Icon: "💥", Weight: 120,
 		Blurb: "Force unwraps, unchecked errors, deadlocks, fatal aborts."},
 	{ID: 3, Key: "cryptography", Title: "Cryptography Issues", Icon: "🔐", Weight: 110,
 		Blurb: "Weak algorithms, insecure randomness, broken modes, key handling."},
@@ -14,7 +14,7 @@ var Categories = []Category{
 		Blurb: "Credential misuse, broken cert validation, session handling."},
 	{ID: 5, Key: "network_security", Title: "Network Security", Icon: "🌐", Weight: 90,
 		Blurb: "Plaintext transport, disabled TLS verification, missing pinning."},
-	{ID: 6, Key: "memory_corruption", Title: "Memory Corruption & Exploit Factors", Icon: "🧠", Weight: 80,
+	{ID: 6, Key: "memory_corruption", Title: "Memory Corruption", Icon: "🧠", Weight: 80,
 		Blurb: "Unsafe pointers, use-after-free, buffer/integer overflows."},
 	{ID: 7, Key: "io_validation", Title: "Input/Output Validation", Icon: "⌨️", Weight: 80,
 		Blurb: "Injection, path traversal, command injection."},
@@ -28,9 +28,9 @@ var Categories = []Category{
 		Blurb: "Missing obfuscation, debugger/tamper detection, integrity checks."},
 	{ID: 12, Key: "platform_config", Title: "Platform Configuration Weaknesses", Icon: "⚙️", Weight: 40,
 		Blurb: "Manifest/plist/settings misconfigurations (debug, backup, ATS)."},
-	{ID: 13, Key: "logic_state", Title: "Logic & State-based Exploit Factors", Icon: "🔀", Weight: 30,
+	{ID: 13, Key: "logic_state", Title: "Logic & State Bugs", Icon: "🔀", Weight: 30,
 		Blurb: "Race conditions, insecure IPC, state bugs, bypasses."},
-	{ID: 14, Key: "low_level_binary", Title: "Low-level Binary Vulnerabilities", Icon: "🔩", Weight: 20,
+	{ID: 14, Key: "low_level_binary", Title: "Low-Level & Native", Icon: "🔩", Weight: 20,
 		Blurb: "C/C++/ObjC memory-corruption primitives and runtime hazards."},
 }
 

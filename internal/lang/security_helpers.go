@@ -49,6 +49,38 @@ func reRule(id, name, category string, sev security.Severity, langs []string, re
 	}
 }
 
+// twoReRule builds a Rule that fires when must AND also both match the same
+// non-comment line. This is the standard "sink + source" two-pattern check used
+// for injection/traversal/SSRF rules where caller and argument appear inline.
+func twoReRule(id, name, category string, sev security.Severity, langs []string, must, also *regexp.Regexp, desc string) security.Rule {
+	return security.Rule{
+		ID:          id,
+		Name:        name,
+		Severity:    sev,
+		Category:    category,
+		Languages:   langs,
+		Description: desc,
+		Detect: func(filePath string, lines []string) []security.Finding {
+			var out []security.Finding
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if must.MatchString(line) && also.MatchString(line) {
+					out = append(out, security.NewFinding(filePath, i, lines))
+				}
+			}
+			return out
+		},
+	}
+}
+
+// reSensitiveData matches variable/key names that suggest security-sensitive
+// values — reused across logging, storage, and SSRF rules.
+var reSensitiveData = regexp.MustCompile(
+	`(?i)\b(password|passwd|secret|api[_-]?key|token|credential|private[_-]?key|auth|nonce|salt)\b`,
+)
+
 // insecureURLSkips are hosts that legitimately appear behind http:// (loopback,
 // XML namespaces, doc placeholders) and must not trip transport rules.
 var insecureURLSkips = []string{
