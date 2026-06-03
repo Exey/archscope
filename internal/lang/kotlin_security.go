@@ -35,6 +35,13 @@ var (
 	reKtCookieSink     = regexp.MustCompile(`\bCookie\s*\(|\.addCookie\s*\(`)
 	reKtCookieSecure   = regexp.MustCompile(`\.setSecure\s*\(\s*true\s*\)|isSecure\s*=\s*true|secure\s*=\s*true`)
 	reKtHTTPSink       = regexp.MustCompile(`\bURL\s*\(|\bOkHttpClient\b|\bHttpURLConnection\b|\.newCall\s*\(`)
+	// CWE-352: SameSite guard for Spring ResponseCookie and generic cookie APIs
+	reKtSameSite       = regexp.MustCompile(`(?i)\.sameSite\s*\(|sameSite\s*=|SameSite\s*:`)
+	// CWE-434: Spring MultipartFile upload sink and type-validation guard
+	reKtMultipartFile  = regexp.MustCompile(`\bMultipartFile\b|\.getOriginalFilename\s*\(|\.transferTo\s*\(`)
+	reKtFileTypeCheck  = regexp.MustCompile(`(?i)(contentType|mimeType|allowedType|validateFile|allowedExt|getOriginalFilename|fileExtension)`)
+	// CWE-601: open redirect sink
+	reKtSendRedirect   = regexp.MustCompile(`\.sendRedirect\s*\(`)
 	// Android manifest helpers
 	reManifestComponent = regexp.MustCompile(`<(activity|service|receiver|provider)\b`)
 	reManifestExported  = regexp.MustCompile(`android:exported\s*=\s*"true"`)
@@ -99,6 +106,80 @@ func init() {
 			"HttpURLConnection. An attacker can redirect the request to internal services. "+
 			"Validate and allowlist target URLs before making outbound requests. (CWE-918)",
 	).WithCWE("918"))
+	security.Default.RegisterRule(kotlinCookieNoSameSiteRule())
+	security.Default.RegisterRule(kotlinUnrestrictedFileUploadRule())
+	security.Default.RegisterRule(twoReRule(
+		"kotlin.open_redirect", "Open Redirect", "io_validation", security.SevMedium, kotlinLangs,
+		reKtSendRedirect, reKtWebInput,
+		"response.sendRedirect() is called with a URL derived from a request parameter. An "+
+			"attacker can supply an off-site URL to redirect victims to a phishing page. "+
+			"Validate the target against an explicit allowlist or ensure it is a relative path. (CWE-601)",
+	).WithCWE("601"))
+}
+
+// kotlinCookieNoSameSiteRule flags Cookie creation without a SameSite attribute
+// on the same line. Multi-line builder chains may produce false positives.
+func kotlinCookieNoSameSiteRule() security.Rule {
+	return security.Rule{
+		ID:        "kotlin.cookie_no_samesite",
+		Name:      "Cookie Missing SameSite Attribute",
+		Severity:  security.SevMedium,
+		Category:  "authentication",
+		CWE:       "352",
+		Languages: kotlinLangs,
+		Description: "A Cookie is created without a SameSite attribute. Without SameSite the " +
+			"cookie is included in cross-site requests, enabling CSRF attacks. Use Spring's " +
+			"ResponseCookie.from(...).sameSite(\"Strict\").build() or set SameSite on the " +
+			"Set-Cookie header explicitly. (CWE-352)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			var out []security.Finding
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reKtCookieSet.MatchString(line) && !reKtSameSite.MatchString(line) {
+					out = append(out, security.NewFinding(filePath, i, lines))
+				}
+			}
+			return out
+		},
+	}
+}
+
+// kotlinUnrestrictedFileUploadRule fires when a file handles Spring MultipartFile
+// uploads but has no content-type or extension validation in the same file.
+func kotlinUnrestrictedFileUploadRule() security.Rule {
+	return security.Rule{
+		ID:        "kotlin.unrestricted_file_upload",
+		Name:      "Unrestricted File Upload",
+		Severity:  security.SevHigh,
+		Category:  "io_validation",
+		CWE:       "434",
+		Languages: kotlinLangs,
+		Description: "A MultipartFile upload handler is present without any content-type or " +
+			"extension validation in the same file. Without validation an attacker can upload " +
+			"executable files. Check file.contentType against an allowlist and validate the " +
+			"extension from getOriginalFilename() before storing the file. (CWE-434)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			uploadLine := -1
+			hasTypeCheck := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reKtMultipartFile.MatchString(line) && uploadLine == -1 {
+					uploadLine = i
+				}
+				if reKtFileTypeCheck.MatchString(line) {
+					hasTypeCheck = true
+				}
+			}
+			if uploadLine >= 0 && !hasTypeCheck {
+				return []security.Finding{security.NewFinding(filePath, uploadLine, lines)}
+			}
+			return nil
+		},
+	}
 }
 
 // kotlinWeakRandomRule flags java.util.Random (not SecureRandom) in a context

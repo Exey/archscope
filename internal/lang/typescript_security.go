@@ -33,6 +33,13 @@ var (
 	reJSResCookieSink     = regexp.MustCompile(`\bres\.cookie\s*\(|response\.cookie\s*\(`)
 	reJSCookieSecure      = regexp.MustCompile(`secure\s*:\s*true`)
 	reJSFetchSink         = regexp.MustCompile(`\b(fetch|axios\.(get|post|put|delete|request)|http\.(get|post|request))\s*\(`)
+	// CWE-352: res.cookie without sameSite on the same line
+	reJSSameSite      = regexp.MustCompile(`(?i)sameSite\s*:`)
+	// CWE-434: multer initialisation and fileFilter guard
+	reJSMulterInit    = regexp.MustCompile(`\bmulter\s*\(\s*\{`)
+	reJSFileFilter    = regexp.MustCompile(`\bfileFilter\b`)
+	// CWE-601: open redirect sink
+	reJSRedirectSink  = regexp.MustCompile(`\b(?:res|response)\.redirect\s*\(`)
 )
 
 func init() {
@@ -117,6 +124,15 @@ func init() {
 			"omit sensitive values before logging. (CWE-532)",
 	).WithCWE("532"))
 	security.Default.RegisterRule(jsResCookieNoSecureRule())
+	security.Default.RegisterRule(jsResCookieNoSameSiteRule())
+	security.Default.RegisterRule(jsUnrestrictedFileUploadRule())
+	security.Default.RegisterRule(twoReRule(
+		"javascript.open_redirect", "Open Redirect", "io_validation", security.SevMedium, tsLangs,
+		reJSRedirectSink, reJSNoSQLSource,
+		"res.redirect() is called with a URL derived from req.body/params/query. An attacker can "+
+			"supply an off-site URL to redirect victims to a phishing page. Validate the target "+
+			"against an explicit allowlist or ensure it is a safe relative path. (CWE-601)",
+	).WithCWE("601"))
 	security.Default.RegisterRule(twoReRule(
 		"javascript.ssrf", "Server-Side Request Forgery", "io_validation", security.SevHigh, tsLangs,
 		reJSFetchSink, reJSNoSQLSource,
@@ -124,6 +140,70 @@ func init() {
 			"or http.get. An attacker can redirect the request to internal services or cloud "+
 			"metadata endpoints. Validate and allowlist target URLs. (CWE-918)",
 	).WithCWE("918"))
+}
+
+// jsResCookieNoSameSiteRule flags res.cookie() calls without sameSite: on the
+// same line. Multi-line option objects will produce a false positive at the
+// opening call — treat findings as an audit prompt.
+func jsResCookieNoSameSiteRule() security.Rule {
+	return security.Rule{
+		ID:        "javascript.cookie_no_samesite",
+		Name:      "Cookie Missing SameSite Attribute",
+		Severity:  security.SevMedium,
+		Category:  "authentication",
+		CWE:       "352",
+		Languages: tsLangs,
+		Description: "res.cookie() is called without a sameSite option. Without SameSite the " +
+			"cookie is included in cross-site requests, enabling CSRF attacks. Pass " +
+			"{ sameSite: 'Strict', secure: true, httpOnly: true } to all session cookies. (CWE-352)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			var out []security.Finding
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reJSResCookieSink.MatchString(line) && !reJSSameSite.MatchString(line) {
+					out = append(out, security.NewFinding(filePath, i, lines))
+				}
+			}
+			return out
+		},
+	}
+}
+
+// jsUnrestrictedFileUploadRule fires when a file initialises multer without a
+// fileFilter anywhere in the same file.
+func jsUnrestrictedFileUploadRule() security.Rule {
+	return security.Rule{
+		ID:        "javascript.unrestricted_file_upload",
+		Name:      "Unrestricted File Upload",
+		Severity:  security.SevHigh,
+		Category:  "io_validation",
+		CWE:       "434",
+		Languages: tsLangs,
+		Description: "multer() is initialised without a fileFilter function in the same file. " +
+			"Without fileFilter any file type is accepted, allowing upload of executable files. " +
+			"Add a fileFilter that validates file.mimetype against an explicit allowlist. (CWE-434)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			multerLine := -1
+			hasFilter := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reJSMulterInit.MatchString(line) && multerLine == -1 {
+					multerLine = i
+				}
+				if reJSFileFilter.MatchString(line) {
+					hasFilter = true
+				}
+			}
+			if multerLine >= 0 && !hasFilter {
+				return []security.Finding{security.NewFinding(filePath, multerLine, lines)}
+			}
+			return nil
+		},
+	}
 }
 
 // jsResCookieNoSecureRule flags Express res.cookie() calls without secure: true.

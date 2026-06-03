@@ -33,6 +33,14 @@ var (
 	rePyLogSink      = regexp.MustCompile(`\b(logging\.(info|debug|warning|error|critical|exception)|print)\s*\(`)
 	rePyXXE          = regexp.MustCompile(`\b(xml\.etree\.ElementTree\.(parse|fromstring)|minidom\.parse|lxml\.etree\.(parse|fromstring))\s*\(`)
 	rePyHTTPSink     = regexp.MustCompile(`\brequests\.(get|post|put|delete|head|patch)\s*\(|\burllib(\.(request))?\.urlopen\s*\(`)
+	// CWE-352: set_cookie without samesite= on the same line
+	rePySetCookie    = regexp.MustCompile(`\.set_cookie\s*\(`)
+	rePySameSiteParam = regexp.MustCompile(`(?i)samesite\s*=`)
+	// CWE-434: file upload sinks and type-validation guard
+	rePyFileUploadSink = regexp.MustCompile(`request\.files\b|request\.FILES\b`)
+	rePyFileTypeCheck  = regexp.MustCompile(`(?i)(secure_filename|\.content_type\b|\.mimetype\b|allowed_extensions|ALLOWED_EXTENSIONS|validate.*file|file.*type)`)
+	// CWE-601: open redirect sink (Flask redirect / Django HttpResponseRedirect)
+	rePyRedirectSink = regexp.MustCompile(`\bredirect\s*\(|HttpResponseRedirect\s*\(`)
 )
 
 func init() {
@@ -134,6 +142,81 @@ func init() {
 			"urlopen. An attacker can redirect the request to internal services or cloud "+
 			"metadata endpoints. Validate and allowlist target URLs. (CWE-918)",
 	).WithCWE("918"))
+	security.Default.RegisterRule(pythonCookieNoSameSiteRule())
+	security.Default.RegisterRule(pythonUnrestrictedFileUploadRule())
+	security.Default.RegisterRule(twoReRule(
+		"python.open_redirect", "Open Redirect", "io_validation", security.SevMedium, pythonLangs,
+		rePyRedirectSink, rePyWebInput,
+		"redirect() / HttpResponseRedirect() is called with a URL derived from request data. "+
+			"An attacker can supply an off-site URL to redirect victims to a phishing page. "+
+			"Validate the target against an explicit allowlist or ensure it is a safe relative path. (CWE-601)",
+	).WithCWE("601"))
+}
+
+// pythonCookieNoSameSiteRule flags set_cookie() calls without samesite= on the
+// same line. Multi-line calls that set samesite= on a continuation line will
+// produce a false positive — treat findings as an audit prompt.
+func pythonCookieNoSameSiteRule() security.Rule {
+	return security.Rule{
+		ID:        "python.cookie_no_samesite",
+		Name:      "Cookie Missing SameSite Attribute",
+		Severity:  security.SevMedium,
+		Category:  "authentication",
+		CWE:       "352",
+		Languages: pythonLangs,
+		Description: "response.set_cookie() is called without a samesite= parameter. Without " +
+			"SameSite the cookie is included in cross-site requests, enabling CSRF attacks. " +
+			"Pass samesite='Strict' (or 'Lax') to all session and authentication cookies. (CWE-352)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			var out []security.Finding
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if rePySetCookie.MatchString(line) && !rePySameSiteParam.MatchString(line) {
+					out = append(out, security.NewFinding(filePath, i, lines))
+				}
+			}
+			return out
+		},
+	}
+}
+
+// pythonUnrestrictedFileUploadRule fires when a file handles uploads via
+// request.files / request.FILES but has no content-type or extension validation
+// anywhere in the same file.
+func pythonUnrestrictedFileUploadRule() security.Rule {
+	return security.Rule{
+		ID:        "python.unrestricted_file_upload",
+		Name:      "Unrestricted File Upload",
+		Severity:  security.SevHigh,
+		Category:  "io_validation",
+		CWE:       "434",
+		Languages: pythonLangs,
+		Description: "request.files / request.FILES is accessed without any content-type, " +
+			"MIME-type, or extension validation in the same file. Without validation an attacker " +
+			"can upload executable files. Use werkzeug's secure_filename, check file.content_type " +
+			"or file.mimetype, and restrict accepted extensions. (CWE-434)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			uploadLine := -1
+			hasTypeCheck := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if rePyFileUploadSink.MatchString(line) && uploadLine == -1 {
+					uploadLine = i
+				}
+				if rePyFileTypeCheck.MatchString(line) {
+					hasTypeCheck = true
+				}
+			}
+			if uploadLine >= 0 && !hasTypeCheck {
+				return []security.Finding{security.NewFinding(filePath, uploadLine, lines)}
+			}
+			return nil
+		},
+	}
 }
 
 // pythonDjangoSecurityMWRule checks Django settings files for a MIDDLEWARE

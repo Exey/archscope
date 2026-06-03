@@ -36,6 +36,13 @@ var (
 	reGoGobDecoder  = regexp.MustCompile(`\bgob\.NewDecoder\s*\(`)
 	reGoHTTPCallSink = regexp.MustCompile(`\bhttp\.(Get|Post|Head|NewRequest)\s*\(`)
 	reGoCookieNoSec = regexp.MustCompile(`Secure\s*:\s*true`)
+	// CWE-352: SameSite guard — matches the Strict or Lax assignment on the same line as Cookie{
+	reGoSameSiteGuard  = regexp.MustCompile(`SameSite\s*:\s*http\.SameSite(Strict|Lax)Mode`)
+	// CWE-434: multipart upload sink and type-validation guard
+	reGoFileUploadSink = regexp.MustCompile(`\br\.FormFile\s*\(|\br\.MultipartReader\s*\(|\bmultipart\.NewReader\s*\(`)
+	reGoFileTypeCheck  = regexp.MustCompile(`(?i)(http\.DetectContentType|mime\.TypeByExtension|Content-Type|allowedExt|validExt|allowedType|checkType)`)
+	// CWE-601: open redirect sink
+	reGoHTTPRedirect = regexp.MustCompile(`\bhttp\.Redirect\s*\(`)
 )
 
 func init() {
@@ -104,6 +111,15 @@ func init() {
 			"Validate and allowlist target URLs before issuing outbound requests. (CWE-918)",
 	).WithCWE("918"))
 	security.Default.RegisterRule(goCookieNoSecureRule())
+	security.Default.RegisterRule(goCookieNoSameSiteRule())
+	security.Default.RegisterRule(goUnrestrictedFileUploadRule())
+	security.Default.RegisterRule(twoReRule(
+		"go.open_redirect", "Open Redirect", "io_validation", security.SevMedium, goLangs,
+		reGoHTTPRedirect, reGoUserInput,
+		"http.Redirect is called with a URL derived from a request parameter. An attacker can "+
+			"supply an off-site URL to redirect victims to a phishing page. Validate the target "+
+			"against an explicit allowlist or ensure it is a relative path. (CWE-601)",
+	).WithCWE("601"))
 }
 
 // goCookieNoSecureRule flags http.Cookie literals without Secure: true.
@@ -256,6 +272,74 @@ func goCookieNoHTTPOnlyRule() security.Rule {
 				}
 			}
 			return out
+		},
+	}
+}
+
+// goCookieNoSameSiteRule flags http.Cookie literals that don't set SameSite to
+// Strict or Lax on the same line. Cookies without SameSite are sent on
+// cross-site requests, enabling CSRF. Multi-line struct literals may evade this
+// check — treat findings as an audit prompt, not a definitive verdict.
+func goCookieNoSameSiteRule() security.Rule {
+	return security.Rule{
+		ID:        "go.cookie_no_samesite",
+		Name:      "Cookie Missing SameSite Attribute",
+		Severity:  security.SevMedium,
+		Category:  "authentication",
+		CWE:       "352",
+		Languages: goLangs,
+		Description: "An http.Cookie literal was found without SameSite set to " +
+			"http.SameSiteStrictMode or SameSiteLaxMode. Without SameSite the cookie is sent " +
+			"on cross-site requests, making it susceptible to CSRF attacks. Set " +
+			"SameSite: http.SameSiteStrictMode on all session and authentication cookies. (CWE-352)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			var out []security.Finding
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reGoCookieNoHTTP.MatchString(line) && !reGoSameSiteGuard.MatchString(line) {
+					out = append(out, security.NewFinding(filePath, i, lines))
+				}
+			}
+			return out
+		},
+	}
+}
+
+// goUnrestrictedFileUploadRule fires when a file handles multipart uploads but
+// has no content-type or extension validation anywhere in the same file. It is
+// a file-level check: one finding at the first upload call site.
+func goUnrestrictedFileUploadRule() security.Rule {
+	return security.Rule{
+		ID:        "go.unrestricted_file_upload",
+		Name:      "Unrestricted File Upload",
+		Severity:  security.SevHigh,
+		Category:  "io_validation",
+		CWE:       "434",
+		Languages: goLangs,
+		Description: "A multipart file-upload handler (r.FormFile, multipart.NewReader) is present " +
+			"without any content-type or extension validation in the same file. Without validation " +
+			"an attacker can upload executable files. Use http.DetectContentType and restrict " +
+			"allowed extensions before saving the file. (CWE-434)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			uploadLine := -1
+			hasTypeCheck := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reGoFileUploadSink.MatchString(line) && uploadLine == -1 {
+					uploadLine = i
+				}
+				if reGoFileTypeCheck.MatchString(line) {
+					hasTypeCheck = true
+				}
+			}
+			if uploadLine >= 0 && !hasTypeCheck {
+				return []security.Finding{security.NewFinding(filePath, uploadLine, lines)}
+			}
+			return nil
 		},
 	}
 }
