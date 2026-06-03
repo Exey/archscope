@@ -37,7 +37,13 @@ var (
 	reSwiftDebugFW       = regexp.MustCompile(`\bimport\s+(FLEX|Reveal|Chisel|InjectionIII|Dotzu|DBDebugToolkit|GodEye|Hyperion)\b`)
 	reSwiftUnsafePtr     = regexp.MustCompile(`\b(UnsafePointer|UnsafeMutablePointer|UnsafeRawPointer|UnsafeMutableRawPointer|withUnsafeBytes|withUnsafeMutableBytes|withUnsafePointer|withUnsafeMutablePointer)\b`)
 	reSwiftECBMode       = regexp.MustCompile(`kCCOptionECBMode`)
-	reSwiftPathTraversal = regexp.MustCompile(`"\.\./`)
+	// CWE-22: FileManager/Data file-read sinks (path traversal via interpolation)
+	reSwiftFileSink      = regexp.MustCompile(`\bFileManager\.default\b|\bData\s*\(\s*contentsOf\s*:|\bNSData\s*\(\s*contentsOfFile\s*:|\bcontentsOfFile\s*:|\bURL\s*\(\s*fileURLWithPath\s*:`)
+	// CWE-918: URLSession with a string-interpolated URL — attacker can redirect to internal hosts
+	reSwiftURLSessionSink = regexp.MustCompile(`URLSession\b|\.dataTask\s*\(|\.downloadTask\s*\(|\.uploadTask\s*\(`)
+	reSwiftURLInterp      = regexp.MustCompile(`URL\s*\(\s*string\s*:.*\\\(|URLComponents\b.*\\\(`)
+	// CWE-916: fast hash in password context (CryptoKit SHA256/SHA512)
+	reSwiftFastHashSink  = regexp.MustCompile(`\bSHA256\.(hash|init)|SHA512\.(hash|init)|\bSHA384\.(hash|init)|Insecure\.SHA256|Insecure\.SHA512`)
 )
 
 func init() {
@@ -70,12 +76,12 @@ func init() {
 		insecureURLSkips...,
 	).WithCWE("319"))
 	security.Default.RegisterRule(swiftSensitiveUserDefaultsRule())
-	security.Default.RegisterRule(reRule(
-		"swift.insecure_random", "Insecure Random Number Generator", "cryptography", security.SevMedium, swiftLangs,
-		reSwiftInsecureRandom,
-		"arc4random, rand() and Swift's Int/Bool/Float/Double.random() are not guaranteed to be "+
-			"cryptographically secure. For security-sensitive operations (tokens, nonces, keys) "+
-			"use SecRandomCopyBytes or CryptoKit's randomness APIs.",
+	security.Default.RegisterRule(twoReRule(
+		"swift.insecure_random", "Insecure Random in Security Context", "cryptography", security.SevMedium, swiftLangs,
+		reSwiftInsecureRandom, reSwiftSensitiveKey,
+		"arc4random, rand() or Swift's Int/Bool/Float/Double.random() is used in a context that "+
+			"suggests a security-sensitive value (token, key, nonce). For cryptographic material "+
+			"use SecRandomCopyBytes or CryptoKit's randomness APIs instead.",
 	).WithCWE("338"))
 	security.Default.RegisterRule(reRule(
 		"swift.webview_js_window", "WebView Allows JS Window Open", "platform_config", security.SevLow, swiftLangs,
@@ -88,7 +94,7 @@ func init() {
 
 	// ArchSwiftScope rules
 	security.Default.RegisterRule(reRule(
-		"swift.nskeyedunarchiver", "Insecure Deserialization (NSKeyedUnarchiver)", "io_validation", security.SevHigh, swiftLangs,
+		"swift.nskeyedunarchiver", "Insecure Deserialization (NSKeyedUnarchiver)", "unsafe_exec", security.SevHigh, swiftLangs,
 		reSwiftNSKeyedUn,
 		"NSKeyedUnarchiver.unarchiveObject or requiringSecureCoding: false deserializes objects "+
 			"without type restrictions. Attacker-controlled archives can instantiate arbitrary "+
@@ -96,7 +102,7 @@ func init() {
 			"requiringSecureCoding: true and a concrete expected class.",
 	).WithCWE("502"))
 	security.Default.RegisterRule(reRule(
-		"swift.shell_injection", "Shell Command Execution", "io_validation", security.SevHigh, swiftLangs,
+		"swift.shell_injection", "Shell Command Execution", "injection", security.SevHigh, swiftLangs,
 		reSwiftShell,
 		"Execution of /bin/sh, /bin/bash or popen() with string interpolation risks command "+
 			"injection if any argument originates from user input. Use Process with a fixed "+
@@ -161,13 +167,66 @@ func init() {
 			"(the 'ECB penguin'). Use AES-GCM (CryptoKit) or CBC with a random IV and HMAC "+
 			"authentication instead.",
 	).WithCWE("327"))
-	security.Default.RegisterRule(reRule(
+	security.Default.RegisterRule(twoReRule(
 		"swift.path_traversal", "Path Traversal", "io_validation", security.SevHigh, swiftLangs,
-		reSwiftPathTraversal,
-		"A \"../\" sequence in a file path allows traversal outside the intended directory, "+
-			"potentially reading or writing sensitive files. Validate and canonicalize paths "+
-			"before use; reject any component that is or contains \"..\".",
+		reSwiftFileSink, reSwiftInterpolation,
+		"A file-system operation (FileManager, Data(contentsOf:), URL(fileURLWithPath:)) uses "+
+			"a path built with Swift string interpolation (\\(...)). If the interpolated value "+
+			"originates from user input an attacker can supply \"../\" sequences to escape the "+
+			"allowed directory. Validate and canonicalize paths before use. (CWE-22)",
 	).WithCWE("22"))
+	security.Default.RegisterRule(swiftSSRFRule())
+	security.Default.RegisterRule(credentialRule("swift.hardcoded_credentials", swiftLangs,
+		"A credential-naming variable is assigned a string literal. Hardcoded secrets are "+
+			"committed to history permanently. Load credentials from a secure keychain, "+
+			"configuration file, or environment at runtime. (CWE-798)"))
+	security.Default.RegisterRule(twoReRule(
+		"swift.fast_hash_for_password", "Fast Hash Used for Password", "cryptography", security.SevHigh, swiftLangs,
+		reSwiftFastHashSink, reSwiftSensitiveKey,
+		"CryptoKit SHA256/SHA512 is used in a context that suggests password hashing. Fast "+
+			"hashes can be brute-forced at billions of attempts per second. Use a password KDF "+
+			"(CommonCrypto PBKDF2, CryptoKit HKDF, or a third-party argon2/bcrypt wrapper) "+
+			"for credential storage. (CWE-916)",
+	).WithCWE("916"))
+}
+
+// swiftSSRFRule fires when a file creates a URL from string interpolation and
+// also contains a URLSession network call. The interpolated URL may incorporate
+// user-controlled input, allowing an attacker to redirect the request to
+// internal services or cloud metadata endpoints.
+func swiftSSRFRule() security.Rule {
+	return security.Rule{
+		ID:        "swift.ssrf",
+		Name:      "Server-Side Request Forgery",
+		Severity:  security.SevHigh,
+		Category:  "io_validation",
+		CWE:       "918",
+		Languages: swiftLangs,
+		Description: "A URL is constructed with Swift string interpolation (\\(...)) and a " +
+			"URLSession network call is present in the same file. If the interpolated value " +
+			"originates from user input an attacker can redirect the request to internal " +
+			"services or cloud metadata endpoints. Validate and allowlist target hosts before " +
+			"issuing outbound requests. (CWE-918)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			urlLine := -1
+			hasSession := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reSwiftURLInterp.MatchString(line) && urlLine == -1 {
+					urlLine = i
+				}
+				if reSwiftURLSessionSink.MatchString(line) {
+					hasSession = true
+				}
+			}
+			if urlLine >= 0 && hasSession {
+				return []security.Finding{security.NewFinding(filePath, urlLine, lines)}
+			}
+			return nil
+		},
+	}
 }
 
 // swiftWebViewInjectionRule flags evaluateJavaScript calls that use string
@@ -241,7 +300,7 @@ func swiftSensitiveLoggingRule() security.Rule {
 		ID:        "swift.sensitive_logging",
 		Name:      "Sensitive Data in Debug Logs",
 		Severity:  security.SevMedium,
-		Category:  "insecure_data_storage",
+		Category:  "data_exposure",
 		CWE:       "532",
 		Languages: swiftLangs,
 		Description: "print() / debugPrint() / NSLog() is called on a line that references " +
@@ -269,7 +328,7 @@ func swiftSQLiteInjectionRule() security.Rule {
 		ID:        "swift.sqlite_injection",
 		Name:      "SQLite String Interpolation",
 		Severity:  security.SevHigh,
-		Category:  "io_validation",
+		Category:  "injection",
 		CWE:       "89",
 		Languages: swiftLangs,
 		Description: "A SQLite query is assembled using Swift string interpolation (\\(...)). " +
@@ -296,7 +355,7 @@ func swiftSensitiveUserDefaultsRule() security.Rule {
 		ID:        "swift.sensitive_userdefaults",
 		Name:      "Sensitive Data in UserDefaults",
 		Severity:  security.SevHigh,
-		Category:  "insecure_data_storage",
+		Category:  "data_exposure",
 		CWE:       "311",
 		Languages: swiftLangs,
 		Description: "Storing passwords, tokens or API keys in UserDefaults writes them to an " +

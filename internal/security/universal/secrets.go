@@ -32,6 +32,26 @@ var jwtLiteral = regexp.MustCompile(
 	`["'](eyJ[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{4,})["']`,
 )
 
+// knownPrefixSecret matches well-known service-specific secret formats where
+// the prefix alone is a reliable indicator regardless of variable name context.
+// Each alternative is anchored to its documented format so false positives are
+// structurally impossible (AKIA is always 20 chars; ghp_ tokens are always 36).
+var knownPrefixSecret = regexp.MustCompile(
+	`["'](` +
+		`AKIA[0-9A-Z]{16}` + // AWS access key ID
+		`|ASIA[0-9A-Z]{16}` + // AWS STS temporary key
+		`|ghp_[A-Za-z0-9]{36}` + // GitHub personal access token
+		`|gho_[A-Za-z0-9]{36}` + // GitHub OAuth token
+		`|ghs_[A-Za-z0-9]{36}` + // GitHub server-to-server token
+		`|github_pat_[A-Za-z0-9_]{59}` + // GitHub fine-grained PAT
+		`|sk_live_[0-9a-zA-Z]{24,}` + // Stripe live secret key
+		`|sk_test_[0-9a-zA-Z]{24,}` + // Stripe test secret key
+		`|xoxb-[0-9]{11}-[0-9A-Za-z-]{24,}` + // Slack bot token
+		`|xoxp-[0-9]+-[0-9]+-[0-9A-Za-z-]+` + // Slack user token
+		`|AIza[0-9A-Za-z\-_]{35}` + // Google API key
+		`)["']`,
+)
+
 // jsonKeyValue matches an all-lowercase snake_case literal *containing an
 // underscore* — these are almost always JSON key names being mapped
 // (`case accessToken = "access_token"`, `"token": "refresh_token"`), not real
@@ -113,6 +133,12 @@ func detectHardcodedSecrets(filePath string, lines []string) []security.Finding 
 		}
 		// 3) JWT literal
 		if jwtLiteral.MatchString(line) {
+			out = append(out, security.NewFinding(filePath, i, lines))
+			continue
+		}
+		// 4) known-prefix secrets (AWS, GitHub, Stripe, Slack, Google) — no
+		// keyword context needed; the prefix format alone is definitive.
+		if knownPrefixSecret.MatchString(line) {
 			out = append(out, security.NewFinding(filePath, i, lines))
 		}
 	}

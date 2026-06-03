@@ -42,6 +42,20 @@ var (
 	reKtFileTypeCheck  = regexp.MustCompile(`(?i)(contentType|mimeType|allowedType|validateFile|allowedExt|getOriginalFilename|fileExtension)`)
 	// CWE-601: open redirect sink
 	reKtSendRedirect   = regexp.MustCompile(`\.sendRedirect\s*\(`)
+	// CWE-916: fast hash in password context (MessageDigest with SHA-256+)
+	reKtFastHashSink   = regexp.MustCompile(`MessageDigest\.getInstance\s*\(\s*["'](SHA-256|SHA-512|SHA-384|SHA3)["']`)
+	// CWE-347: jjwt parser without signing-key verification
+	reKtJWTParser      = regexp.MustCompile(`\bJwts\.(parser|parserBuilder)\s*\(`)
+	reKtJWTSigningKey  = regexp.MustCompile(`\.setSigningKey\s*\(|\.verifyWith\s*\(`)
+	// CWE-749: addJavascriptInterface exposes Java objects to WebView JS
+	reKtAddJSInterface = regexp.MustCompile(`\.addJavascriptInterface\s*\(`)
+	// CWE-16: JavaScript enabled in WebView
+	reKtJSEnabled      = regexp.MustCompile(`\.setJavaScriptEnabled\s*\(\s*true\s*\)`)
+	// CWE-732: Android world-readable/writable file modes (deprecated constants)
+	reKtWorldMode      = regexp.MustCompile(`MODE_WORLD_READABLE|MODE_WORLD_WRITEABLE`)
+	// CWE-22 variant: zip-slip via ZipInputStream without path validation
+	reKtZipSink        = regexp.MustCompile(`\bZipInputStream\s*\(|\bZipEntry\b|\.getNextEntry\s*\(`)
+	reKtZipGuard       = regexp.MustCompile(`(?i)(canonicalPath|getCanonicalPath|startsWith|validatePath|allowedPath|normalize)`)
 	// Android manifest helpers
 	reManifestComponent = regexp.MustCompile(`<(activity|service|receiver|provider)\b`)
 	reManifestExported  = regexp.MustCompile(`android:exported\s*=\s*"true"`)
@@ -83,7 +97,7 @@ func init() {
 	).WithCWE("295"))
 	security.Default.RegisterRule(kotlinWeakRandomRule())
 	security.Default.RegisterRule(reRule(
-		"kotlin.java_deserialization", "Unsafe Java Deserialization", "io_validation", security.SevHigh, kotlinLangs,
+		"kotlin.java_deserialization", "Unsafe Java Deserialization", "unsafe_exec", security.SevHigh, kotlinLangs,
 		reKtObjInputStream,
 		"ObjectInputStream or readObject() deserializes arbitrary Java objects; an attacker "+
 			"who controls the byte stream can exploit gadget chains to achieve remote code "+
@@ -91,7 +105,7 @@ func init() {
 			"another safe format instead. (CWE-502)",
 	).WithCWE("502"))
 	security.Default.RegisterRule(twoReRule(
-		"kotlin.sensitive_logging", "Sensitive Data in Logs", "insecure_data_storage", security.SevMedium, kotlinLangs,
+		"kotlin.sensitive_logging", "Sensitive Data in Logs", "data_exposure", security.SevMedium, kotlinLangs,
 		reKtLogSink, reSensitiveData,
 		"A Log.d/e/i/v or println call references a password, token or credential. Android "+
 			"logs are accessible via ADB and may be captured by analytics SDKs. Redact or omit "+
@@ -106,15 +120,201 @@ func init() {
 			"HttpURLConnection. An attacker can redirect the request to internal services. "+
 			"Validate and allowlist target URLs before making outbound requests. (CWE-918)",
 	).WithCWE("918"))
+	security.Default.RegisterRule(credentialRule("kotlin.hardcoded_credentials", kotlinLangs,
+		"A credential-naming variable is assigned a string literal. Hardcoded secrets are "+
+			"committed to history permanently. Load credentials from environment variables, "+
+			"BuildConfig fields fed by CI secrets, or a secret manager at runtime. (CWE-798)"))
+	security.Default.RegisterRule(twoReRule(
+		"kotlin.fast_hash_for_password", "Fast Hash Used for Password", "cryptography", security.SevHigh, kotlinLangs,
+		reKtFastHashSink, reSensitiveData,
+		"MessageDigest SHA-256/SHA-512 is used in a context that suggests password hashing. "+
+			"Fast hashes can be brute-forced at billions of attempts per second. Use BCrypt, "+
+			"SCrypt or Argon2 (Spring Security's PasswordEncoder, Tink, or Bouncy Castle) "+
+			"for credential storage. (CWE-916)",
+	).WithCWE("916"))
+	security.Default.RegisterRule(kotlinJWTNoSigningKeyRule())
 	security.Default.RegisterRule(kotlinCookieNoSameSiteRule())
 	security.Default.RegisterRule(kotlinUnrestrictedFileUploadRule())
+	security.Default.RegisterRule(reRule(
+		"kotlin.add_javascript_interface", "WebView addJavascriptInterface", "io_validation", security.SevHigh, kotlinLangs,
+		reKtAddJSInterface,
+		"addJavascriptInterface() exposes an annotated Java object to WebView JavaScript. "+
+			"On pre-API-17 devices any JS method can invoke it; on API 17+ only @JavascriptInterface "+
+			"methods are exposed, but XSS in the WebView still gives full access. "+
+			"Remove the bridge or restrict it to trusted, local content only. (CWE-749)",
+	).WithCWE("749"))
+	security.Default.RegisterRule(reRule(
+		"kotlin.javascript_enabled", "JavaScript Enabled in WebView", "platform_config", security.SevMedium, kotlinLangs,
+		reKtJSEnabled,
+		"setJavaScriptEnabled(true) enables JavaScript in a WebView. If the WebView loads "+
+			"remote or user-supplied URLs, XSS in the loaded page can access device APIs "+
+			"exposed via addJavascriptInterface. Disable JavaScript unless strictly required "+
+			"and ensure the WebView only loads trusted origins. (CWE-16)",
+	).WithCWE("16"))
+	security.Default.RegisterRule(reRule(
+		"kotlin.world_readable_file", "World-Readable / World-Writable File Mode", "data_exposure", security.SevHigh, kotlinLangs,
+		reKtWorldMode,
+		"MODE_WORLD_READABLE and MODE_WORLD_WRITEABLE are deprecated since API 17. They "+
+			"allow any installed app to read or overwrite the file, exposing sensitive data. "+
+			"Use internal storage without a world mode, or ContentProvider for controlled sharing. (CWE-732)",
+	).WithCWE("732"))
+	security.Default.RegisterRule(kotlinZipSlipRule())
+	security.Default.RegisterRule(kotlinManifestCleartextRule())
+	security.Default.RegisterRule(kotlinManifestAllowBackupRule())
 	security.Default.RegisterRule(twoReRule(
-		"kotlin.open_redirect", "Open Redirect", "io_validation", security.SevMedium, kotlinLangs,
+		"kotlin.open_redirect", "Open Redirect", "session_mgmt", security.SevMedium, kotlinLangs,
 		reKtSendRedirect, reKtWebInput,
 		"response.sendRedirect() is called with a URL derived from a request parameter. An "+
 			"attacker can supply an off-site URL to redirect victims to a phishing page. "+
 			"Validate the target against an explicit allowlist or ensure it is a relative path. (CWE-601)",
 	).WithCWE("601"))
+}
+
+// kotlinJWTNoSigningKeyRule fires when a file calls Jwts.parser() /
+// Jwts.parserBuilder() but never calls setSigningKey / verifyWith, meaning
+// tokens are parsed without signature verification.
+func kotlinJWTNoSigningKeyRule() security.Rule {
+	return security.Rule{
+		ID:        "kotlin.jwt_no_signing_key",
+		Name:      "JWT Parsed Without Signature Verification",
+		Severity:  security.SevHigh,
+		Category:  "authentication",
+		CWE:       "347",
+		Languages: kotlinLangs,
+		Description: "Jwts.parser() / Jwts.parserBuilder() is called without setSigningKey() " +
+			"or verifyWith() anywhere in the file. Without a signing key the library accepts " +
+			"any token regardless of its signature, allowing forgery. Call " +
+			".setSigningKey(secretKey) (or .verifyWith(key) on the new API) before parsing. (CWE-347)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			parserLine := -1
+			hasSigningKey := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reKtJWTParser.MatchString(line) && parserLine == -1 {
+					parserLine = i
+				}
+				if reKtJWTSigningKey.MatchString(line) {
+					hasSigningKey = true
+				}
+			}
+			if parserLine >= 0 && !hasSigningKey {
+				return []security.Finding{security.NewFinding(filePath, parserLine, lines)}
+			}
+			return nil
+		},
+	}
+}
+
+// kotlinZipSlipRule fires when a file processes ZIP entries (ZipInputStream /
+// getNextEntry) but has no canonical-path guard anywhere in the same file.
+func kotlinZipSlipRule() security.Rule {
+	return security.Rule{
+		ID:        "kotlin.zip_slip",
+		Name:      "Zip-Slip / Archive Path Traversal",
+		Severity:  security.SevHigh,
+		Category:  "unsafe_exec",
+		CWE:       "22",
+		Languages: kotlinLangs,
+		Description: "ZipInputStream / getNextEntry() is used without a canonical-path check " +
+			"anywhere in the same file. A malicious archive can contain entries with \"../\" " +
+			"in their names to overwrite files outside the target directory. Call " +
+			"File(destDir, entry.name).canonicalPath and verify it starts with " +
+			"destDir.canonicalPath before extracting each entry. (CWE-22)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			zipLine := -1
+			hasGuard := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reKtZipSink.MatchString(line) && zipLine == -1 {
+					zipLine = i
+				}
+				if reKtZipGuard.MatchString(line) {
+					hasGuard = true
+				}
+			}
+			if zipLine >= 0 && !hasGuard {
+				return []security.Finding{security.NewFinding(filePath, zipLine, lines)}
+			}
+			return nil
+		},
+	}
+}
+
+// kotlinManifestCleartextRule scans AndroidManifest.xml for
+// android:usesCleartextTraffic="true" at the <application> level.
+func kotlinManifestCleartextRule() security.Rule {
+	reCleartext := regexp.MustCompile(`android:usesCleartextTraffic\s*=\s*"true"`)
+	return security.Rule{
+		ID:          "kotlin.manifest_cleartext_traffic",
+		Name:        "Cleartext Traffic Permitted in Manifest",
+		Severity:    security.SevHigh,
+		Category:    "network_security",
+		CWE:         "319",
+		Languages:   kotlinLangs,
+		ProjectOnly: true,
+		Description: "android:usesCleartextTraffic=\"true\" in AndroidManifest.xml allows the " +
+			"app to send unencrypted HTTP traffic. This exposes data to interception. Remove " +
+			"the attribute (defaults to false on API 28+) or use a Network Security Config to " +
+			"restrict cleartext to specific domains during development only. (CWE-319)",
+		ProjectDetect: func(repoPath string) []security.Finding {
+			return manifestLineRule(repoPath, reCleartext)
+		},
+	}
+}
+
+// kotlinManifestAllowBackupRule scans AndroidManifest.xml for
+// android:allowBackup="true", which lets adb backup extract app data without root.
+func kotlinManifestAllowBackupRule() security.Rule {
+	reAllowBackup := regexp.MustCompile(`android:allowBackup\s*=\s*"true"`)
+	return security.Rule{
+		ID:          "kotlin.manifest_allow_backup",
+		Name:        "Android Backup Enabled",
+		Severity:    security.SevMedium,
+		Category:    "insecure_data_storage",
+		CWE:         "530",
+		Languages:   kotlinLangs,
+		ProjectOnly: true,
+		Description: "android:allowBackup=\"true\" lets any user with USB debugging enabled " +
+			"extract the app's data directory via `adb backup` without root access. Set " +
+			"android:allowBackup=\"false\" or use android:fullBackupContent to restrict " +
+			"which files are included in backups. (CWE-530)",
+		ProjectDetect: func(repoPath string) []security.Finding {
+			return manifestLineRule(repoPath, reAllowBackup)
+		},
+	}
+}
+
+// manifestLineRule is a shared helper that walks all AndroidManifest.xml files
+// under repoPath and flags every non-comment line matching re.
+func manifestLineRule(repoPath string, re *regexp.Regexp) []security.Finding {
+	var out []security.Finding
+	_ = filepath.WalkDir(repoPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Base(path) != "AndroidManifest.xml" {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		lines := strings.Split(string(data), "\n")
+		relPath := strings.TrimPrefix(filepath.ToSlash(path), filepath.ToSlash(repoPath)+"/")
+		for i, line := range lines {
+			if re.MatchString(line) {
+				out = append(out, security.Finding{
+					File:     relPath,
+					FullPath: path,
+					Line:     i + 1,
+					Snippet:  strings.TrimSpace(line),
+				})
+			}
+		}
+		return nil
+	})
+	return out
 }
 
 // kotlinCookieNoSameSiteRule flags Cookie creation without a SameSite attribute
@@ -124,7 +324,7 @@ func kotlinCookieNoSameSiteRule() security.Rule {
 		ID:        "kotlin.cookie_no_samesite",
 		Name:      "Cookie Missing SameSite Attribute",
 		Severity:  security.SevMedium,
-		Category:  "authentication",
+		Category:  "session_mgmt",
 		CWE:       "352",
 		Languages: kotlinLangs,
 		Description: "A Cookie is created without a SameSite attribute. Without SameSite the " +
@@ -220,7 +420,7 @@ func kotlinXXERule() security.Rule {
 		ID:        "kotlin.xxe",
 		Name:      "XML External Entity (XXE)",
 		Severity:  security.SevHigh,
-		Category:  "io_validation",
+		Category:  "unsafe_exec",
 		CWE:       "611",
 		Languages: kotlinLangs,
 		Description: "DocumentBuilderFactory.newInstance() is used without disabling external " +
@@ -252,7 +452,7 @@ func kotlinCookieNoSecureRule() security.Rule {
 		ID:        "kotlin.cookie_no_secure",
 		Name:      "Cookie Missing Secure Flag",
 		Severity:  security.SevMedium,
-		Category:  "authentication",
+		Category:  "session_mgmt",
 		CWE:       "614",
 		Languages: kotlinLangs,
 		Description: "A Cookie is created or added to a response without the Secure flag. " +
@@ -280,7 +480,7 @@ func kotlinCmdInjectionRule() security.Rule {
 		ID:        "kotlin.command_injection",
 		Name:      "Command Injection Risk",
 		Severity:  security.SevHigh,
-		Category:  "io_validation",
+		Category:  "injection",
 		CWE:       "78",
 		Languages: kotlinLangs,
 		Description: "Runtime.getRuntime().exec() called with a formatted or concatenated string " +
@@ -308,7 +508,7 @@ func kotlinCookieNoHTTPOnlyRule() security.Rule {
 		ID:        "kotlin.cookie_no_httponly",
 		Name:      "Cookie Missing HttpOnly Flag",
 		Severity:  security.SevMedium,
-		Category:  "authentication",
+		Category:  "session_mgmt",
 		CWE:       "1004",
 		Languages: kotlinLangs,
 		Description: "A Cookie was created or added to a response without setting the HttpOnly " +
@@ -336,7 +536,7 @@ func kotlinSQLInjectionRule() security.Rule {
 		ID:        "kotlin.sql_injection",
 		Name:      "SQL Query via String Concatenation",
 		Severity:  security.SevHigh,
-		Category:  "io_validation",
+		Category:  "injection",
 		CWE:       "89",
 		Languages: kotlinLangs,
 		Description: "A SQLite API call (rawQuery, execSQL, compileStatement) is assembled " +

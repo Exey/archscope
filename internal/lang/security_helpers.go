@@ -1,10 +1,12 @@
 package lang
 
 import (
+	"math"
 	"regexp"
 	"strings"
 
 	"github.com/exey/archscope/internal/security"
+	_ "github.com/exey/archscope/internal/security/universal" // register CWE-798/321/89 universal rules
 )
 
 // reRule builds a security.Rule whose Detect flags every non-comment line that
@@ -86,4 +88,124 @@ var reSensitiveData = regexp.MustCompile(
 var insecureURLSkips = []string{
 	"localhost", "127.0.0.1", "0.0.0.0", "w3.org", "schemas.",
 	"example.com", "example.org", "xmlns",
+}
+
+// reCredAssign matches a credential-naming identifier assigned to a string
+// literal of ≥ 6 chars. Group 1 = keyword (password, api_key, …);
+// group 2 = the literal value — used by credentialRule for entropy gating.
+var reCredAssign = regexp.MustCompile(
+	`(?i)\b(password|passwd|secret|api[_-]?key|api_token|access[_-]?token|` +
+		`private[_-]?key|client[_-]?secret|db[_-]?pass(?:word)?|access[_-]?key|` +
+		`auth[_-]?token)\b\s*(?::=|=|:)\s*["']([^"']{6,})["']`,
+)
+
+// credAssignSkips suppresses env-var lookups and config-reference patterns
+// that appear in the assignment line but indicate the value is not a literal
+// secret. Low-entropy placeholders ("changeme", "example" …) are caught by
+// credentialEntropy instead and do not need explicit entries here.
+var credAssignSkips = []string{
+	"getenv", "environ", "process.env", "config.", "os.env",
+	"viper.", "settings.", "${",
+}
+
+// credentialEntropy computes the Shannon entropy (bits per symbol) of s.
+// Real secrets produced by a CSPRNG typically score ≥ 3.5; human-readable
+// words, JSON/YAML keys, and short placeholders score < 3.2.
+func credentialEntropy(s string) float64 {
+	if len(s) == 0 {
+		return 0
+	}
+	freq := make(map[rune]int, len(s))
+	for _, c := range s {
+		freq[c]++
+	}
+	n := float64(len(s))
+	var h float64
+	for _, cnt := range freq {
+		p := float64(cnt) / n
+		h -= p * math.Log2(p)
+	}
+	return h
+}
+
+// isCredentialTestPath reports whether filePath is a test, fixture, mock, or
+// example path where hardcoded placeholder values are intentional and not secrets.
+func isCredentialTestPath(filePath string) bool {
+	low := strings.ToLower(filePath)
+	for _, part := range strings.FieldsFunc(low, func(r rune) bool { return r == '/' || r == '\\' }) {
+		switch part {
+		case "test", "tests", "fixture", "fixtures",
+			"mock", "mocks", "__mocks__",
+			"example", "examples",
+			"testdata", "testfiles",
+			"spec", "specs", "__tests__":
+			return true
+		}
+	}
+	base := low
+	if idx := strings.LastIndexAny(low, "/\\"); idx >= 0 {
+		base = low[idx+1:]
+	}
+	return strings.HasSuffix(base, "_test.go") ||
+		strings.HasSuffix(base, "test.swift") ||
+		strings.HasSuffix(base, "test.kt") ||
+		strings.HasSuffix(base, ".test.ts") ||
+		strings.HasSuffix(base, ".spec.ts") ||
+		strings.HasSuffix(base, ".test.js") ||
+		strings.HasSuffix(base, ".spec.js") ||
+		strings.HasSuffix(base, "_test.py") ||
+		(strings.HasPrefix(base, "test_") && strings.Contains(base, ".py"))
+}
+
+// credentialRule returns a CWE-798 rule for the given language set with
+// four-layer false-positive suppression:
+//  1. Test/fixture/mock path skipping (whole file).
+//  2. Serialisation-key pattern: lines starting with "case " (Swift CodingKeys,
+//     Kotlin sealed classes) are skipped because the literal is a wire-key, not a value.
+//  3. Entropy gate: literals scoring < 3.2 bits/char (dictionary words, short
+//     placeholders, JSON keys like "access_token") are discarded.
+//  4. credAssignSkips allowlist: env-var and config-reference patterns.
+func credentialRule(id string, langs []string, desc string) security.Rule {
+	return security.Rule{
+		ID:          id,
+		Name:        "Hardcoded Credential",
+		Severity:    security.SevHigh,
+		Category:    "insecure_data_storage",
+		CWE:         "798",
+		Languages:   langs,
+		Description: desc,
+		Detect: func(filePath string, lines []string) []security.Finding {
+			if isCredentialTestPath(filePath) {
+				return nil
+			}
+			var out []security.Finding
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if strings.HasPrefix(strings.TrimSpace(line), "case ") {
+					continue
+				}
+				m := reCredAssign.FindStringSubmatch(line)
+				if m == nil {
+					continue
+				}
+				if credentialEntropy(m[2]) < 3.2 {
+					continue
+				}
+				low := strings.ToLower(line)
+				skipped := false
+				for _, s := range credAssignSkips {
+					if strings.Contains(low, s) {
+						skipped = true
+						break
+					}
+				}
+				if !skipped {
+					out = append(out, security.NewFinding(filePath, i, lines))
+				}
+			}
+			return out
+		},
+	}
 }

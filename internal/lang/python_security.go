@@ -41,11 +41,26 @@ var (
 	rePyFileTypeCheck  = regexp.MustCompile(`(?i)(secure_filename|\.content_type\b|\.mimetype\b|allowed_extensions|ALLOWED_EXTENSIONS|validate.*file|file.*type)`)
 	// CWE-601: open redirect sink (Flask redirect / Django HttpResponseRedirect)
 	rePyRedirectSink = regexp.MustCompile(`\bredirect\s*\(|HttpResponseRedirect\s*\(`)
+	// CWE-1336: server-side template injection sinks
+	rePySSTISink     = regexp.MustCompile(`\brender_template_string\s*\(|\bTemplate\s*\(\s*f["']|\benv\.from_string\s*\(|\bJinja2\s*\(\s*f["']`)
+	// CWE-732: broad file permissions
+	rePyChmod        = regexp.MustCompile(`\bos\.chmod\s*\(`)
+	rePyWidePerms    = regexp.MustCompile(`\b(0o?777|0o?666|0o?776|0o?757)\b`)
+	// CWE-916: fast hash applied to password-named value (not a KDF)
+	rePyFastHashSink = regexp.MustCompile(`\bhashlib\.(sha256|sha512|sha3_256|sha3_512|blake2b|blake2s)\s*\(`)
+	// CWE-22 variant: zip/tar extraction without path validation (zip-slip)
+	rePyExtractAll   = regexp.MustCompile(`\.extractall\s*\(`)
+	// CWE-943: MongoDB $where operator with user input (server-side JS execution)
+	rePyMongoWhere   = regexp.MustCompile(`["']\$where["']`)
+	// CWE-347: PyJWT algorithm:none and missing algorithms parameter
+	rePyJWTNoneAlg   = regexp.MustCompile(`(?i)algorithm\s*=\s*["']none["']|algorithms\s*=\s*\[\s*["']none["']`)
+	rePyJWTDecode    = regexp.MustCompile(`\bjwt\.decode\s*\(`)
+	rePyJWTAlgorithms = regexp.MustCompile(`\balgorithms\s*=`)
 )
 
 func init() {
 	security.Default.RegisterRule(reRule(
-		"python.eval_exec", "Dynamic Code Execution", "io_validation", security.SevHigh, pythonLangs,
+		"python.eval_exec", "Dynamic Code Execution", "unsafe_exec", security.SevHigh, pythonLangs,
 		rePyEval,
 		"eval()/exec() run arbitrary code; with any user-influenced input this is remote code "+
 			"execution. Use ast.literal_eval for data, or an explicit dispatch table for behavior.",
@@ -65,7 +80,7 @@ func init() {
 		"safe", "safeloader",
 	).WithCWE("502"))
 	security.Default.RegisterRule(reRule(
-		"python.shell_injection", "Shell Injection Risk", "io_validation", security.SevHigh, pythonLangs,
+		"python.shell_injection", "Shell Injection Risk", "injection", security.SevHigh, pythonLangs,
 		rePyShell,
 		"subprocess(..., shell=True) interpolates the command into a shell; concatenated input "+
 			"enables command injection. Pass an argument list and keep shell=False.",
@@ -77,7 +92,7 @@ func init() {
 			"password KDF (bcrypt/scrypt/argon2) for credentials.",
 	).WithCWE("328"))
 	security.Default.RegisterRule(reRule(
-		"python.os_system", "Shell Command via os.system", "io_validation", security.SevHigh, pythonLangs,
+		"python.os_system", "Shell Command via os.system", "injection", security.SevHigh, pythonLangs,
 		rePyOsSystem,
 		"os.system() passes the command string to the shell, enabling injection if any part is "+
 			"derived from user input. Use subprocess.run with a list of arguments and "+
@@ -107,7 +122,7 @@ func init() {
 			"os.path.realpath and verify the result starts with the allowed root. (CWE-22)",
 	).WithCWE("22"))
 	security.Default.RegisterRule(twoReRule(
-		"python.sql_concat", "SQL Injection via Concatenation", "io_validation", security.SevHigh, pythonLangs,
+		"python.sql_concat", "SQL Injection via Concatenation", "injection", security.SevHigh, pythonLangs,
 		rePySQLSink, rePySQLConcat,
 		"cursor.execute / connection.execute is called with a query assembled via string "+
 			"concatenation or % / .format() formatting. Use parameterized queries with ? or %s "+
@@ -122,14 +137,14 @@ func init() {
 			"for cryptographic material. (CWE-338)",
 	).WithCWE("338"))
 	security.Default.RegisterRule(twoReRule(
-		"python.sensitive_logging", "Sensitive Data in Logs", "insecure_data_storage", security.SevMedium, pythonLangs,
+		"python.sensitive_logging", "Sensitive Data in Logs", "data_exposure", security.SevMedium, pythonLangs,
 		rePyLogSink, reSensitiveData,
 		"A logging call (logging.*, print) references a password, token or credential. "+
 			"Log files are often stored in plain text and forwarded to external aggregators. "+
 			"Redact or omit sensitive values before logging. (CWE-532)",
 	).WithCWE("532"))
 	security.Default.RegisterRule(reRule(
-		"python.xxe", "XML External Entity (XXE)", "io_validation", security.SevHigh, pythonLangs,
+		"python.xxe", "XML External Entity (XXE)", "unsafe_exec", security.SevHigh, pythonLangs,
 		rePyXXE,
 		"xml.etree.ElementTree, minidom and lxml parse XML without disabling external entity "+
 			"expansion by default. An attacker can use XXE to read local files or trigger "+
@@ -142,15 +157,103 @@ func init() {
 			"urlopen. An attacker can redirect the request to internal services or cloud "+
 			"metadata endpoints. Validate and allowlist target URLs. (CWE-918)",
 	).WithCWE("918"))
+	security.Default.RegisterRule(credentialRule("python.hardcoded_credentials", pythonLangs,
+		"A credential-naming variable is assigned a string literal. Hardcoded secrets are "+
+			"committed to history permanently. Load credentials from environment variables "+
+			"or a secret manager (e.g. os.environ, python-dotenv). (CWE-798)"))
+	security.Default.RegisterRule(reRule(
+		"python.jwt_alg_none", "JWT Algorithm None", "authentication", security.SevHigh, pythonLangs,
+		rePyJWTNoneAlg,
+		"algorithm='none' disables JWT signature verification, allowing an attacker to forge "+
+			"tokens. Always specify a strong algorithm (HS256, RS256, ES256) and never accept 'none'. (CWE-347)",
+	).WithCWE("347"))
+	security.Default.RegisterRule(pythonJWTNoAlgorithmsRule())
 	security.Default.RegisterRule(pythonCookieNoSameSiteRule())
 	security.Default.RegisterRule(pythonUnrestrictedFileUploadRule())
 	security.Default.RegisterRule(twoReRule(
-		"python.open_redirect", "Open Redirect", "io_validation", security.SevMedium, pythonLangs,
+		"python.ssti", "Server-Side Template Injection", "injection", security.SevHigh, pythonLangs,
+		rePySSTISink, rePyWebInput,
+		"render_template_string() or Jinja2 Template() is called with content derived from "+
+			"request data. An attacker can inject template expressions ({{ config }}, "+
+			"{{ ''.__class__.__mro__ }}) to read secrets or achieve RCE. Never pass "+
+			"user-controlled strings to template rendering; use safe data-binding instead. (CWE-1336)",
+	).WithCWE("1336"))
+	security.Default.RegisterRule(twoReRule(
+		"python.insecure_file_permissions", "Broad File Permissions", "io_validation", security.SevMedium, pythonLangs,
+		rePyChmod, rePyWidePerms,
+		"os.chmod() is called with a mode that grants world-write or world-read access "+
+			"(0o777, 0o666, 0o776, 0o757). Overly permissive modes expose files to tampering "+
+			"or information disclosure. Use the minimum necessary permissions (e.g. 0o600 "+
+			"for private files, 0o644 for public-read). (CWE-732)",
+	).WithCWE("732"))
+	security.Default.RegisterRule(twoReRule(
+		"python.fast_hash_for_password", "Fast Hash Used for Password", "cryptography", security.SevHigh, pythonLangs,
+		rePyFastHashSink, reSensitiveData,
+		"hashlib.sha256/sha512/blake2 is used in a context that suggests password hashing. "+
+			"Fast general-purpose hashes are not suitable for storing passwords — they can be "+
+			"brute-forced at billions of attempts per second. Use bcrypt, scrypt or argon2 "+
+			"(passlib, argon2-cffi) for credential storage. (CWE-916)",
+	).WithCWE("916"))
+	security.Default.RegisterRule(reRule(
+		"python.zip_slip", "Zip-Slip / Archive Path Traversal", "unsafe_exec", security.SevHigh, pythonLangs,
+		rePyExtractAll,
+		"tarfile.extractall() / ZipFile.extractall() extracts every archive entry to the "+
+			"destination without checking for directory-traversal sequences (\"../\") in entry "+
+			"names. A malicious archive can overwrite arbitrary files on the server. Iterate "+
+			"entries manually and reject any whose resolved path escapes the target directory. (CWE-22)",
+	).WithCWE("22"))
+	security.Default.RegisterRule(twoReRule(
+		"python.nosql_injection", "NoSQL Injection via $where", "injection", security.SevHigh, pythonLangs,
+		rePyMongoWhere, rePyWebInput,
+		"A MongoDB $where operator is used on a line that also references request data. "+
+			"$where executes a JavaScript expression server-side; attacker-controlled input "+
+			"can read arbitrary documents or cause denial of service. Avoid $where entirely; "+
+			"use standard query operators with parameterized values. (CWE-943)",
+	).WithCWE("943"))
+	security.Default.RegisterRule(twoReRule(
+		"python.open_redirect", "Open Redirect", "session_mgmt", security.SevMedium, pythonLangs,
 		rePyRedirectSink, rePyWebInput,
 		"redirect() / HttpResponseRedirect() is called with a URL derived from request data. "+
 			"An attacker can supply an off-site URL to redirect victims to a phishing page. "+
 			"Validate the target against an explicit allowlist or ensure it is a safe relative path. (CWE-601)",
 	).WithCWE("601"))
+}
+
+// pythonJWTNoAlgorithmsRule fires when a file calls jwt.decode() but never
+// passes an algorithms= argument. Without it PyJWT accepts any algorithm the
+// token header claims, enabling RS/HS confusion attacks.
+func pythonJWTNoAlgorithmsRule() security.Rule {
+	return security.Rule{
+		ID:        "python.jwt_no_algorithms",
+		Name:      "JWT decode Without algorithms Allowlist",
+		Severity:  security.SevHigh,
+		Category:  "authentication",
+		CWE:       "347",
+		Languages: pythonLangs,
+		Description: "jwt.decode() is called without an algorithms= parameter anywhere in the " +
+			"file. Without an explicit allowlist PyJWT accepts whichever algorithm the token " +
+			"header claims, enabling algorithm-confusion attacks. Pass " +
+			"algorithms=['HS256'] (or your chosen algorithm) to jwt.decode(). (CWE-347)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			decodeLine := -1
+			hasAlgorithms := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if rePyJWTDecode.MatchString(line) && decodeLine == -1 {
+					decodeLine = i
+				}
+				if rePyJWTAlgorithms.MatchString(line) {
+					hasAlgorithms = true
+				}
+			}
+			if decodeLine >= 0 && !hasAlgorithms {
+				return []security.Finding{security.NewFinding(filePath, decodeLine, lines)}
+			}
+			return nil
+		},
+	}
 }
 
 // pythonCookieNoSameSiteRule flags set_cookie() calls without samesite= on the
@@ -161,7 +264,7 @@ func pythonCookieNoSameSiteRule() security.Rule {
 		ID:        "python.cookie_no_samesite",
 		Name:      "Cookie Missing SameSite Attribute",
 		Severity:  security.SevMedium,
-		Category:  "authentication",
+		Category:  "session_mgmt",
 		CWE:       "352",
 		Languages: pythonLangs,
 		Description: "response.set_cookie() is called without a samesite= parameter. Without " +

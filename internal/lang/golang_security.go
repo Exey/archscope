@@ -16,7 +16,9 @@ var (
 	reGoInsecureTLS     = regexp.MustCompile(`InsecureSkipVerify\s*:\s*true`)
 	reGoCmdInjection    = regexp.MustCompile(`exec\.Command(Context)?\s*\(.*(fmt\.Sprintf|"\s*\+|\+\s*")`)
 	reGoHTTPNoTLS       = regexp.MustCompile(`\bhttp\.ListenAndServe\s*\(`)
-	reGoMathRand        = regexp.MustCompile(`"math/rand(/v[0-9]+)?"`)
+	// reGoMathRand matches actual rand.* function calls (not just the import)
+	// so the rule can be gated on sensitive context via twoReRule.
+	reGoMathRand = regexp.MustCompile(`\brand\.(Int|Intn|Int31|Int31n|Int63|Int63n|Float32|Float64|Uint32|Perm|Shuffle|Read)\s*\(`)
 	reGoTLSNoMinVersion = regexp.MustCompile(`tls\.Config\s*\{`)
 	reGoTLSHasMinVer    = regexp.MustCompile(`MinVersion\s*:`)
 	reGoCookieNoHTTP    = regexp.MustCompile(`http\.Cookie\s*\{`)
@@ -43,6 +45,17 @@ var (
 	reGoFileTypeCheck  = regexp.MustCompile(`(?i)(http\.DetectContentType|mime\.TypeByExtension|Content-Type|allowedExt|validExt|allowedType|checkType)`)
 	// CWE-601: open redirect sink
 	reGoHTTPRedirect = regexp.MustCompile(`\bhttp\.Redirect\s*\(`)
+	// CWE-732: file-system calls with overly permissive modes
+	reGoFilePermSink  = regexp.MustCompile(`\bos\.(OpenFile|Chmod|MkdirAll|Mkdir)\s*\(`)
+	reGoWidePerms     = regexp.MustCompile(`\b(0o?777|0o?666|0o?776|0o?757)\b`)
+	// CWE-916: fast general-purpose hash in password context
+	reGoFastHashSink  = regexp.MustCompile(`\b(sha256|sha512)\.(New|Sum256|Sum512)\s*\(|\bcrypto\.(sha256|sha512)`)
+	// CWE-347: JWT parse without signing-method validation
+	reGoJWTParse      = regexp.MustCompile(`\bjwt\.(Parse|ParseWithClaims)\s*\(`)
+	reGoJWTMethodChk  = regexp.MustCompile(`token\.Method|SigningMethod`)
+	// CWE-22 variant: zip-slip via archive/zip without path guard
+	reGoZipSink       = regexp.MustCompile(`\bzip\.(NewReader|OpenReader)\s*\(`)
+	reGoZipGuard      = regexp.MustCompile(`(?i)(filepath\.Clean|filepath\.Abs|strings\.HasPrefix|path\.Clean)`)
 )
 
 func init() {
@@ -59,7 +72,7 @@ func init() {
 			"man-in-the-middle attacks. Verify certificates; pin or supply a proper RootCAs pool if needed.",
 	).WithCWE("295"))
 	security.Default.RegisterRule(reRule(
-		"go.command_injection", "Command Injection Risk", "io_validation", security.SevMedium, goLangs,
+		"go.command_injection", "Command Injection Risk", "injection", security.SevHigh, goLangs,
 		reGoCmdInjection,
 		"Building an exec.Command argument by formatting or concatenating strings can let input "+
 			"alter the command. Pass fixed args as separate parameters and never interpolate user input.",
@@ -72,11 +85,11 @@ func init() {
 			"session tokens and payloads to interception.",
 	).WithCWE("319"))
 	security.Default.RegisterRule(goSQLFmtRule())
-	security.Default.RegisterRule(reRule(
-		"go.insecure_rand", "Insecure Random (math/rand)", "cryptography", security.SevMedium, goLangs,
-		reGoMathRand,
-		"math/rand is a pseudo-random number generator and must not be used for security-sensitive "+
-			"operations (tokens, nonces, key material). Use crypto/rand instead.",
+	security.Default.RegisterRule(twoReRule(
+		"go.insecure_rand", "Insecure Random in Security Context", "cryptography", security.SevMedium, goLangs,
+		reGoMathRand, reSensitiveData,
+		"math/rand is a pseudo-random generator and must not be used for security-sensitive values "+
+			"(tokens, nonces, key material). Use crypto/rand instead.",
 	).WithCWE("338"))
 	security.Default.RegisterRule(goTLSNoMinVersionRule())
 	security.Default.RegisterRule(goCookieNoHTTPOnlyRule())
@@ -90,14 +103,14 @@ func init() {
 			"Use filepath.Clean and verify the result is inside the allowed root. (CWE-22)",
 	).WithCWE("22"))
 	security.Default.RegisterRule(twoReRule(
-		"go.sensitive_logging", "Sensitive Data in Logs", "insecure_data_storage", security.SevMedium, goLangs,
+		"go.sensitive_logging", "Sensitive Data in Logs", "data_exposure", security.SevMedium, goLangs,
 		reGoLogSink, reSensitiveData,
 		"A log call references a password, token or credential. Logs are often stored in "+
 			"plain text and forwarded to external aggregators. Redact or omit sensitive values "+
 			"before logging. (CWE-532)",
 	).WithCWE("532"))
 	security.Default.RegisterRule(reRule(
-		"go.gob_deserialization", "Unsafe gob Deserialization", "io_validation", security.SevMedium, goLangs,
+		"go.gob_deserialization", "Unsafe gob Deserialization", "unsafe_exec", security.SevMedium, goLangs,
 		reGoGobDecoder,
 		"gob.NewDecoder decodes arbitrary Go values; deserializing attacker-controlled bytes "+
 			"can instantiate unexpected types or trigger panics. Validate the source of the "+
@@ -114,7 +127,27 @@ func init() {
 	security.Default.RegisterRule(goCookieNoSameSiteRule())
 	security.Default.RegisterRule(goUnrestrictedFileUploadRule())
 	security.Default.RegisterRule(twoReRule(
-		"go.open_redirect", "Open Redirect", "io_validation", security.SevMedium, goLangs,
+		"go.insecure_file_permissions", "Broad File Permissions", "io_validation", security.SevMedium, goLangs,
+		reGoFilePermSink, reGoWidePerms,
+		"A file-system call (os.OpenFile, os.Chmod, os.Mkdir) uses a mode that grants "+
+			"world-write or world-read access (0o777, 0o666, 0o776). Use the minimum necessary "+
+			"permissions — 0o600 for private files, 0o644 for public-read, 0o755 for directories. (CWE-732)",
+	).WithCWE("732"))
+	security.Default.RegisterRule(twoReRule(
+		"go.fast_hash_for_password", "Fast Hash Used for Password", "cryptography", security.SevHigh, goLangs,
+		reGoFastHashSink, reSensitiveData,
+		"sha256/sha512 is used on a line that references a password or credential. "+
+			"Fast general-purpose hashes can be brute-forced at billions of attempts per second. "+
+			"Use bcrypt, scrypt or argon2 (golang.org/x/crypto) for storing passwords. (CWE-916)",
+	).WithCWE("916"))
+	security.Default.RegisterRule(goJWTNoMethodCheckRule())
+	security.Default.RegisterRule(credentialRule("go.hardcoded_credentials", goLangs,
+		"A credential-naming variable (password, secret, api_key…) is assigned a string literal. "+
+			"Hardcoded secrets are committed to history permanently. Load credentials from "+
+			"environment variables or a secret manager at runtime. (CWE-798)"))
+	security.Default.RegisterRule(goZipSlipRule())
+	security.Default.RegisterRule(twoReRule(
+		"go.open_redirect", "Open Redirect", "session_mgmt", security.SevMedium, goLangs,
 		reGoHTTPRedirect, reGoUserInput,
 		"http.Redirect is called with a URL derived from a request parameter. An attacker can "+
 			"supply an off-site URL to redirect victims to a phishing page. Validate the target "+
@@ -128,7 +161,7 @@ func goCookieNoSecureRule() security.Rule {
 		ID:        "go.cookie_no_secure",
 		Name:      "Cookie Missing Secure Flag",
 		Severity:  security.SevMedium,
-		Category:  "authentication",
+		Category:  "session_mgmt",
 		CWE:       "614",
 		Languages: goLangs,
 		Description: "An http.Cookie literal was found without Secure: true. Without the Secure " +
@@ -254,7 +287,7 @@ func goCookieNoHTTPOnlyRule() security.Rule {
 		ID:        "go.cookie_no_httponly",
 		Name:      "Cookie Missing HttpOnly Flag",
 		Severity:  security.SevMedium,
-		Category:  "authentication",
+		Category:  "session_mgmt",
 		CWE:       "1004",
 		Languages: goLangs,
 		Description: "An http.Cookie literal was found without HttpOnly: true. " +
@@ -276,6 +309,81 @@ func goCookieNoHTTPOnlyRule() security.Rule {
 	}
 }
 
+// goZipSlipRule fires when a file opens a zip archive (zip.NewReader /
+// zip.OpenReader) but has no filepath.Clean, filepath.Abs, or strings.HasPrefix
+// guard anywhere in the same file.
+func goZipSlipRule() security.Rule {
+	return security.Rule{
+		ID:        "go.zip_slip",
+		Name:      "Zip-Slip / Archive Path Traversal",
+		Severity:  security.SevHigh,
+		Category:  "unsafe_exec",
+		CWE:       "22",
+		Languages: goLangs,
+		Description: "archive/zip is used without a canonical-path guard in the same file. A " +
+			"malicious archive can contain entries whose names include \"../\" to overwrite " +
+			"files outside the target directory. For each entry call filepath.Clean and " +
+			"verify the result starts with the intended destination before writing. (CWE-22)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			zipLine := -1
+			hasGuard := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reGoZipSink.MatchString(line) && zipLine == -1 {
+					zipLine = i
+				}
+				if reGoZipGuard.MatchString(line) {
+					hasGuard = true
+				}
+			}
+			if zipLine >= 0 && !hasGuard {
+				return []security.Finding{security.NewFinding(filePath, zipLine, lines)}
+			}
+			return nil
+		},
+	}
+}
+
+// goJWTNoMethodCheckRule fires when a file calls jwt.Parse/ParseWithClaims but
+// never validates token.Method or references a SigningMethod type. Without the
+// check an attacker can craft a token signed with "none" or swap RS256 for HS256
+// using the server's public key as the HMAC secret.
+func goJWTNoMethodCheckRule() security.Rule {
+	return security.Rule{
+		ID:        "go.jwt_no_method_check",
+		Name:      "JWT Parsed Without Signing-Method Validation",
+		Severity:  security.SevHigh,
+		Category:  "authentication",
+		CWE:       "347",
+		Languages: goLangs,
+		Description: "jwt.Parse / jwt.ParseWithClaims is called but the key function does not " +
+			"validate token.Method. Without the check an attacker can forge tokens by setting " +
+			"alg to 'none' or by exploiting RS/HS algorithm confusion. Add a guard: " +
+			"if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok { return nil, err }. (CWE-347)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			parseLine := -1
+			hasMethodCheck := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reGoJWTParse.MatchString(line) && parseLine == -1 {
+					parseLine = i
+				}
+				if reGoJWTMethodChk.MatchString(line) {
+					hasMethodCheck = true
+				}
+			}
+			if parseLine >= 0 && !hasMethodCheck {
+				return []security.Finding{security.NewFinding(filePath, parseLine, lines)}
+			}
+			return nil
+		},
+	}
+}
+
 // goCookieNoSameSiteRule flags http.Cookie literals that don't set SameSite to
 // Strict or Lax on the same line. Cookies without SameSite are sent on
 // cross-site requests, enabling CSRF. Multi-line struct literals may evade this
@@ -285,7 +393,7 @@ func goCookieNoSameSiteRule() security.Rule {
 		ID:        "go.cookie_no_samesite",
 		Name:      "Cookie Missing SameSite Attribute",
 		Severity:  security.SevMedium,
-		Category:  "authentication",
+		Category:  "session_mgmt",
 		CWE:       "352",
 		Languages: goLangs,
 		Description: "An http.Cookie literal was found without SameSite set to " +
@@ -352,7 +460,7 @@ func goSQLFmtRule() security.Rule {
 		ID:        "go.sql_fmt_sprintf",
 		Name:      "SQL Query via fmt.Sprintf",
 		Severity:  security.SevHigh,
-		Category:  "io_validation",
+		Category:  "injection",
 		CWE:       "89",
 		Languages: goLangs,
 		Description: "Building a SQL query with fmt.Sprintf lets attacker-controlled input break " +

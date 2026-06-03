@@ -40,11 +40,23 @@ var (
 	reJSFileFilter    = regexp.MustCompile(`\bfileFilter\b`)
 	// CWE-601: open redirect sink
 	reJSRedirectSink  = regexp.MustCompile(`\b(?:res|response)\.redirect\s*\(`)
+	// CWE-327: weak crypto via Node's crypto module
+	reJSWeakCrypto    = regexp.MustCompile(`\bcrypto\.createHash\s*\(\s*["'](md5|sha1)["']`)
+	// CWE-22: fs sink for path traversal
+	reJSFSSink        = regexp.MustCompile(`\bfs\.(readFile|writeFile|createReadStream|createWriteStream|open|appendFile|unlink|stat|access|copyFile)\s*\(`)
+	// CWE-1336: server-side template injection sinks
+	reJSTemplateSink  = regexp.MustCompile(`\bejs\.render(?:File)?\s*\(|\bpug\.render(?:File)?\s*\(|\bnunjucks\.renderString\s*\(|\bHandlebars\.compile\s*\(`)
+	// CWE-347: JWT algorithm:none and missing algorithms allowlist
+	reJSJWTNone       = regexp.MustCompile(`(?i)algorithm\s*[:=]\s*["']none["']`)
+	reJSJWTVerify     = regexp.MustCompile(`\bjwt\.verify\s*\(`)
+	reJSJWTAlgorithms = regexp.MustCompile(`\balgorithms\s*:`)
+	// CWE-916: fast hash (sha256/sha512) used in password context
+	reJSFastHashSink  = regexp.MustCompile(`\bcrypto\.createHash\s*\(\s*["'](sha256|sha512|sha384|sha3)["']`)
 )
 
 func init() {
 	security.Default.RegisterRule(reRule(
-		"javascript.eval", "Dynamic Code Execution", "io_validation", security.SevHigh, tsLangs,
+		"javascript.eval", "Dynamic Code Execution", "unsafe_exec", security.SevHigh, tsLangs,
 		reJSEval,
 		"eval() and new Function() execute strings as code; with any untrusted input this is an "+
 			"injection vector. Parse data with JSON.parse and model behavior with explicit functions.",
@@ -72,7 +84,7 @@ func init() {
 			"for dictionaries.",
 	).WithCWE("1321"))
 	security.Default.RegisterRule(reRule(
-		"javascript.insecure_cookie", "Cookie Without Secure Flags", "authentication", security.SevMedium, tsLangs,
+		"javascript.insecure_cookie", "Cookie Without Secure Flags", "session_mgmt", security.SevMedium, tsLangs,
 		reJSInsecureCookie,
 		"Cookies set via document.cookie are accessible to JavaScript and sent over cleartext "+
 			"connections unless the Secure and HttpOnly flags are added. Prefer server-side "+
@@ -88,7 +100,7 @@ func init() {
 	security.Default.RegisterRule(jsNoSQLInjectionRule())
 	security.Default.RegisterRule(jsInsecureStorageRule())
 	security.Default.RegisterRule(twoReRule(
-		"javascript.node_command_injection", "Node.js Command Injection", "io_validation", security.SevHigh, tsLangs,
+		"javascript.node_command_injection", "Node.js Command Injection", "injection", security.SevHigh, tsLangs,
 		reJSChildProcSink, reJSChildProcConcat,
 		"child_process.exec / spawn is called with a string assembled from user input or "+
 			"template literals. An attacker can break out of the command and execute arbitrary "+
@@ -96,7 +108,7 @@ func init() {
 			"shell interpreter. (CWE-78)",
 	).WithCWE("78"))
 	security.Default.RegisterRule(twoReRule(
-		"javascript.sql_concat", "SQL Injection via Concatenation", "io_validation", security.SevHigh, tsLangs,
+		"javascript.sql_concat", "SQL Injection via Concatenation", "injection", security.SevHigh, tsLangs,
 		reJSSQLSink, reJSSQLConcat,
 		"A database query method (.query, .execute, .raw) is called with a string assembled "+
 			"via concatenation, template literals, or direct request data. Use parameterized "+
@@ -117,7 +129,7 @@ func init() {
 			"crypto.randomBytes() or crypto.getRandomValues() instead. (CWE-338)",
 	).WithCWE("338"))
 	security.Default.RegisterRule(twoReRule(
-		"javascript.sensitive_logging", "Sensitive Data in Logs", "insecure_data_storage", security.SevMedium, tsLangs,
+		"javascript.sensitive_logging", "Sensitive Data in Logs", "data_exposure", security.SevMedium, tsLangs,
 		reJSConsoleSink, reSensitiveData,
 		"A console.log/error/debug call references a password, token or credential. Browser "+
 			"and server logs are often captured and forwarded to external systems. Redact or "+
@@ -126,8 +138,50 @@ func init() {
 	security.Default.RegisterRule(jsResCookieNoSecureRule())
 	security.Default.RegisterRule(jsResCookieNoSameSiteRule())
 	security.Default.RegisterRule(jsUnrestrictedFileUploadRule())
+	security.Default.RegisterRule(reRule(
+		"javascript.weak_crypto", "Weak Cryptography (Node.js)", "cryptography", security.SevHigh, tsLangs,
+		reJSWeakCrypto,
+		"crypto.createHash('md5') and crypto.createHash('sha1') produce digests that are "+
+			"cryptographically broken. Use 'sha256' or stronger for integrity, and a password "+
+			"KDF (bcrypt, scrypt, argon2) for credential storage. (CWE-327)",
+	).WithCWE("327"))
 	security.Default.RegisterRule(twoReRule(
-		"javascript.open_redirect", "Open Redirect", "io_validation", security.SevMedium, tsLangs,
+		"javascript.path_traversal", "Path Traversal", "io_validation", security.SevHigh, tsLangs,
+		reJSFSSink, reJSNoSQLSource,
+		"A Node.js fs call uses a path derived from req.body/params/query without sanitization. "+
+			"An attacker can supply \"../\" sequences to read or overwrite arbitrary files. "+
+			"Use path.resolve and verify the result starts with the allowed base directory. (CWE-22)",
+	).WithCWE("22"))
+	security.Default.RegisterRule(twoReRule(
+		"javascript.ssti", "Server-Side Template Injection", "injection", security.SevHigh, tsLangs,
+		reJSTemplateSink, reJSNoSQLSource,
+		"A template engine (EJS, Pug, Nunjucks, Handlebars) is invoked with content derived "+
+			"from req.body/params/query. An attacker can inject template directives to execute "+
+			"arbitrary code server-side. Never pass raw user input to template rendering functions; "+
+			"use safe data-binding instead. (CWE-1336)",
+	).WithCWE("1336"))
+	security.Default.RegisterRule(reRule(
+		"javascript.jwt_alg_none", "JWT Algorithm None", "authentication", security.SevHigh, tsLangs,
+		reJSJWTNone,
+		"algorithm: 'none' disables JWT signature verification entirely, allowing an attacker "+
+			"to forge tokens by stripping the signature. Always specify a strong signing algorithm "+
+			"(RS256, ES256, HS256) and reject tokens with algorithm 'none'. (CWE-347)",
+	).WithCWE("347"))
+	security.Default.RegisterRule(jsJWTNoAlgorithmsRule())
+	security.Default.RegisterRule(credentialRule("javascript.hardcoded_credentials", tsLangs,
+		"A credential-naming variable is assigned a string literal. Hardcoded secrets are "+
+			"committed to history permanently. Load credentials from process.env or a secret "+
+			"manager at runtime. (CWE-798)"))
+	security.Default.RegisterRule(twoReRule(
+		"javascript.fast_hash_for_password", "Fast Hash Used for Password", "cryptography", security.SevHigh, tsLangs,
+		reJSFastHashSink, reSensitiveData,
+		"crypto.createHash('sha256'/'sha512') is used in a context that suggests password "+
+			"hashing. Fast hashes can be brute-forced at billions of attempts per second. "+
+			"Use bcrypt, scrypt or argon2 (e.g. bcryptjs, argon2 npm packages) for "+
+			"credential storage. (CWE-916)",
+	).WithCWE("916"))
+	security.Default.RegisterRule(twoReRule(
+		"javascript.open_redirect", "Open Redirect", "session_mgmt", security.SevMedium, tsLangs,
 		reJSRedirectSink, reJSNoSQLSource,
 		"res.redirect() is called with a URL derived from req.body/params/query. An attacker can "+
 			"supply an off-site URL to redirect victims to a phishing page. Validate the target "+
@@ -142,6 +196,43 @@ func init() {
 	).WithCWE("918"))
 }
 
+// jsJWTNoAlgorithmsRule fires when a file calls jwt.verify() but never specifies
+// an algorithms allowlist. Without it the library accepts any algorithm the
+// attacker claims in the header, enabling alg-confusion attacks.
+func jsJWTNoAlgorithmsRule() security.Rule {
+	return security.Rule{
+		ID:        "javascript.jwt_no_algorithms",
+		Name:      "JWT verify Without algorithms Allowlist",
+		Severity:  security.SevHigh,
+		Category:  "authentication",
+		CWE:       "347",
+		Languages: tsLangs,
+		Description: "jwt.verify() is called without an algorithms option anywhere in the file. " +
+			"Without an explicit allowlist the library accepts whichever algorithm the token " +
+			"header claims, enabling RS/HS confusion and algorithm-substitution attacks. " +
+			"Pass { algorithms: ['HS256'] } (or your chosen algorithm) to jwt.verify(). (CWE-347)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			verifyLine := -1
+			hasAlgorithms := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reJSJWTVerify.MatchString(line) && verifyLine == -1 {
+					verifyLine = i
+				}
+				if reJSJWTAlgorithms.MatchString(line) {
+					hasAlgorithms = true
+				}
+			}
+			if verifyLine >= 0 && !hasAlgorithms {
+				return []security.Finding{security.NewFinding(filePath, verifyLine, lines)}
+			}
+			return nil
+		},
+	}
+}
+
 // jsResCookieNoSameSiteRule flags res.cookie() calls without sameSite: on the
 // same line. Multi-line option objects will produce a false positive at the
 // opening call — treat findings as an audit prompt.
@@ -150,7 +241,7 @@ func jsResCookieNoSameSiteRule() security.Rule {
 		ID:        "javascript.cookie_no_samesite",
 		Name:      "Cookie Missing SameSite Attribute",
 		Severity:  security.SevMedium,
-		Category:  "authentication",
+		Category:  "session_mgmt",
 		CWE:       "352",
 		Languages: tsLangs,
 		Description: "res.cookie() is called without a sameSite option. Without SameSite the " +
@@ -212,7 +303,7 @@ func jsResCookieNoSecureRule() security.Rule {
 		ID:        "javascript.cookie_no_secure",
 		Name:      "Cookie Missing Secure Flag",
 		Severity:  security.SevMedium,
-		Category:  "authentication",
+		Category:  "session_mgmt",
 		CWE:       "614",
 		Languages: tsLangs,
 		Description: "res.cookie() is called without secure: true. Without the Secure flag the " +
@@ -241,7 +332,7 @@ func jsNoSQLInjectionRule() security.Rule {
 		ID:        "javascript.nosql_injection",
 		Name:      "NoSQL Injection Risk",
 		Severity:  security.SevHigh,
-		Category:  "io_validation",
+		Category:  "injection",
 		CWE:       "943",
 		Languages: tsLangs,
 		Description: "A MongoDB query method (findOne, updateOne, deleteOne, etc.) is called " +
@@ -272,7 +363,7 @@ func jsInsecureStorageRule() security.Rule {
 		ID:        "javascript.insecure_storage",
 		Name:      "Sensitive Data in Web Storage",
 		Severity:  security.SevHigh,
-		Category:  "insecure_data_storage",
+		Category:  "data_exposure",
 		CWE:       "922",
 		Languages: tsLangs,
 		Description: "localStorage.setItem / sessionStorage.setItem is called with a key that " +
