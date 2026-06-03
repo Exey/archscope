@@ -306,6 +306,7 @@ a.as-mod:hover{border-color:var(--accent)}
 .as-graph__lbl{fill:var(--text-dim); font-family:var(--mono); font-size:9.5px}
 .as-fg-container{width:100%; height:460px; border:1px solid var(--border); border-radius:var(--radius); margin:4px 0 14px; overflow:hidden; background:var(--bg-inset)}
 .as-fg-container--decl{height:380px; margin:0 0 10px}
+.as-graph-offline{color:var(--text-faint); font-size:11px; margin:8px 0 0; font-style:italic}
 
 /* Danger Index — half-gauge + weight bars + platform row */
 .as-sec-toprow{display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap; margin-top:8px}

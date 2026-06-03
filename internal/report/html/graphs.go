@@ -177,8 +177,11 @@ func renderGlobalArchGraph(res *result.AnalysisResult) string {
 	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">🗺️</span><h2>Architecture Graph</h2></div>`)
 	b.WriteString(`<p class="as-section__sub">Modules and detected technologies. <span style="color:#0a84ff">●</span> module &nbsp;<span style="color:#30d158">●</span> technology</p>`)
 	fmt.Fprintf(&b, `<div id="%s" class="as-fg-container"></div>`, id)
-	fmt.Fprintf(&b, `<script>{const d=%s;const el=document.getElementById('%s');`+
-		`if(d.nodes.length>0&&el){`+
+	fmt.Fprintf(&b, `<script>{const d=%s;(window.__asgq=window.__asgq||[]).push([`+
+		// ── init: called when ForceGraph + d3 are available ──────────────────
+		`function(){`+
+		`const el=document.getElementById('%s');`+
+		`if(!d.nodes.length||!el)return;`+
 		`const kc={'module':'#0a84ff','technology':'#30d158','foreign':'#ff9f0a'};`+
 		`const dark=()=>document.documentElement.getAttribute('data-theme')!=='light';`+
 		`const g=ForceGraph()(el).graphData(d)`+
@@ -199,8 +202,20 @@ func renderGlobalArchGraph(res *result.AnalysisResult) string {
 		`g.d3Force('charge').strength(-500);`+
 		`g.d3Force('link').distance(150);`+
 		`g.d3Force('x',d3.forceX().strength(0.05));`+
-		`g.d3Force('y',d3.forceY().strength(0.05));}}</script>`,
-		string(dj), id)
+		`g.d3Force('y',d3.forceY().strength(0.05));`+
+		`},`+
+		// ── fallback: rendered when CDN is unreachable ─────────────────────
+		`function(){`+
+		`const el=document.getElementById('%s');`+
+		`if(!el)return;`+
+		`el.style.height='auto';el.style.padding='12px';`+
+		`var rows=d.nodes.filter(n=>n.kind==='module').slice(0,20)`+
+		`.map(n=>'<tr><td class="mono">'+n.label+'</td><td class="mono">'+(n.sublabel||'')+'</td></tr>').join('');`+
+		`el.innerHTML='<table class="as-table"><thead><tr><th>Module</th><th>Size</th></tr></thead><tbody>'+rows+'</tbody></table>'`+
+		`+'<p class="as-graph-offline">&#x26A1; Interactive graph requires an internet connection</p>';`+
+		`}`+
+		`]);}</script>`,
+		string(dj), id, id)
 	b.WriteString(`</div>`)
 	return b.String()
 }
@@ -388,8 +403,11 @@ func renderDeclGraph(modName string, files []*parser.ParsedFile) string {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `<div id="%s" class="as-fg-container as-fg-container--decl"></div>`, id)
-	fmt.Fprintf(&b, `<script>{const d=%s;const el=document.getElementById('%s');`+
-		`if(d.nodes.length>0&&el){`+
+	fmt.Fprintf(&b, `<script>{const d=%s;(window.__asgq=window.__asgq||[]).push([`+
+		// ── init ──────────────────────────────────────────────────────────────
+		`function(){`+
+		`const el=document.getElementById('%s');`+
+		`if(!d.nodes.length||!el)return;`+
 		`const kc={'struct':'#34c759','interface':'#007aff','message':'#ff9f0a','service':'#ff453a','enum':'#bf5af2','func':'#ff9f0a'};`+
 		`const dark=()=>document.documentElement.getAttribute('data-theme')!=='light';`+
 		`const g=ForceGraph()(el).graphData(d)`+
@@ -411,8 +429,23 @@ func renderDeclGraph(modName string, files []*parser.ParsedFile) string {
 		`g.d3Force('charge').strength(-380);`+
 		`g.d3Force('link').distance(120);`+
 		`g.d3Force('x',d3.forceX().strength(0.08));`+
-		`g.d3Force('y',d3.forceY().strength(0.08));}}</script>`,
-		string(dj), id)
+		`g.d3Force('y',d3.forceY().strength(0.08));`+
+		`},`+
+		// ── fallback: colored chips, one per declaration ───────────────────
+		`function(){`+
+		`const el=document.getElementById('%s');`+
+		`if(!el)return;`+
+		`el.style.height='auto';el.style.padding='8px';`+
+		`const kc={'struct':'#34c759','interface':'#007aff','message':'#ff9f0a','service':'#ff453a','enum':'#bf5af2','func':'#ff9f0a'};`+
+		`var chips=d.nodes.slice(0,40).map(n=>`+
+		`'<span style="display:inline-block;margin:2px 3px;padding:1px 7px;border-radius:5px;'`+
+		`+'font-size:11px;font-family:var(--mono);background:'+(kc[n.kind]||'#8e8e93')+'22;'`+
+		`+'color:'+(kc[n.kind]||'#8e8e93')+'">'+n.label+'</span>').join('');`+
+		`el.innerHTML='<div style="line-height:2.2;padding:4px 0">'+chips+'</div>'`+
+		`+'<p class="as-graph-offline">&#x26A1; Interactive graph requires an internet connection</p>';`+
+		`}`+
+		`]);}</script>`,
+		string(dj), id, id)
 	return b.String()
 }
 

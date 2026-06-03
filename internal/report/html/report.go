@@ -32,8 +32,22 @@ func Render(res *result.AnalysisResult) string {
 	b.WriteString("<style>")
 	b.WriteString(report.CSS)
 	b.WriteString("</style>")
-	b.WriteString(`<script src="https://unpkg.com/d3-force@3"></script>`)
-	b.WriteString(`<script src="https://unpkg.com/force-graph"></script>`)
+	// Async loader: loads d3-force then force-graph from CDN. Each graph script
+	// registers [initFn, fallbackFn] in window.__asgq; the loader calls the
+	// right one after load succeeds, fails, or times out (9 s).
+	b.WriteString(`<script>(function(){` +
+		`var q=window.__asgq=[],done=false;` +
+		`function run(ok){if(done)return;done=true;` +
+		`q.forEach(function(p){try{ok?p[0]():p[1]();}catch(e){try{p[1]();}catch(e2){}}});}` +
+		`var t=setTimeout(function(){run(false);},9000);` +
+		`function ld(u,s,e){var x=document.createElement('script');x.src=u;x.onload=s;x.onerror=e;document.head.appendChild(x);}` +
+		`ld('https://unpkg.com/d3-force@3',` +
+		`function(){ld('https://unpkg.com/force-graph',` +
+		`function(){clearTimeout(t);run(true);},` +
+		`function(){clearTimeout(t);run(false);});},` +
+		`function(){clearTimeout(t);run(false);}` +
+		`);})()` +
+		`</script>`)
 	b.WriteString("</head><body><div class=\"as-wrap\">")
 
 	// Header
