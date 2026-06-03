@@ -120,42 +120,11 @@ go run ./cmd/archscope ~/code --open     # 1) try it instantly
 go build -o archscope ./cmd/archscope    # 2) build a binary
 go install ./cmd/archscope               # 3) install system-wide ($GOBIN)
 ```
-
-Requires **Go 1.21+**. Module path: `github.com/exey/archscope`. `git` is needed for the git-analysis section and blame attribution (the report degrades gracefully without it).
-
 ---
 
 ## ⚙️ Configuration
 
 `config.Default()` is the baseline; `config.Load` overlays a user `.archscope.json`, so a partial file only changes the keys it sets (output format/dir, security thresholds and disabled rules, fetch depth, hotspot count).
-
----
-
-## 📁 Project Structure
-
-```
-cmd/archscope/main.go        CLI entry point — flags, progress, --open, --format, remote URL support
-internal/
-  config/      global config + user-override overlay
-  langspec/    LanguageSpec, Platform, Registry (Client / ModuleNoun helpers)
-  lang/        one file per language (+ *_security.go rule files)
-  parser/      universal model + line scanner + dispatch
-  scanner/     tree walk, module detection, platform bucketing
-  security/    engine, 14 categories, model, helpers
-    universal/   cross-language rules (secrets, private keys, SQLi)
-  graph/       module dependency graph + PageRank + edges
-  git/         history, blame, branching-model classifier
-  fetch/       remote git-URL resolution (clone + cleanup)
-  modules/     pluggable report modules
-    arch/        architecture: client pattern detection + backend layered view
-    designpattern/ universal GoF detector
-    oopvspop/    Swift-only OOP↔POP analyzer
-  result/      AnalysisResult aggregate + pipeline (Run / RunWithProgress)
-  report/      shared HTML theme
-    html/        HTML writer (tabs, panels, SVG dependency graph, git section)
-    sarif/       SARIF 2.1.0 writer
-testdata/      go-sample · multi (5-language) · arch-sample (MVVM + patterns)
-```
 
 ---
 
@@ -219,6 +188,34 @@ go test ./...                 # all tests
 go vet ./...                  # vet
 gofmt -l .                    # formatting (should print nothing)
 go test ./internal/git/...    # one package
+```
+
+---
+
+## 📁 Project Structure
+
+```
+cmd/archscope/main.go        CLI entry point — flags, progress, --open, --format, remote URL support
+internal/
+  config/      global config + user-override overlay
+  langspec/    LanguageSpec, Platform, Registry (Client / ModuleNoun helpers)
+  lang/        one file per language (+ *_security.go rule files)
+  parser/      universal model + line scanner + dispatch
+  scanner/     tree walk, module detection, platform bucketing
+  security/    engine, 14 categories, model, helpers
+    universal/   cross-language rules (secrets, private keys, SQLi)
+  graph/       module dependency graph + PageRank + edges
+  git/         history, blame, branching-model classifier
+  fetch/       remote git-URL resolution (clone + cleanup)
+  modules/     pluggable report modules
+    arch/        architecture: client pattern detection + backend layered view
+    designpattern/ universal GoF detector
+    oopvspop/    Swift-only OOP↔POP analyzer
+  result/      AnalysisResult aggregate + pipeline (Run / RunWithProgress)
+  report/      shared HTML theme
+    html/        HTML writer (tabs, panels, SVG dependency graph, git section)
+    sarif/       SARIF 2.1.0 writer
+testdata/      go-sample · multi (5-language) · arch-sample (MVVM + patterns)
 ```
 
 ---
