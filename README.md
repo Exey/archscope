@@ -2,8 +2,6 @@
 
 **Universal CLI for multi-language codebase intelligence** — analyze architecture, security, dependencies and git history across Swift/Objective-C, Kotlin, TypeScript/JavaScript, Python and Go, and produce one interactive HTML report (+ SARIF).
 
-Built in pure Go. One engine, every language: drop a file in `internal/lang/` to add another.
-
 ---
 
 ## ⚡ Generate Report in 10 Seconds
@@ -63,6 +61,8 @@ Each language is **one self-registering file** in `internal/lang/`. A `LanguageS
 | Swift / Objective-C | ✅ language rules + universal | ✅ | 📦 Packages & Modules |
 
 Adding a language (e.g. `rust.go`) needs no central edit — importing the package triggers its `init()`. The `Client` flag is what routes a tab to pattern detection vs. the layered backend view; the module noun/icon control how its modules are labeled.
+
+Drop a file in `internal/lang/` to add another.
 
 ---
 
