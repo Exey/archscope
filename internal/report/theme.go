@@ -66,6 +66,7 @@ code,.mono{font-family:var(--mono)}
   padding:14px 16px; min-height:78px; display:flex; flex-direction:column; justify-content:center;
 }
 .as-card__num{font-size:26px; font-weight:700; font-family:var(--mono); letter-spacing:-.02em}
+.as-g{display:inline-block; width:0.22em}
 .as-card__label{color:var(--text-dim); font-size:12px; margin-top:3px}
 .as-card--accent{border-color:var(--accent-dim)}
 .as-card--accent .as-card__num{color:var(--accent)}

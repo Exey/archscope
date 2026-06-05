@@ -179,13 +179,33 @@ func sortedKeys(m map[string]bool) []string {
 	return out
 }
 
+// fmtNum is an alias kept for plain-text / SVG contexts.
 func fmtNum(n int) string {
-	if n < 1000 {
-		return fmt.Sprintf("%d", n)
-	}
-	return fmt.Sprintf("%.1fk", float64(n)/1000.0)
+	return fmtNumHTML(n)
 }
 
+// fmtNumHTML formats n as HTML with an inline-block <span class="as-g"> as
+// thousands separator. The span's CSS width gives a reliable half-space in
+// any font. Output must NOT be passed through html.EscapeString.
+func fmtNumHTML(n int) string {
+	s := strconv.Itoa(n)
+	if len(s) <= 3 {
+		return s
+	}
+	const sep = `<span class="as-g"></span>`
+	var b strings.Builder
+	start := len(s) % 3
+	if start > 0 {
+		b.WriteString(s[:start])
+	}
+	for i := start; i < len(s); i += 3 {
+		if i > 0 {
+			b.WriteString(sep)
+		}
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
+}
 func esc(s string) string { return html.EscapeString(s) }
 
 // bandClass maps a security band label to its color class.
@@ -241,12 +261,12 @@ func renderGlobalCards(res *result.AnalysisResult) string {
 	}
 	var b strings.Builder
 	b.WriteString(`<div class="as-cards">`)
-	card(&b, fmt.Sprintf("%d", res.TotalLines()), "lines of code", false)
-	card(&b, fmt.Sprintf("%d", len(res.Files)), "source files", false)
-	card(&b, fmt.Sprintf("%d", decls), "declarations", false)
-	card(&b, fmt.Sprintf("%d", len(res.Scan.Modules)), "modules", false)
+	card(&b, fmtNum(res.TotalLines()), "lines of code", false)
+	card(&b, fmtNum(len(res.Files)), "source files", false)
+	card(&b, fmtNum(decls), "declarations", false)
+	card(&b, fmtNum(len(res.Scan.Modules)), "modules", false)
 	cardDangerIndex(&b, fmt.Sprintf("%.1f%%", float64(res.SecurityScore.Total)/10.0))
-	card(&b, fmt.Sprintf("%d", len(platforms)), plural(len(platforms), "platform", "platforms"), false)
+	card(&b, fmtNum(len(platforms)), plural(len(platforms), "platform", "platforms"), false)
 	b.WriteString(`</div>`)
 	return b.String()
 }
@@ -257,7 +277,7 @@ func card(b *strings.Builder, num, label string, accent bool) {
 		cls += " as-card--accent"
 	}
 	fmt.Fprintf(b, `<div class="%s"><span class="as-card__num">%s</span><span class="as-card__label">%s</span></div>`,
-		cls, esc(num), esc(label))
+		cls, num, esc(label))
 }
 
 // cardDangerIndex renders the accented Danger Index summary card.
@@ -614,10 +634,10 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 	var b strings.Builder
 	// per-platform cards
 	b.WriteString(`<div class="as-cards">`)
-	card(&b, fmt.Sprintf("%d", pg.FileCount), "files", false)
-	card(&b, fmt.Sprintf("%d", lines), "lines", false)
-	card(&b, fmt.Sprintf("%d", decls), "declarations", false)
-	card(&b, fmt.Sprintf("%d", len(pg.Modules)), plural(len(pg.Modules), "module", "modules"), false)
+	card(&b, fmtNum(pg.FileCount), "files", false)
+	card(&b, fmtNum(lines), "lines", false)
+	card(&b, fmtNum(decls), "declarations", false)
+	card(&b, fmtNum(len(pg.Modules)), plural(len(pg.Modules), "module", "modules"), false)
 	b.WriteString(`</div>`)
 
 	// Architecture layers + tech components (all platforms)
@@ -1375,7 +1395,9 @@ func renderModuleDetails(res *result.AnalysisResult) string {
 		var files, genFiles []*parser.ParsedFile
 		for _, f := range all {
 			if isGeneratedFile(f.FilePath) {
-				genFiles = append(genFiles, f)
+				if f.LineCount >= 90 {
+					genFiles = append(genFiles, f)
+				}
 				continue
 			}
 			if isTestFile(f.FilePath) {
