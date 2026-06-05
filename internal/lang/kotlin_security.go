@@ -22,7 +22,7 @@ var (
 	reKtCookieHTTPOnly = regexp.MustCompile(`isHttpOnly\s*=\s*true|\.isHttpOnly\s*\(true\)|httpOnly\s*=\s*true`)
 	// SQL injection helpers
 	reKtSQLSink   = regexp.MustCompile(`\b(rawQuery|execSQL|compileStatement)\s*\(`)
-	reKtSQLConcat  = regexp.MustCompile(`\+\s*["'\w]|["'\w]\s*\+|\$\{|\bString\.format\s*\(`)
+	reKtSQLConcat  = regexp.MustCompile(`\+\s*["'\w]|["'\w]\s*\+|\$\{|\bString\.format\s*\(|\bStringBuilder\b|\.append\s*\(`)
 	// new coverage
 	reKtFileSink       = regexp.MustCompile(`\bFile\s*\(|\bPaths\.get\s*\(|\bFileInputStream\s*\(`)
 	reKtWebInput       = regexp.MustCompile(`\.getParameter\s*\(|request\.getQueryString\b|request\.getHeader\s*\(`)
@@ -77,7 +77,7 @@ func init() {
 		"ECB mode produces identical ciphertext for identical plaintext blocks, leaking data "+
 			"patterns and providing no integrity protection. Use AES/GCM/NoPadding instead.",
 	).WithCWE("327"))
-	security.Default.RegisterRule(kotlinCmdInjectionRule())
+	security.Default.RegisterRule(kotlinCmdInjectionRule().WithSkipTests())
 	security.Default.RegisterRule(kotlinCookieNoHTTPOnlyRule())
 	security.Default.RegisterRule(kotlinSQLInjectionRule())
 	security.Default.RegisterRule(kotlinAndroidExportedRule())
@@ -94,7 +94,7 @@ func init() {
 		"X509TrustManager or checkServerTrusted was found. A custom TrustManager that does "+
 			"not perform certificate chain validation defeats TLS and enables man-in-the-middle "+
 			"attacks. Use the default system TrustManager unless you implement full validation. (CWE-295)",
-	).WithCWE("295"))
+	).WithCWE("295").WithSkipTests())
 	security.Default.RegisterRule(kotlinWeakRandomRule())
 	security.Default.RegisterRule(reRule(
 		"kotlin.java_deserialization", "Unsafe Java Deserialization", "unsafe_exec", security.SevHigh, kotlinLangs,
@@ -161,6 +161,14 @@ func init() {
 	security.Default.RegisterRule(kotlinZipSlipRule())
 	security.Default.RegisterRule(kotlinManifestCleartextRule())
 	security.Default.RegisterRule(kotlinManifestAllowBackupRule())
+	security.Default.RegisterRule(twoReRule(
+		"kotlin.log_injection", "Log Injection", "data_exposure", security.SevMedium, kotlinLangs,
+		reKtLogSink, reKtWebInput,
+		"A log call writes a value derived from user-supplied request data "+
+			"(getParameter, getQueryString, getHeader). An attacker can inject CRLF sequences "+
+			"(\\r\\n) to forge log entries or corrupt structured logs. Sanitize or encode "+
+			"user input before logging. (CWE-117)",
+	).WithCWE("117"))
 	security.Default.RegisterRule(twoReRule(
 		"kotlin.open_redirect", "Open Redirect", "session_mgmt", security.SevMedium, kotlinLangs,
 		reKtSendRedirect, reKtWebInput,

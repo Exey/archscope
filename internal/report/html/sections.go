@@ -438,6 +438,17 @@ func renderSecurityRules(results []security.RuleResult) string {
 		"918":  "Server-Side Request Forgery",
 		"1004": "HttpOnly Cookie",
 		"1321": "Prototype Pollution",
+		"117":  "Log Injection",
+		"235":  "HTTP Parameter Pollution",
+		"347":  "Improper JWT Verification",
+		"362":  "Race Condition (TOCTOU)",
+		"434":  "Unrestricted File Upload",
+		"530":  "Android Backup Enabled",
+		"616":  "Incomplete Instruction",
+		"749":  "WebView JS Interface",
+		"916":  "Weak Password Hash",
+		"1333": "ReDoS — Catastrophic Backtracking",
+		"1336": "Server-Side Template Injection",
 	}
 
 	// Language display order and their platform-badge CSS classes.
@@ -1057,7 +1068,7 @@ func renderChurn(churn []git.FileChurnStat) string {
 	}
 	b.WriteString(`<table class="as-table"><thead><tr><th>File</th><th>Changes</th></tr></thead><tbody>`)
 	for _, c := range churn {
-		fmt.Fprintf(&b, `<tr><td class="mono">%s</td><td class="mono">%d</td></tr>`, esc(shortenPathFront(c.RelPath, 40)), c.ChangeCount)
+		fmt.Fprintf(&b, `<tr><td class="mono">%s</td><td class="mono">%d</td></tr>`, esc(shortenPathFront(c.RelPath, 45)), c.ChangeCount)
 	}
 	b.WriteString(`</tbody></table></div>`)
 	return b.String()
@@ -1163,6 +1174,13 @@ func isTestFile(path string) bool {
 		return true
 	}
 	return false
+}
+
+// isGeneratedFile returns true for Go files that are machine-generated:
+// protobuf outputs (*.pb.go) and controller-gen outputs (zz_generated*.go).
+func isGeneratedFile(path string) bool {
+	base := filepath.Base(path)
+	return strings.HasSuffix(base, ".pb.go") || strings.HasPrefix(base, "zz_generated")
 }
 
 // shortenPathFront shortens s to max chars by removing the beginning, e.g.
@@ -1320,11 +1338,15 @@ func renderModuleDetails(res *result.AnalysisResult) string {
 			b.WriteString(g)
 		}
 
-		// file inventory table — filter out test files and tiny stub files
+		// Split files: generated (pb.go / zz_generated) vs regular.
 		all := append([]*parser.ParsedFile(nil), m.files...)
 		sort.SliceStable(all, func(i, j int) bool { return all[i].LineCount > all[j].LineCount })
-		var files []*parser.ParsedFile
+		var files, genFiles []*parser.ParsedFile
 		for _, f := range all {
+			if isGeneratedFile(f.FilePath) {
+				genFiles = append(genFiles, f)
+				continue
+			}
 			if isTestFile(f.FilePath) {
 				continue
 			}
@@ -1333,36 +1355,52 @@ func renderModuleDetails(res *result.AnalysisResult) string {
 			}
 			files = append(files, f)
 		}
-		if len(files) == 0 {
+		if len(files) == 0 && len(genFiles) == 0 {
 			b.WriteString(`</div>`)
 			continue
 		}
-		b.WriteString(`<table class="as-table as-file-table"><thead><tr><th style="width:50%">File</th><th>Lines</th><th>Decl</th><th>Declarations</th></tr></thead><tbody>`)
-		for _, f := range files {
-			dir, base := splitRel(f.FilePath, res.RootPath)
-			fileCell := ""
-			if dir != "" {
-				fileCell = fmt.Sprintf(`<span class="as-file-dir">%s</span>`, esc(shortenPathFront(dir, 40)))
+		if len(files) > 0 {
+			b.WriteString(`<table class="as-table as-file-table"><thead><tr><th style="width:50%">File</th><th>Lines</th><th>Decl</th><th>Declarations</th></tr></thead><tbody>`)
+			for _, f := range files {
+				b.WriteString(fileTableRow(f, res.RootPath))
 			}
-			if href := vscodeHref(f.FilePath, 0); href != "" {
-				fileCell += fmt.Sprintf(`<a class="as-vs" href="%s" title="Open in VS Code"><strong>%s</strong></a>`, esc(href), esc(base))
-			} else {
-				fileCell += fmt.Sprintf(`<strong>%s</strong>`, esc(base))
-			}
-			if f.Description != "" {
-				d := f.Description
-				if len(d) > 80 {
-					d = d[:80] + "…"
-				}
-				fileCell += fmt.Sprintf(`<div class="as-file-desc">💡 %s</div>`, esc(d))
-			}
-			fmt.Fprintf(&b, `<tr><td>%s</td><td class="mono">%d</td><td class="mono">%d</td><td class="as-decl-tags">%s</td></tr>`,
-				fileCell, f.LineCount, len(f.Declarations), declTags(f.FilePath, f.Declarations))
+			b.WriteString(`</tbody></table>`)
 		}
-		b.WriteString(`</tbody></table></div>`)
+		if len(genFiles) > 0 {
+			b.WriteString(`<div class="as-sub as-gen-sub">Code Generated</div>`)
+			b.WriteString(`<table class="as-table as-file-table"><thead><tr><th style="width:50%">File</th><th>Lines</th><th>Decl</th><th>Declarations</th></tr></thead><tbody>`)
+			for _, f := range genFiles {
+				b.WriteString(fileTableRow(f, res.RootPath))
+			}
+			b.WriteString(`</tbody></table>`)
+		}
+		b.WriteString(`</div>`)
 	}
 	b.WriteString(`</div>`)
 	return b.String()
+}
+
+// fileTableRow renders one <tr> for the file inventory table.
+func fileTableRow(f *parser.ParsedFile, rootPath string) string {
+	dir, base := splitRel(f.FilePath, rootPath)
+	fileCell := ""
+	if dir != "" {
+		fileCell = fmt.Sprintf(`<span class="as-file-dir">%s</span>`, esc(shortenPathFront(dir, 40)))
+	}
+	if href := vscodeHref(f.FilePath, 0); href != "" {
+		fileCell += fmt.Sprintf(`<a class="as-vs" href="%s" title="Open in VS Code"><strong>%s</strong></a>`, esc(href), esc(base))
+	} else {
+		fileCell += fmt.Sprintf(`<strong>%s</strong>`, esc(base))
+	}
+	if f.Description != "" {
+		d := f.Description
+		if len(d) > 80 {
+			d = d[:80] + "…"
+		}
+		fileCell += fmt.Sprintf(`<div class="as-file-desc">💡 %s</div>`, esc(d))
+	}
+	return fmt.Sprintf(`<tr><td>%s</td><td class="mono">%d</td><td class="mono">%d</td><td class="as-decl-tags">%s</td></tr>`,
+		fileCell, f.LineCount, len(f.Declarations), declTags(f.FilePath, f.Declarations))
 }
 
 // declTags renders up to 14 declaration chips (icon + name) for a file.

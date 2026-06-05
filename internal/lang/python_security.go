@@ -38,7 +38,7 @@ var (
 	rePySameSiteParam = regexp.MustCompile(`(?i)samesite\s*=`)
 	// CWE-434: file upload sinks and type-validation guard
 	rePyFileUploadSink = regexp.MustCompile(`request\.files\b|request\.FILES\b`)
-	rePyFileTypeCheck  = regexp.MustCompile(`(?i)(secure_filename|\.content_type\b|\.mimetype\b|allowed_extensions|ALLOWED_EXTENSIONS|validate.*file|file.*type)`)
+	rePyFileTypeCheck  = regexp.MustCompile(`(?i)(secure_filename|\.content_type\b|\.mimetype\b|allowed_extensions|ALLOWED_EXTENSIONS|validate.*file|file.*valid|file.*type|check.*ext|imghdr|filetype|validate_upload|validate_file|allowed_mime)`)
 	// CWE-601: open redirect sink (Flask redirect / Django HttpResponseRedirect)
 	rePyRedirectSink = regexp.MustCompile(`\bredirect\s*\(|HttpResponseRedirect\s*\(`)
 	// CWE-1336: server-side template injection sinks
@@ -52,6 +52,10 @@ var (
 	rePyExtractAll   = regexp.MustCompile(`\.extractall\s*\(`)
 	// CWE-943: MongoDB $where operator with user input (server-side JS execution)
 	rePyMongoWhere   = regexp.MustCompile(`["']\$where["']`)
+	// CWE-362: TOCTOU race condition helpers
+	rePyTOCTOUCheck = regexp.MustCompile(`\bos\.path\.(exists|isfile|isdir)\s*\(`)
+	rePyTOCTOUUse   = regexp.MustCompile(`\bos\.(makedirs|mkdir)\s*\(`)
+	rePyTOCTOUGuard = regexp.MustCompile(`exist_ok\s*=\s*True|tempfile\.|os\.O_EXCL\b`)
 	// CWE-347: PyJWT algorithm:none and missing algorithms parameter
 	rePyJWTNoneAlg   = regexp.MustCompile(`(?i)algorithm\s*=\s*["']none["']|algorithms\s*=\s*\[\s*["']none["']`)
 	rePyJWTDecode    = regexp.MustCompile(`\bjwt\.decode\s*\(`)
@@ -84,7 +88,7 @@ func init() {
 		rePyShell,
 		"subprocess(..., shell=True) interpolates the command into a shell; concatenated input "+
 			"enables command injection. Pass an argument list and keep shell=False.",
-	).WithCWE("78"))
+	).WithCWE("78").WithSkipTests())
 	security.Default.RegisterRule(reRule(
 		"python.weak_crypto", "Weak Cryptography", "cryptography", security.SevHigh, pythonLangs,
 		rePyWeakHash,
@@ -97,7 +101,7 @@ func init() {
 		"os.system() passes the command string to the shell, enabling injection if any part is "+
 			"derived from user input. Use subprocess.run with a list of arguments and "+
 			"shell=False instead.",
-	).WithCWE("78"))
+	).WithCWE("78").WithSkipTests())
 	security.Default.RegisterRule(reRule(
 		"python.debug_mode", "Debug Mode Enabled", "platform_config", security.SevMedium, pythonLangs,
 		rePyDebugMode,
@@ -112,7 +116,7 @@ func init() {
 			"making the connection vulnerable to man-in-the-middle attacks. Use "+
 			"ssl.create_default_context() and keep verify=True (the default).",
 		"#", "comment",
-	).WithCWE("295"))
+	).WithCWE("295").WithSkipTests())
 	security.Default.RegisterRule(pythonDjangoSecurityMWRule())
 	security.Default.RegisterRule(twoReRule(
 		"python.path_traversal", "Path Traversal", "io_validation", security.SevHigh, pythonLangs,
@@ -210,6 +214,15 @@ func init() {
 			"can read arbitrary documents or cause denial of service. Avoid $where entirely; "+
 			"use standard query operators with parameterized values. (CWE-943)",
 	).WithCWE("943"))
+	security.Default.RegisterRule(twoReRule(
+		"python.log_injection", "Log Injection", "data_exposure", security.SevMedium, pythonLangs,
+		rePyLogSink, rePyWebInput,
+		"A logging call writes a value derived directly from request data "+
+			"(request.GET, request.POST, request.args). An attacker can inject CRLF "+
+			"sequences (\\r\\n) to forge log entries or split log lines. Sanitize or encode "+
+			"user input before logging. (CWE-117)",
+	).WithCWE("117"))
+	security.Default.RegisterRule(pythonTOCTOURule())
 	security.Default.RegisterRule(twoReRule(
 		"python.open_redirect", "Open Redirect", "session_mgmt", security.SevMedium, pythonLangs,
 		rePyRedirectSink, rePyWebInput,
@@ -353,6 +366,48 @@ func pythonDjangoSecurityMWRule() security.Rule {
 			}
 			if mwLine >= 0 && !hasSecMW {
 				return []security.Finding{security.NewFinding(filePath, mwLine, lines)}
+			}
+			return nil
+		},
+	}
+}
+
+// pythonTOCTOURule fires when a file checks file/directory existence with
+// os.path.exists/isdir/isfile and then calls os.makedirs/mkdir without
+// exist_ok=True or a tempfile guard — the classic TOCTOU window.
+func pythonTOCTOURule() security.Rule {
+	return security.Rule{
+		ID:        "python.toctou",
+		Name:      "TOCTOU Race Condition",
+		Severity:  security.SevMedium,
+		Category:  "io_validation",
+		CWE:       "362",
+		Languages: pythonLangs,
+		Description: "A file-system existence check (os.path.exists/isfile/isdir) is followed by " +
+			"os.makedirs/mkdir in the same file without exist_ok=True or a tempfile guard. " +
+			"Between the check and the create another process can create or delete the path, " +
+			"leading to errors or exploitable race conditions. Use os.makedirs(path, exist_ok=True) " +
+			"or handle FileExistsError atomically. (CWE-362)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			checkLine := -1
+			hasMkdir := false
+			hasGuard := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if rePyTOCTOUCheck.MatchString(line) && checkLine == -1 {
+					checkLine = i
+				}
+				if rePyTOCTOUUse.MatchString(line) {
+					hasMkdir = true
+				}
+				if rePyTOCTOUGuard.MatchString(line) {
+					hasGuard = true
+				}
+			}
+			if checkLine >= 0 && hasMkdir && !hasGuard {
+				return []security.Finding{security.NewFinding(filePath, checkLine, lines)}
 			}
 			return nil
 		},

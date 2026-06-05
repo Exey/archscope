@@ -96,6 +96,25 @@ func (r Rule) WithCWE(cwe string) Rule {
 	return r
 }
 
+// WithSkipTests returns a copy of the rule whose Detect function silently skips
+// files identified as test, mock, fixture, e2e or other non-production paths
+// (see IsTestPath). Apply to rules where findings in test code are expected and
+// safe: TLS verification bypass in test servers, command execution in test
+// helpers, hardcoded keys in test data, etc.
+func (r Rule) WithSkipTests() Rule {
+	if r.Detect == nil {
+		return r
+	}
+	orig := r.Detect
+	r.Detect = func(filePath string, lines []string) []Finding {
+		if IsTestPath(filePath) {
+			return nil
+		}
+		return orig(filePath, lines)
+	}
+	return r
+}
+
 // AppliesToLanguage reports whether this rule should run for a given language.
 func (r Rule) AppliesToLanguage(langID string) bool {
 	if len(r.Languages) == 0 {

@@ -2,6 +2,7 @@ package lang
 
 import (
 	"regexp"
+	"strings"
 
 	"github.com/exey/archscope/internal/security"
 )
@@ -56,6 +57,12 @@ var (
 	// CWE-22 variant: zip-slip via archive/zip without path guard
 	reGoZipSink       = regexp.MustCompile(`\bzip\.(NewReader|OpenReader)\s*\(`)
 	reGoZipGuard      = regexp.MustCompile(`(?i)(filepath\.Clean|filepath\.Abs|strings\.HasPrefix|path\.Clean)`)
+	// CWE-362: TOCTOU race condition helpers
+	reTOCTOUCheck = regexp.MustCompile(`\bos\.(Stat|Lstat)\s*\(`)
+	reTOCTOUUse   = regexp.MustCompile(`\bos\.(Create|Mkdir|MkdirAll)\s*\(`)
+	reTOCTOUGuard = regexp.MustCompile(`O_EXCL|sync\.(Mutex|RWMutex|Once)\b`)
+	// CWE-321: hardcoded AES/HMAC key material in a byte-slice literal
+	reGoByteArrayKey = regexp.MustCompile(`(?i)\b(key|aesKey|secretKey|cipherKey|encKey|hmacKey)\b.*\[\]byte\s*\{`)
 )
 
 func init() {
@@ -70,28 +77,22 @@ func init() {
 		reGoInsecureTLS,
 		"InsecureSkipVerify: true disables certificate validation, defeating TLS and enabling "+
 			"man-in-the-middle attacks. Verify certificates; pin or supply a proper RootCAs pool if needed.",
-	).WithCWE("295"))
+	).WithCWE("295").WithSkipTests())
 	security.Default.RegisterRule(reRule(
 		"go.command_injection", "Command Injection Risk", "injection", security.SevHigh, goLangs,
 		reGoCmdInjection,
 		"Building an exec.Command argument by formatting or concatenating strings can let input "+
 			"alter the command. Pass fixed args as separate parameters and never interpolate user input.",
-	).WithCWE("78"))
-	security.Default.RegisterRule(reRule(
-		"go.http_server_no_tls", "HTTP Server Without TLS", "network_security", security.SevMedium, goLangs,
-		reGoHTTPNoTLS,
-		"http.ListenAndServe serves cleartext HTTP. Production servers should use "+
-			"https.ListenAndServeTLS or terminate TLS at a reverse proxy — cleartext HTTP exposes "+
-			"session tokens and payloads to interception.",
-	).WithCWE("319"))
+	).WithCWE("78").WithSkipTests())
+	security.Default.RegisterRule(goHTTPNoTLSRule())
 	security.Default.RegisterRule(goSQLFmtRule())
 	security.Default.RegisterRule(twoReRule(
 		"go.insecure_rand", "Insecure Random in Security Context", "cryptography", security.SevMedium, goLangs,
 		reGoMathRand, reSensitiveData,
 		"math/rand is a pseudo-random generator and must not be used for security-sensitive values "+
 			"(tokens, nonces, key material). Use crypto/rand instead.",
-	).WithCWE("338"))
-	security.Default.RegisterRule(goTLSNoMinVersionRule())
+	).WithCWE("338").WithSkipTests())
+	security.Default.RegisterRule(goTLSNoMinVersionRule().WithSkipTests())
 	security.Default.RegisterRule(goCookieNoHTTPOnlyRule())
 	security.Default.RegisterRule(goGinMissingSecHeadersRule())
 	security.Default.RegisterRule(goHTTPMissingSecHeadersRule())
@@ -146,6 +147,22 @@ func init() {
 			"Hardcoded secrets are committed to history permanently. Load credentials from "+
 			"environment variables or a secret manager at runtime. (CWE-798)"))
 	security.Default.RegisterRule(goZipSlipRule())
+	security.Default.RegisterRule(twoReRule(
+		"go.log_injection", "Log Injection", "data_exposure", security.SevMedium, goLangs,
+		reGoLogSink, reGoUserInput,
+		"A log statement writes a value derived directly from user-supplied request data. "+
+			"An attacker can inject newlines (\\r\\n) into log messages to forge log entries or "+
+			"corrupt structured logging. Sanitize or encode user input before logging. (CWE-117)",
+	).WithCWE("117"))
+	security.Default.RegisterRule(goTOCTOURule().WithSkipTests())
+	security.Default.RegisterRule(reRule(
+		"go.hardcoded_byte_key", "Hardcoded Cryptographic Key Material", "cryptography", security.SevHigh, goLangs,
+		reGoByteArrayKey,
+		"A variable with a cryptographic key name (key, aesKey, secretKey, hmacKey…) is assigned a "+
+			"hardcoded byte-slice literal. Hardcoded key material is committed to history permanently "+
+			"and cannot be rotated without a code change. Generate keys with crypto/rand and load them "+
+			"from a secret store at runtime. (CWE-321)",
+	).WithCWE("321").WithSkipTests())
 	security.Default.RegisterRule(twoReRule(
 		"go.open_redirect", "Open Redirect", "session_mgmt", security.SevMedium, goLangs,
 		reGoHTTPRedirect, reGoUserInput,
@@ -452,9 +469,18 @@ func goUnrestrictedFileUploadRule() security.Rule {
 	}
 }
 
-// goSQLFmtRule detects Go SQL queries assembled with fmt.Sprintf, which enables
-// SQL injection. A single regex cannot express "both patterns on one line" in
-// Go's RE2 dialect, so Detect performs two match checks per line.
+// reGoDBImport matches common Go database/ORM imports — used to gate the SQL
+// fmt rule so it doesn't fire in codebases that don't use a database at all.
+var reGoDBImport = regexp.MustCompile(
+	`"database/sql"|"gorm\.io/|"xorm\.io/|"github\.com/jmoiron/sqlx|` +
+		`"github\.com/jackc/pgx|"entgo\.io/ent|"github\.com/go-sql-driver|` +
+		`"modernc\.org/sqlite|"github\.com/mattn/go-sqlite`,
+)
+
+// goSQLFmtRule detects Go SQL queries assembled with fmt.Sprintf. It only
+// fires in files that import a database/ORM package — eliminating the large
+// class of false positives where fmt.Sprintf + an SQL keyword appear in log
+// messages, error strings, or documentation in non-database codebases.
 func goSQLFmtRule() security.Rule {
 	return security.Rule{
 		ID:        "go.sql_fmt_sprintf",
@@ -467,6 +493,18 @@ func goSQLFmtRule() security.Rule {
 			"out of the query and execute arbitrary SQL (CWE-89). Use database/sql parameterized " +
 			"queries — db.Query(\"SELECT...\", args...) — so values are bound safely.",
 		Detect: func(filePath string, lines []string) []security.Finding {
+			// Only fire if the file imports a database or ORM package; otherwise
+			// fmt.Sprintf + a SQL keyword is almost certainly a log message or comment.
+			hasDBImport := false
+			for _, line := range lines {
+				if reGoDBImport.MatchString(line) {
+					hasDBImport = true
+					break
+				}
+			}
+			if !hasDBImport {
+				return nil
+			}
 			var out []security.Finding
 			for i, line := range lines {
 				if security.IsComment(line) {
@@ -480,3 +518,84 @@ func goSQLFmtRule() security.Rule {
 		},
 	}
 }
+
+// goHTTPNoTLSRule flags http.ListenAndServe calls, skipping localhost-only
+// listeners (healthz, pprof) and test files where HTTP-only is intentional.
+func goHTTPNoTLSRule() security.Rule {
+	return security.Rule{
+		ID:        "go.http_server_no_tls",
+		Name:      "HTTP Server Without TLS",
+		Severity:  security.SevMedium,
+		Category:  "network_security",
+		CWE:       "319",
+		Languages: goLangs,
+		Description: "http.ListenAndServe serves cleartext HTTP. Production servers should use " +
+			"http.ListenAndServeTLS or terminate TLS at a reverse proxy — cleartext HTTP exposes " +
+			"session tokens and payloads to interception.",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			if security.IsTestPath(filePath) {
+				return nil
+			}
+			var out []security.Finding
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if !reGoHTTPNoTLS.MatchString(line) {
+					continue
+				}
+				// Skip localhost-only listeners: health checks, pprof, dev servers.
+				if strings.Contains(line, "127.0.0.1") ||
+					strings.Contains(line, "localhost") ||
+					strings.Contains(line, `"0.0.0.0`) {
+					continue
+				}
+				out = append(out, security.NewFinding(filePath, i, lines))
+			}
+			return out
+		},
+	}
+}
+
+// goTOCTOURule fires when a file checks path existence with os.Stat/Lstat and
+// then calls os.Create/Mkdir/MkdirAll in the same file without an O_EXCL guard
+// or a sync primitive — the classic TOCTOU window.
+func goTOCTOURule() security.Rule {
+	return security.Rule{
+		ID:        "go.toctou",
+		Name:      "TOCTOU Race Condition",
+		Severity:  security.SevMedium,
+		Category:  "io_validation",
+		CWE:       "362",
+		Languages: goLangs,
+		Description: "os.Stat/Lstat is used to check a path and then os.Create/Mkdir/MkdirAll " +
+			"operates on the same path without an O_EXCL flag or sync guard. Between the check " +
+			"and the operation, another goroutine or process can alter the path, leading to " +
+			"race conditions. Use os.OpenFile with os.O_CREATE|os.O_EXCL for atomic file " +
+			"creation, or os.MkdirAll which is inherently idempotent. (CWE-362)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			statLine := -1
+			hasCreate := false
+			hasGuard := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reTOCTOUCheck.MatchString(line) && statLine == -1 {
+					statLine = i
+				}
+				if reTOCTOUUse.MatchString(line) {
+					hasCreate = true
+				}
+				if reTOCTOUGuard.MatchString(line) {
+					hasGuard = true
+				}
+			}
+			if statLine >= 0 && hasCreate && !hasGuard {
+				return []security.Finding{security.NewFinding(filePath, statLine, lines)}
+			}
+			return nil
+		},
+	}
+}
+

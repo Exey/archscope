@@ -280,6 +280,7 @@ a.as-mod:hover{border-color:var(--accent)}
 .as-file-table td{vertical-align:top}
 .as-file-dir{color:var(--text-faint); font-weight:400}
 .as-file-desc{color:var(--text-faint); font-size:11.5px; font-style:italic; margin-top:2px}
+.as-gen-sub{margin-top:18px; color:var(--text-faint)}
 .as-decl-tags{font-size:11.5px; line-height:1.9; color:var(--text-dim); font-family:var(--mono)}
 .as-decl-more{color:var(--text-faint)}
 .as-decl-link{color:var(--text-dim); text-decoration:none}

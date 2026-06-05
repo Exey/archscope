@@ -106,7 +106,7 @@ func init() {
 			"template literals. An attacker can break out of the command and execute arbitrary "+
 			"shell commands. Pass arguments as an array and never pass user input through a "+
 			"shell interpreter. (CWE-78)",
-	).WithCWE("78"))
+	).WithCWE("78").WithSkipTests())
 	security.Default.RegisterRule(twoReRule(
 		"javascript.sql_concat", "SQL Injection via Concatenation", "injection", security.SevHigh, tsLangs,
 		reJSSQLSink, reJSSQLConcat,
@@ -120,7 +120,7 @@ func init() {
 		"rejectUnauthorized: false disables TLS certificate validation in Node.js, making "+
 			"the connection trivially vulnerable to man-in-the-middle attacks. Remove this "+
 			"option or set it to true. (CWE-295)",
-	).WithCWE("295"))
+	).WithCWE("295").WithSkipTests())
 	security.Default.RegisterRule(twoReRule(
 		"javascript.math_random_security", "Math.random in Security Context", "cryptography", security.SevMedium, tsLangs,
 		reJSMathRandom, reSensitiveData,
@@ -187,6 +187,13 @@ func init() {
 			"supply an off-site URL to redirect victims to a phishing page. Validate the target "+
 			"against an explicit allowlist or ensure it is a safe relative path. (CWE-601)",
 	).WithCWE("601"))
+	security.Default.RegisterRule(twoReRule(
+		"javascript.log_injection", "Log Injection", "data_exposure", security.SevMedium, tsLangs,
+		reJSConsoleSink, reJSNoSQLSource,
+		"A console.log/error/debug/warn call writes a value derived from req.body/params/query. "+
+			"An attacker can inject CRLF sequences (\\r\\n) to forge log entries in server-side "+
+			"logging pipelines. Sanitize or encode user input before logging. (CWE-117)",
+	).WithCWE("117"))
 	security.Default.RegisterRule(twoReRule(
 		"javascript.ssrf", "Server-Side Request Forgery", "io_validation", security.SevHigh, tsLangs,
 		reJSFetchSink, reJSNoSQLSource,

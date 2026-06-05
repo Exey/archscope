@@ -16,7 +16,7 @@ var (
 	reSwiftWeakCrypto     = regexp.MustCompile(`(CC_MD5|CC_SHA1|Insecure\.MD5|Insecure\.SHA1|kCCAlgorithmDES|kCCAlgorithm3DES|\bMD5\()`)
 	reSwiftTransport      = regexp.MustCompile(`(NSAllowsArbitraryLoads|allowsArbitraryLoads|NSExceptionAllowsInsecureHTTPLoads|http://)`)
 	reSwiftUserDefaults   = regexp.MustCompile(`UserDefaults\b`)
-	reSwiftSensitiveKey   = regexp.MustCompile(`(?i)\b(password|passwd|secret|api[_-]?key|token|credential|private[_-]?key|auth)\b`)
+	reSwiftSensitiveKey   = regexp.MustCompile(`(?i)\b(password|passwd|passphrase|psk|secret|secretkey|api[_-]?key|apikey|token|credential|private[_-]?key|privkey|auth)\b`)
 	reSwiftInsecureRandom = regexp.MustCompile(`\b(arc4random|arc4random_buf|arc4random_uniform|rand\s*\(|Int\.random|Bool\.random|Float\.random|Double\.random|SystemRandomNumberGenerator)\b`)
 	reSwiftSQLiteExec     = regexp.MustCompile(`\b(sqlite3_exec|sqlite3_prepare|\.execute\s*\(|db\.run\s*\()`)
 	reSwiftInterpolation  = regexp.MustCompile(`\\\(`)
@@ -74,7 +74,7 @@ func init() {
 		"Disabling App Transport Security (NSAllowsArbitraryLoads) or using cleartext http:// "+
 			"exposes traffic to interception. Require TLS and remove arbitrary-load exceptions.",
 		insecureURLSkips...,
-	).WithCWE("319"))
+	).WithCWE("319").WithSkipTests())
 	security.Default.RegisterRule(swiftSensitiveUserDefaultsRule())
 	security.Default.RegisterRule(twoReRule(
 		"swift.insecure_random", "Insecure Random in Security Context", "cryptography", security.SevMedium, swiftLangs,
@@ -129,7 +129,7 @@ func init() {
 		"allowsAnyHTTPSCertificate or validatesDomainName = false disables TLS certificate "+
 			"validation, making connections trivially MITMable. Use the system trust store and "+
 			"implement certificate pinning if stronger guarantees are needed.",
-	).WithCWE("295"))
+	).WithCWE("295").WithSkipTests())
 	security.Default.RegisterRule(reRule(
 		"swift.hardcoded_iv", "Hardcoded Initialization Vector", "cryptography", security.SevHigh, swiftLangs,
 		reSwiftHardcodedIV,
@@ -368,7 +368,8 @@ func swiftSensitiveUserDefaultsRule() security.Rule {
 				if security.IsComment(line) {
 					continue
 				}
-				if reSwiftUserDefaults.MatchString(line) && reSwiftSensitiveKey.MatchString(line) {
+				stripped := security.StripStringsAndComments(line)
+				if reSwiftUserDefaults.MatchString(stripped) && reSwiftSensitiveKey.MatchString(stripped) {
 					out = append(out, security.NewFinding(filePath, i, lines))
 				}
 			}

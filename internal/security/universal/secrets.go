@@ -157,6 +157,9 @@ func PrivateKeyInSource() security.Rule {
 			"never be committed; rotate the key immediately and load it at runtime from a secret " +
 			"store or mounted secret.",
 		Detect: func(filePath string, lines []string) []security.Finding {
+			if security.IsTestPath(filePath) {
+				return nil
+			}
 			var out []security.Finding
 			for i, line := range lines {
 				if privateKeyHeader.MatchString(line) {
@@ -211,14 +214,11 @@ func SQLStringInterpolation() security.Rule {
 	}
 }
 
-// isLikelyTestPath reports whether a path is a test/mock/fixture file, where
-// literal-looking secrets are usually intentional fixtures.
+// isLikelyTestPath delegates to the canonical security.IsTestPath which covers
+// all language test conventions (Go _test.go, Swift *Test.swift, JS *.spec.ts,
+// Python test_*.py, plus test/mock/fixture/e2e directory components).
 func isLikelyTestPath(filePath string) bool {
-	low := strings.ToLower(filePath)
-	return strings.Contains(low, "test") ||
-		strings.Contains(low, "mock") ||
-		strings.Contains(low, "fixture") ||
-		strings.Contains(low, "spec")
+	return security.IsTestPath(filePath)
 }
 
 func containsAny(s string, subs []string) bool {

@@ -28,11 +28,12 @@ func reRule(id, name, category string, sev security.Severity, langs []string, re
 				if security.IsComment(line) {
 					continue
 				}
-				if !re.MatchString(line) {
+				stripped := security.StripStringsAndComments(line)
+				if !re.MatchString(stripped) {
 					continue
 				}
 				if len(skip) > 0 {
-					low := strings.ToLower(line)
+					low := strings.ToLower(stripped)
 					skipped := false
 					for _, s := range skip {
 						if strings.Contains(low, s) {
@@ -68,7 +69,8 @@ func twoReRule(id, name, category string, sev security.Severity, langs []string,
 				if security.IsComment(line) {
 					continue
 				}
-				if must.MatchString(line) && also.MatchString(line) {
+				stripped := security.StripStringsAndComments(line)
+				if must.MatchString(stripped) && also.MatchString(stripped) {
 					out = append(out, security.NewFinding(filePath, i, lines))
 				}
 			}
@@ -80,7 +82,7 @@ func twoReRule(id, name, category string, sev security.Severity, langs []string,
 // reSensitiveData matches variable/key names that suggest security-sensitive
 // values — reused across logging, storage, and SSRF rules.
 var reSensitiveData = regexp.MustCompile(
-	`(?i)\b(password|passwd|secret|api[_-]?key|token|credential|private[_-]?key|auth|nonce|salt)\b`,
+	`(?i)\b(password|passwd|passphrase|psk|secret|secretkey|api[_-]?key|apikey|token|credential|private[_-]?key|privkey|auth|nonce|salt)\b`,
 )
 
 // insecureURLSkips are hosts that legitimately appear behind http:// (loopback,
@@ -128,33 +130,9 @@ func credentialEntropy(s string) float64 {
 	return h
 }
 
-// isCredentialTestPath reports whether filePath is a test, fixture, mock, or
-// example path where hardcoded placeholder values are intentional and not secrets.
+// isCredentialTestPath delegates to the canonical security.IsTestPath.
 func isCredentialTestPath(filePath string) bool {
-	low := strings.ToLower(filePath)
-	for _, part := range strings.FieldsFunc(low, func(r rune) bool { return r == '/' || r == '\\' }) {
-		switch part {
-		case "test", "tests", "fixture", "fixtures",
-			"mock", "mocks", "__mocks__",
-			"example", "examples",
-			"testdata", "testfiles",
-			"spec", "specs", "__tests__":
-			return true
-		}
-	}
-	base := low
-	if idx := strings.LastIndexAny(low, "/\\"); idx >= 0 {
-		base = low[idx+1:]
-	}
-	return strings.HasSuffix(base, "_test.go") ||
-		strings.HasSuffix(base, "test.swift") ||
-		strings.HasSuffix(base, "test.kt") ||
-		strings.HasSuffix(base, ".test.ts") ||
-		strings.HasSuffix(base, ".spec.ts") ||
-		strings.HasSuffix(base, ".test.js") ||
-		strings.HasSuffix(base, ".spec.js") ||
-		strings.HasSuffix(base, "_test.py") ||
-		(strings.HasPrefix(base, "test_") && strings.Contains(base, ".py"))
+	return security.IsTestPath(filePath)
 }
 
 // credentialRule returns a CWE-798 rule for the given language set with
