@@ -90,6 +90,12 @@ code,.mono{font-family:var(--mono)}
 .as-section__head .ico{font-size:17px; line-height:1}
 .as-section__sub{color:var(--text-dim); font-size:12.5px; margin:-8px 0 14px}
 .as-sub{color:var(--text-dim); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; margin:14px 0 8px}
+.as-insights{margin:16px 0}
+.as-insights__head{display:flex; align-items:center; gap:9px; margin-bottom:10px}
+.as-insights__head h3{font-size:16px; font-weight:650; margin:0}
+.as-insights__head .ico{font-size:19px; line-height:1}
+.as-insights-grid{display:flex; flex-direction:column; gap:12px}
+.as-insights-grid .as-section{margin:0}
 .as-empty{color:var(--text-faint); font-size:13px; font-style:italic; margin:4px 0}
 .as-grid2{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px}
 

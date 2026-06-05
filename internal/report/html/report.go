@@ -52,7 +52,7 @@ func Render(res *result.AnalysisResult) string {
 
 	// Header
 	b.WriteString(`<div class="as-head"><div class="as-head__title">`)
-	b.WriteString(`<span class="as-brand">🏛️🔬 ArchScope </span>`)
+	b.WriteString(`<span class="as-brand">🏛️🔭 ArchScope </span>`)
 	fmt.Fprintf(&b, `<h1>%s</h1>`, esc(res.ProjectName))
 	b.WriteString(`</div>`)
 	b.WriteString(`<button id="as-theme-toggle" class="as-toggle">☀ Light</button>`)

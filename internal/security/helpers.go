@@ -11,16 +11,23 @@ import "strings"
 func IsTestPath(filePath string) bool {
 	low := strings.ToLower(filePath)
 	for _, part := range strings.FieldsFunc(low, func(r rune) bool { return r == '/' || r == '\\' }) {
+		// Any directory component that starts with "test" is a test directory:
+		// test, tests, testdata, testcerts, testutil, testutils, testhelper,
+		// testing, testsuites, testingcert, testinfra, testserver, etc.
+		if strings.HasPrefix(part, "test") {
+			return true
+		}
+		// Any component starting with "e2e" covers e2e, e2e_node, e2e_node_windows, etc.
+		if strings.HasPrefix(part, "e2e") {
+			return true
+		}
 		switch part {
-		case "test", "tests", "testdata", "testcerts", "testutil", "testutils",
-			"testhelper", "testhelpers", "testinfra",
-			"e2e", "e2e_node",
-			"fixture", "fixtures",
+		case "fixture", "fixtures",
 			"mock", "mocks", "__mocks__",
 			"spec", "specs", "__tests__",
 			"example", "examples",
 			"fuzz", "fuzzer", "fuzzers",
-			"integration_test", "int_test":
+			"integration", "integration_test", "int_test":
 			return true
 		}
 	}

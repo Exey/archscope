@@ -245,7 +245,7 @@ func renderGlobalCards(res *result.AnalysisResult) string {
 	card(&b, fmt.Sprintf("%d", len(res.Files)), "source files", false)
 	card(&b, fmt.Sprintf("%d", decls), "declarations", false)
 	card(&b, fmt.Sprintf("%d", len(res.Scan.Modules)), "modules", false)
-	cardDangerIndex(&b, fmt.Sprintf("%d/1000", res.SecurityScore.Total))
+	cardDangerIndex(&b, fmt.Sprintf("%.1f%%", float64(res.SecurityScore.Total)/10.0))
 	card(&b, fmt.Sprintf("%d", len(platforms)), plural(len(platforms), "platform", "platforms"), false)
 	b.WriteString(`</div>`)
 	return b.String()
@@ -264,7 +264,7 @@ func card(b *strings.Builder, num, label string, accent bool) {
 func cardDangerIndex(b *strings.Builder, score string) {
 	b.WriteString(`<div class="as-card as-card--accent">`)
 	fmt.Fprintf(b, `<span class="as-card__num">%s</span>`, esc(score))
-	b.WriteString(`<span class="as-card__label">danger index</span>`)
+	b.WriteString(`<span class="as-card__label">Danger rate</span>`)
 	b.WriteString(`</div>`)
 }
 
@@ -633,37 +633,11 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 	// 1. 🛡️ Danger Details — security findings for this platform
 	b.WriteString(renderPlatformSecurity(res, pg.Platform))
 
-	// 2. 📝 TODOs & FIXMEs
-	b.WriteString(renderPenetrationMatrix(files))
-	b.WriteString(renderTodosFixmes(files))
+	// 2. 💡 Module Insights — grouped: Hotspots · Microservices · Penetration · TODOs
+	b.WriteString(renderModuleInsights(res, pg, files))
 
-	// 3. 🕸️ Dependency Hotspots
-	b.WriteString(renderHotspots(res, pg))
-
-	// 4. 📏 Longest Functions
+	// 3. 📏 Longest Functions
 	b.WriteString(renderLongestFunctions(files, res.RootPath))
-
-	// 5. 🔧 Microservices / 📦 Packages & Modules — module/package grid (last)
-	if len(pg.Modules) > 0 {
-		icon, label := langspec.Default.ModuleNoun(pg.Platform)
-		fmt.Fprintf(&b, `<div class="as-section"><div class="as-section__head"><span class="ico">%s</span><h3>%s <span class="as-count">(%d)</span></h3></div><div class="as-modgrid">`,
-			esc(icon), esc(label), len(pg.Modules))
-		counts := map[string]int{}
-		mloc := map[string]int{}
-		for _, f := range files {
-			counts[f.ModuleName]++
-			mloc[f.ModuleName] += f.LineCount
-		}
-		for _, m := range pg.Modules {
-			name := m
-			if name == "" {
-				name = "(root)"
-			}
-			fmt.Fprintf(&b, `<a class="as-mod" href="#mod-%s"><div class="as-mod__name">%s</div><div class="as-mod__meta">%d %s · %s loc</div></a>`,
-				esc(anchorID(m)), esc(name), counts[m], plural(counts[m], "file", "files"), fmtNum(mloc[m]))
-		}
-		b.WriteString(`</div></div>`)
-	}
 
 	// language-scoped + universal report-module panels
 	b.WriteString(renderModulePanels(res.PanelsForPlatform(pg.Platform)))
@@ -753,6 +727,63 @@ func renderHotspots(res *result.AnalysisResult, pg *scanner.PlatformGroup) strin
 			esc(name), r.uses, fmtNum(r.lines), r.decl)
 	}
 	b.WriteString(`</tbody></table></div>`)
+	return b.String()
+}
+
+// renderMicroservicesSection renders the module/package grid card.
+func renderMicroservicesSection(pg *scanner.PlatformGroup, files []*parser.ParsedFile) string {
+	if len(pg.Modules) == 0 {
+		return ""
+	}
+	icon, label := langspec.Default.ModuleNoun(pg.Platform)
+	counts := map[string]int{}
+	mloc := map[string]int{}
+	for _, f := range files {
+		counts[f.ModuleName]++
+		mloc[f.ModuleName] += f.LineCount
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `<div class="as-section"><div class="as-section__head"><span class="ico">%s</span><h3>%s <span class="as-count">(%d)</span></h3></div><div class="as-modgrid">`,
+		esc(icon), esc(label), len(pg.Modules))
+	for _, m := range pg.Modules {
+		name := m
+		if name == "" {
+			name = "(root)"
+		}
+		fmt.Fprintf(&b, `<a class="as-mod" href="#mod-%s"><div class="as-mod__name">%s</div><div class="as-mod__meta">%d %s · %s loc</div></a>`,
+			esc(anchorID(m)), esc(name), counts[m], plural(counts[m], "file", "files"), fmtNum(mloc[m]))
+	}
+	b.WriteString(`</div></div>`)
+	return b.String()
+}
+
+// renderModuleInsights groups Dependency Hotspots, Microservices, Module
+// Penetration, and TODOs & FIXMEs under a single "💡 Module Insights" header
+// in a responsive two-column grid.
+func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup, files []*parser.ParsedFile) string {
+	var parts []string
+	if h := renderHotspots(res, pg); h != "" {
+		parts = append(parts, h)
+	}
+	if m := renderMicroservicesSection(pg, files); m != "" {
+		parts = append(parts, m)
+	}
+	if p := renderPenetrationMatrix(files); p != "" {
+		parts = append(parts, p)
+	}
+	if t := renderTodosFixmes(files); t != "" {
+		parts = append(parts, t)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="as-insights"><div class="as-insights__head"><span class="ico">💡</span><h3>Module Insights</h3></div>`)
+	b.WriteString(`<div class="as-insights-grid">`)
+	for _, p := range parts {
+		b.WriteString(p)
+	}
+	b.WriteString(`</div></div>`)
 	return b.String()
 }
 
