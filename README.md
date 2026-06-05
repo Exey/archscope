@@ -15,7 +15,7 @@ go run ./cmd/archscope ~/code --open
 
 ---
 
-### What the Report Contains
+## What the Report Contains
 
 1. **Summary bar** — lines of code, source files, declarations, modules, **Danger rate** (0–100% scaled from the 1000-point index), and platform count. One tab per detected language.
 
