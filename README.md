@@ -48,7 +48,7 @@ go run ./cmd/archscope ~/code --open
 - **Tags & commits** — semver tag list, commit volume, conventional-commit hygiene.
 - **Branch inventory** — all branches with stale detection.
 
-7. **📂 Modules & Microservices** — per-module deep-dive at the bottom of the report: project-type badge, declaration mix (🟢 struct · 🔵 class · 🟣 protocol · 🟡 enum · 🔴 actor · 🔹 extension · 🟠 func), and a full file inventory (lines, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
+7. **📂 Modules & Microservices** — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
 
 ---
 
