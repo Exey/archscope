@@ -15,7 +15,7 @@ go run ./cmd/archscope ~/code --open
 
 ---
 
-### What the Report Contains
+## What the Report Contains
 
 1. **Summary bar** — lines of code, source files, declarations, modules, **Danger rate** (0–100% scaled from the 1000-point index), and platform count. One tab per detected language.
 
@@ -48,7 +48,7 @@ go run ./cmd/archscope ~/code --open
 - **Tags & commits** — semver tag list, commit volume, conventional-commit hygiene.
 - **Branch inventory** — all branches with stale detection.
 
-7. **📂 Modules & Microservices** — per-module deep-dive at the bottom of the report: project-type badge, declaration mix (🟢 struct · 🔵 class · 🟣 protocol · 🟡 enum · 🔴 actor · 🔹 extension · 🟠 func), and a full file inventory (lines, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
+7. **📂 Modules & Microservices** — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
 
 ---
 
