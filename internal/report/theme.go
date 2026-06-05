@@ -273,7 +273,8 @@ a.as-mod:hover{border-color:var(--accent)}
   background:var(--accent-dim); color:var(--accent); font-weight:600}
 .as-pkg-stats{font-weight:400; color:var(--text-faint); font-size:12.5px; margin-left:auto}
 .as-pkg-detail{color:var(--text-dim); font-size:12.5px; margin:6px 0 12px}
-.as-file-table{width:100%; table-layout:auto}
+.as-file-table{width:100%; table-layout:fixed}
+.as-file-table th:first-child,.as-file-table td:first-child{width:50%; overflow:hidden}
 .as-file-table th:nth-child(2),.as-file-table td:nth-child(2),
 .as-file-table th:nth-child(3),.as-file-table td:nth-child(3){text-align:right; width:60px; white-space:nowrap}
 .as-file-table td{vertical-align:top}

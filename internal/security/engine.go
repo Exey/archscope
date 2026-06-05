@@ -232,6 +232,19 @@ func (e *Engine) ComputeScore(results []RuleResult, fileCount int) Score {
 			risk = density / (density + densityConstant)
 		}
 		points := int(risk*float64(cat.Weight) + 0.5)
+
+		// Each HIGH finding guarantees at least 1 point from its category,
+		// so sparse HIGH issues (1-3 in a large codebase) always register.
+		highViol := 0
+		for _, r := range rs {
+			if r.Rule.Severity == SevHigh {
+				highViol += r.TotalCount
+			}
+		}
+		if floor := min(highViol, cat.Weight); points < floor {
+			points = floor
+		}
+
 		total += points
 
 		cats = append(cats, CategoryScore{

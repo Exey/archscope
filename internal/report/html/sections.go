@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html"
 	"math"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -1056,7 +1057,7 @@ func renderChurn(churn []git.FileChurnStat) string {
 	}
 	b.WriteString(`<table class="as-table"><thead><tr><th>File</th><th>Changes</th></tr></thead><tbody>`)
 	for _, c := range churn {
-		fmt.Fprintf(&b, `<tr><td class="mono">%s</td><td class="mono">%d</td></tr>`, esc(c.RelPath), c.ChangeCount)
+		fmt.Fprintf(&b, `<tr><td class="mono">%s</td><td class="mono">%d</td></tr>`, esc(shortenPathFront(c.RelPath, 40)), c.ChangeCount)
 	}
 	b.WriteString(`</tbody></table></div>`)
 	return b.String()
@@ -1138,6 +1139,39 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// isTestFile returns true for test files across all supported languages.
+func isTestFile(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	switch {
+	case strings.HasSuffix(base, "_test.go"):
+		return true
+	case strings.HasSuffix(base, "test.swift"), strings.HasSuffix(base, "tests.swift"),
+		strings.HasSuffix(base, "spec.swift"):
+		return true
+	case strings.HasSuffix(base, "test.kt"), strings.HasSuffix(base, "tests.kt"),
+		strings.HasSuffix(base, "spec.kt"):
+		return true
+	case strings.Contains(base, ".test.ts"), strings.Contains(base, ".spec.ts"),
+		strings.Contains(base, ".test.tsx"), strings.Contains(base, ".spec.tsx"),
+		strings.Contains(base, ".test.js"), strings.Contains(base, ".spec.js"):
+		return true
+	case strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py"):
+		return true
+	case strings.HasSuffix(base, "_test.py"):
+		return true
+	}
+	return false
+}
+
+// shortenPathFront shortens s to max chars by removing the beginning, e.g.
+// "…cmd/server/handler.go" instead of "pkg/internal/cmd/server/handler.go".
+func shortenPathFront(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return "…" + s[len(s)-(max-1):]
 }
 
 // ── vscode:// links + declaration icons ──────────────────────────────────────
@@ -1286,15 +1320,29 @@ func renderModuleDetails(res *result.AnalysisResult) string {
 			b.WriteString(g)
 		}
 
-		// file inventory table
-		files := append([]*parser.ParsedFile(nil), m.files...)
-		sort.SliceStable(files, func(i, j int) bool { return files[i].LineCount > files[j].LineCount })
-		b.WriteString(`<table class="as-table as-file-table"><thead><tr><th>File</th><th>Lines</th><th>Decl</th><th>Declarations</th></tr></thead><tbody>`)
+		// file inventory table — filter out test files and tiny stub files
+		all := append([]*parser.ParsedFile(nil), m.files...)
+		sort.SliceStable(all, func(i, j int) bool { return all[i].LineCount > all[j].LineCount })
+		var files []*parser.ParsedFile
+		for _, f := range all {
+			if isTestFile(f.FilePath) {
+				continue
+			}
+			if len(f.Declarations) == 0 && f.LineCount < 30 {
+				continue
+			}
+			files = append(files, f)
+		}
+		if len(files) == 0 {
+			b.WriteString(`</div>`)
+			continue
+		}
+		b.WriteString(`<table class="as-table as-file-table"><thead><tr><th style="width:50%">File</th><th>Lines</th><th>Decl</th><th>Declarations</th></tr></thead><tbody>`)
 		for _, f := range files {
 			dir, base := splitRel(f.FilePath, res.RootPath)
 			fileCell := ""
 			if dir != "" {
-				fileCell = fmt.Sprintf(`<span class="as-file-dir">%s</span>`, esc(dir))
+				fileCell = fmt.Sprintf(`<span class="as-file-dir">%s</span>`, esc(shortenPathFront(dir, 40)))
 			}
 			if href := vscodeHref(f.FilePath, 0); href != "" {
 				fileCell += fmt.Sprintf(`<a class="as-vs" href="%s" title="Open in VS Code"><strong>%s</strong></a>`, esc(href), esc(base))
@@ -1303,8 +1351,8 @@ func renderModuleDetails(res *result.AnalysisResult) string {
 			}
 			if f.Description != "" {
 				d := f.Description
-				if len(d) > 120 {
-					d = d[:120] + "…"
+				if len(d) > 80 {
+					d = d[:80] + "…"
 				}
 				fileCell += fmt.Sprintf(`<div class="as-file-desc">💡 %s</div>`, esc(d))
 			}

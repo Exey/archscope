@@ -776,7 +776,7 @@ func renderLongestFunctions(files []*parser.ParsedFile, rootPath string) string 
 	}
 	var fns []entry
 	for _, f := range files {
-		if f.LongestFunc != nil {
+		if f.LongestFunc != nil && !isTestFile(f.FilePath) {
 			fns = append(fns, entry{f.LongestFunc, f.ModuleName})
 		}
 	}
