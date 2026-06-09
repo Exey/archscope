@@ -25,7 +25,11 @@ import (
 
 	"github.com/exey/archscope/internal/config"
 	"github.com/exey/archscope/internal/fetch"
-	_ "github.com/exey/archscope/internal/lang" // register all language specs via init()
+	_ "github.com/exey/archscope/internal/lang"                    // register language specs
+	_ "github.com/exey/archscope/internal/modules/arch"            // register report modules
+	_ "github.com/exey/archscope/internal/modules/dddmodel"
+	_ "github.com/exey/archscope/internal/modules/designpattern"
+	_ "github.com/exey/archscope/internal/modules/oopvspop"
 	htmlreport "github.com/exey/archscope/internal/report/html"
 	"github.com/exey/archscope/internal/report/sarif"
 	"github.com/exey/archscope/internal/result"

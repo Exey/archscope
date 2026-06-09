@@ -21,34 +21,42 @@ go run ./cmd/archscope ~/code --open
 
 2. **🧰 Tech Stack & Modules** — repo-wide tag cloud: languages present + frameworks auto-detected from imports (SwiftUI, Combine, React, Next.js, Django, FastAPI, gRPC, GORM, …) and from config files (docker-compose, go.mod, Makefile). Below it: a package grid sized by LOC with per-language badges. DevOps tools (Docker, Kubernetes, GitHub Actions, etc.) appear when detected.
 
-3. **🗺️ Architecture Graph**
+3. **🛡️ Danger Index** — weighted security score (0 = hardened → 100% = critical) across **14 categories**, each with its own weight and a saturating violation-density curve. Risk band: Hardened / Minor exposure / Elevated risk / Critical exposure. Backed by **130+ security rules** across all languages plus universal cross-language checks.
 
-4. **🛡️ Danger Index** — weighted security score (0 = hardened → 100% = critical) across **14 categories**, each with its own weight and a saturating violation-density curve. Risk band: Hardened / Minor exposure / Elevated risk / Critical exposure. Backed by **130+ security rules** across all languages plus universal cross-language checks.
+4. **Per-platform tabs** — one tab per language, each containing:
 
-5. **Per-platform tabs** — one tab per language, each containing:
+   - **🏛️ Architecture** — *client* languages (Swift/ObjC, Kotlin, TS/JS) get **app-architecture pattern detection**: MVC, MVVM (and variants), VIPER, VIP, RIBs, Clean, Redux, TCA, MVP, MV — scored by role conventions and weighted signals. *Backend* languages (Go, Python) get a **layered architecture view**: API / Models / Services / Persistence / Auth / Config / CLI / Infra / Tests bars + detected component chips.
 
-- **🏛️ Architecture** — *client* languages (Swift/ObjC, Kotlin, TS/JS) get **app-architecture pattern detection**: MVC, MVVM (and variants), VIPER, VIP, RIBs, Clean, Redux, TCA, MVP, MV — scored by role conventions and weighted signals. *Backend* languages (Go, Python) get a **layered architecture view**: API / Models / Services / Persistence / Auth / Config / CLI / Infra / Tests bars + detected component chips.
+   - **📐 Domain Model** *(Go · Python · Kotlin)* — spectrum from **Anemic Domain Model** (DAO/DTO/Manager-heavy service layer) to **Rich Domain Model** (DDD tactical patterns). Scored across three weighted dimensions:
+     - *Rich Domain Types* (40%) — Entities, Value Objects, Aggregates (×2) vs. DAO/DTO/Manager/BO/DO/PO. Detects both **Java/Kotlin-style suffixes** (`*Entity`, `*Repository`) and **Go/Python-style directory conventions** (`aggregate/`, `entity/`, `valueobject/`).
+     - *Tactical DDD Patterns* (35%) — Repository, Domain Event, Domain Service, Specification, Use Case, Factory, Event Handler. 5 of 7 = full score.
+     - *Layer Separation* (25%) — presence of `/domain/`, `/infrastructure/`, `/application/`, hex-arch port/adapter paths vs. anemic `/dao/` structure. Supports Go monorepo layouts (`/pkg/domain/`, `/internal/domain/`).
+     - Verdict: **Strong Rich Domain Model → Leaning DDD → Transitional → Leaning Anemic → Strong Anemic → No Domain Model Detected**.
+     - Gradient spectrum bar, per-category bars, metrics table with tooltips and found-type examples.
 
-- **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
+   - **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
 
-- **💡 Module Insights** — four sub-sections stacked vertically:
-  - **🕸️ Dependency Hotspots** — modules ranked by in-degree (how many others depend on them), with Lines & Decl. Backend tabs also include an inline **SVG dependency graph** (node radius ∝ dependents).
-  - **🔧 Microservices** *(Go)* / **📦 Packages & Modules** *(other languages)* — clickable module grid with file count and LOC.
-  - **🔗 Module Penetration** — modules imported by the most other modules (highest shared-dependency risk).
-  - **📝 TODOs & FIXMEs** — per-module TODO and FIXME counts, sorted by total.
+   - **💡 Module Insights** — four sub-sections in a responsive grid:
+     - **🕸️ Dependency Hotspots** — modules ranked by in-degree (how many others depend on them), with Lines & Decl. Backend tabs also include an inline **SVG dependency graph** (node radius ∝ dependents).
+     - **🔧 Microservices** *(Go)* / **📦 Packages & Modules** *(other languages)* — clickable module grid with file count and LOC.
+     - **🔗 Module Penetration** — modules imported by the most other modules (highest shared-dependency risk).
+     - **📝 TODOs & FIXMEs** — per-module TODO and FIXME counts, sorted by total.
 
-- **📏 Longest Functions** — top 20 non-test functions by line count, with module and VS Code link.
+   - **📏 Longest Functions** — top 20 non-test functions by line count, with module and VS Code link.
 
+   - **🧩 Design Patterns** *(all languages)* — GoF pattern detection: Factory, Singleton, Observer, Strategy, Decorator, Builder, Adapter, Facade, Command, Template Method, and more.
 
-6. **🐙 Git Analysis** (repo-wide):
+   - **⚖️ OOP vs POP** *(Swift)* — protocol-oriented vs. object-oriented signal across five categories (Type System, Abstraction, Composition, Behavior, Architecture), with a spectrum bar and per-category breakdown.
 
-- **Branching model classifier** — scores Gitflow / Trunk-Based / GitHub Flow / GitLab Flow / OneFlow with confidence % and detected signals.
-- **Top contributors** — commits and files touched per author.
-- **File churn** — most-modified files across history.
-- **Tags & commits** — semver tag list, commit volume, conventional-commit hygiene.
-- **Branch inventory** — all branches with stale detection.
+5. **🐙 Git Analysis** (repo-wide):
 
-7. **📂 Modules & Microservices** — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
+   - **Branching model classifier** — scores Gitflow / Trunk-Based / GitHub Flow / GitLab Flow / OneFlow with confidence % and detected signals.
+   - **Top contributors** — commits and files touched per author.
+   - **File churn** — most-modified files across history.
+   - **Tags & commits** — semver tag list, commit volume, conventional-commit hygiene.
+   - **Branch inventory** — all branches with stale detection.
+
+6. **📂 Modules & Microservices** — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
 
 ---
 
@@ -213,6 +221,7 @@ internal/
   fetch/       remote git-URL resolution (clone + cleanup)
   modules/     pluggable report modules
     arch/        architecture: client pattern detection + backend layered view
+    dddmodel/    DDD vs. Anemic Domain Model analyzer (Go · Python · Kotlin)
     designpattern/ universal GoF detector
     oopvspop/    Swift-only OOP↔POP analyzer
   result/      AnalysisResult aggregate + pipeline (Run / RunWithProgress)

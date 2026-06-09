@@ -631,6 +631,16 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 		langCount[f.LanguageID] = true
 	}
 
+	// Split module panels so Domain Model sits immediately after Architecture.
+	var dddPanels, otherPanels []result.ModulePanel
+	for _, p := range res.PanelsForPlatform(pg.Platform) {
+		if p.ModuleID == "dddmodel" {
+			dddPanels = append(dddPanels, p)
+		} else {
+			otherPanels = append(otherPanels, p)
+		}
+	}
+
 	var b strings.Builder
 	// per-platform cards
 	b.WriteString(`<div class="as-cards">`)
@@ -640,7 +650,7 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 	card(&b, fmtNum(len(pg.Modules)), plural(len(pg.Modules), "module", "modules"), false)
 	b.WriteString(`</div>`)
 
-	// Architecture layers + tech components (all platforms)
+	// 1. 🏛️ Architecture layers + tech components (all platforms)
 	if layersHTML := renderArchLayers(files); layersHTML != "" {
 		techSet := buildTechSet(res, files)
 		componentsHTML := renderArchComponents(files, techSet)
@@ -650,17 +660,20 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 		b.WriteString(`</div>`)
 	}
 
-	// 1. 🛡️ Danger Details — security findings for this platform
+	// 2. 📐 Domain Model — directly after Architecture
+	b.WriteString(renderModulePanels(dddPanels))
+
+	// 3. 🛡️ Danger Details — security findings for this platform
 	b.WriteString(renderPlatformSecurity(res, pg.Platform))
 
-	// 2. 💡 Module Insights — grouped: Hotspots · Microservices · Penetration · TODOs
+	// 4. 💡 Module Insights — grouped: Hotspots · Microservices · Penetration · TODOs
 	b.WriteString(renderModuleInsights(res, pg, files))
 
-	// 3. 📏 Longest Functions
+	// 5. 📏 Longest Functions
 	b.WriteString(renderLongestFunctions(files, res.RootPath))
 
-	// language-scoped + universal report-module panels
-	b.WriteString(renderModulePanels(res.PanelsForPlatform(pg.Platform)))
+	// 6. Remaining language-scoped + universal report-module panels
+	b.WriteString(renderModulePanels(otherPanels))
 	return b.String()
 }
 
