@@ -51,6 +51,14 @@ type GitMetadata struct {
 	FirstCommitDate float64  `json:"firstCommitDate"`
 }
 
+// TodoItem is one TODO or FIXME occurrence with its location and text.
+type TodoItem struct {
+	FilePath string `json:"filePath"`
+	Line     int    `json:"line"`
+	Kind     string `json:"kind"` // "TODO" or "FIXME"
+	Text     string `json:"text"` // trimmed line text (comment stripped)
+}
+
 // ParsedFile is the universal product of parsing any source file.
 type ParsedFile struct {
 	FilePath     string         `json:"filePath"`
@@ -64,6 +72,7 @@ type ParsedFile struct {
 	LineCount    int            `json:"lineCount"`
 	TodoCount    int            `json:"todoCount"`
 	FixmeCount   int            `json:"fixmeCount"`
+	Todos        []TodoItem     `json:"todos,omitempty"`
 	LongestFunc  *FunctionInfo  `json:"longestFunction,omitempty"`
 	BigFunctions []FunctionInfo `json:"bigFunctions,omitempty"`
 	GitMeta      GitMetadata    `json:"gitMetadata"`

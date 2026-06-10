@@ -130,7 +130,7 @@ code,.mono{font-family:var(--mono)}
 
 /* Tabs (pure CSS via radio inputs) */
 .as-tabs__radios{position:absolute; opacity:0; pointer-events:none}
-.as-tabbar{display:flex; gap:4px; flex-wrap:wrap; border-bottom:1px solid var(--border); margin:26px 0 0}
+.as-tabbar{display:flex; gap:4px; flex-wrap:wrap; border-bottom:1px solid var(--border); margin:8px 0 0}
 .as-tab{
   padding:9px 16px; cursor:pointer; font-size:13.5px; font-weight:600; color:var(--text-dim);
   border:1px solid transparent; border-bottom:none; border-radius:8px 8px 0 0; position:relative; top:1px;

@@ -167,12 +167,20 @@ func ParseUniversal(filePath string, lines []string, spec *langspec.LanguageSpec
 		for _, marker := range spec.Patterns.TodoMarkers {
 			if strings.Contains(raw, marker) {
 				pf.TodoCount++
+				pf.Todos = append(pf.Todos, TodoItem{
+					FilePath: filePath, Line: lineNo, Kind: "TODO",
+					Text: extractTodoText(raw),
+				})
 				break
 			}
 		}
 		for _, marker := range spec.Patterns.FixmeMarkers {
 			if strings.Contains(raw, marker) {
 				pf.FixmeCount++
+				pf.Todos = append(pf.Todos, TodoItem{
+					FilePath: filePath, Line: lineNo, Kind: "FIXME",
+					Text: extractTodoText(raw),
+				})
 				break
 			}
 		}
@@ -225,4 +233,21 @@ func mapDeclKind(spec *langspec.LanguageSpec, keyword string) DeclKind {
 		}
 	}
 	return DeclType
+}
+
+// extractTodoText trims comment markers and whitespace from a raw line,
+// returning a short readable quote of the TODO/FIXME text.
+func extractTodoText(raw string) string {
+	// Strip common single-line comment prefixes then whitespace.
+	s := strings.TrimSpace(raw)
+	for _, pfx := range []string{"//", "#", "--", "/*", "*", "<!--"} {
+		if strings.HasPrefix(s, pfx) {
+			s = strings.TrimSpace(s[len(pfx):])
+			break
+		}
+	}
+	if len(s) > 120 {
+		s = s[:120] + "…"
+	}
+	return s
 }

@@ -362,9 +362,40 @@ func renderSecurityIndex(res *result.AnalysisResult) string {
 	b.WriteString(renderSecurityRules(res.Security))
 
 	if len(platFindings) > 0 {
+		// Mirror the exact sort used in renderTabs so order matches the tab bar.
+		platLOC := map[langspec.Platform]int{}
+		for _, f := range res.Files {
+			platLOC[langspec.Platform(f.Platform)] += f.LineCount
+		}
+		orderedPlats := append([]*scanner.PlatformGroup(nil), res.Scan.PlatformsOrdered()...)
+		if res.Scan.FolderAsTab {
+			folderLOC := map[string]int{}
+			for _, pg := range orderedPlats {
+				folderLOC[tabFolder(pg.Platform)] += platLOC[pg.Platform]
+			}
+			sort.SliceStable(orderedPlats, func(i, j int) bool {
+				fi, fj := tabFolder(orderedPlats[i].Platform), tabFolder(orderedPlats[j].Platform)
+				if fi != fj {
+					li, lj := folderLOC[fi], folderLOC[fj]
+					if li != lj {
+						return li > lj
+					}
+					return fi < fj
+				}
+				return orderedPlats[i].TabLabel() < orderedPlats[j].TabLabel()
+			})
+		} else {
+			sort.SliceStable(orderedPlats, func(i, j int) bool {
+				li, lj := platLOC[orderedPlats[i].Platform], platLOC[orderedPlats[j].Platform]
+				if li != lj {
+					return li > lj
+				}
+				return orderedPlats[i].FileCount > orderedPlats[j].FileCount
+			})
+		}
 		b.WriteString(`<div class="as-sub" style="margin-bottom:8px">Findings by Platform</div>`)
 		b.WriteString(`<div class="as-sec-plat-row">`)
-		for _, pg := range res.Scan.PlatformsOrdered() {
+		for _, pg := range orderedPlats {
 			total := platFindings[pg.Platform]
 			if total == 0 {
 				continue
@@ -425,49 +456,56 @@ func renderSecurityIndex(res *result.AnalysisResult) string {
 func renderSecurityRules(results []security.RuleResult) string {
 	// Display names for known CWE IDs. Unknown IDs fall back to "CWE-NNN".
 	cweNames := map[string]string{
-		"16":   "Security Misconfiguration",
+		"16":   "Security Configuration Errors",
 		"22":   "Path Traversal",
-		"78":   "Command Injection",
+		"78":   "OS Command Injection",
 		"79":   "Cross-Site Scripting",
 		"89":   "SQL Injection",
 		"94":   "Code Injection",
-		"119":  "Memory Corruption",
+		"117":  "Log Output Neutralization",
+		"119":  "Buffer Overflow",
 		"272":  "Least Privilege Violation",
-		"295":  "Certificate Validation",
-		"311":  "Missing Encryption",
+		"276":  "Incorrect Default Permissions",
+		"295":  "Improper Certificate Validation",
+		"311":  "Missing Encryption of Sensitive Data",
 		"319":  "Cleartext Transmission",
-		"321":  "Hard-coded Crypto Key",
-		"327":  "Broken Crypto Algorithm",
-		"328":  "Weak Hash Algorithm",
-		"329":  "Hardcoded IV / Nonce",
-		"338":  "Weak PRNG",
-		"346":  "WebView Isolation",
-		"477":  "Deprecated API",
-		"489":  "Active Debug Code",
-		"502":  "Insecure Deserialization",
-		"522":  "Insecure Credentials",
-		"532":  "Sensitive Data in Logs",
-		"798":  "Hardcoded Credentials",
-		"922":  "Insecure Web Storage",
-		"926":  "Exported Android Component",
-		"942":  "CORS Wildcard",
-		"943":  "NoSQL Injection",
-		"476":  "Null Pointer Dereference",
-		"611":  "XML External Entity (XXE)",
-		"614":  "Insecure Cookie — No Secure Flag",
-		"918":  "Server-Side Request Forgery",
-		"1004": "HttpOnly Cookie",
-		"1321": "Prototype Pollution",
-		"117":  "Log Injection",
-		"235":  "HTTP Parameter Pollution",
-		"347":  "Improper JWT Verification",
+		"321":  "Hard-coded Cryptographic Key",
+		"327":  "Broken or Risky Crypto Algorithm",
+		"328":  "Weak Hash",
+		"329":  "Not Using Random IV with CBC Mode",
+		"338":  "Cryptographically Weak PRNG",
+		"346":  "Origin Validation Error",
+		"347":  "Improper Cryptographic Signature Check",
+		"352":  "Cross-Site Request Forgery",
 		"362":  "Race Condition (TOCTOU)",
+		"400":  "Uncontrolled Resource Consumption",
 		"434":  "Unrestricted File Upload",
-		"530":  "Android Backup Enabled",
-		"616":  "Incomplete Instruction",
-		"749":  "WebView JS Interface",
-		"916":  "Weak Password Hash",
-		"1333": "ReDoS — Catastrophic Backtracking",
+		"476":  "NULL Pointer Dereference",
+		"477":  "Use of Obsolete Function",
+		"489":  "Active Debug Code",
+		"502":  "Deserialization of Untrusted Data",
+		"522":  "Insufficiently Protected Credentials",
+		"530":  "Exposure of Backup File",
+		"532":  "Sensitive Info in Log File",
+		"601":  "URL Redirection to Untrusted Site",
+		"611":  "XML External Entity (XXE)",
+		"614":  "Sensitive Cookie Without Secure Flag",
+		"693":  "Protection Mechanism Failure",
+		"732":  "Incorrect Permission Assign for Crit. Resource",
+		"749":  "Exposed Dangerous Method",
+		"770":  "Allocation of Resources Without Limits",
+		"798":  "Hard-coded Credentials",
+		"913":  "Improper Control of Dynamic-Managed Code",
+		"916":  "Weak Password Hash Algorithm",
+		"918":  "Server-Side Request Forgery",
+		"922":  "Insecure Storage of Sensitive Info",
+		"926":  "Improper Export of Android Components",
+		"942":  "Permissive CORS Policy",
+		"943":  "NoSQL Injection",
+		"1004": "Sensitive Cookie Without HttpOnly Flag",
+		"1299": "Missing Protection for Alternate Hardware",
+		"1321": "Prototype Pollution",
+		"1333": "Regular Expression DoS",
 		"1336": "Server-Side Template Injection",
 	}
 
@@ -482,12 +520,14 @@ func renderSecurityRules(results []security.RuleResult) string {
 	}
 
 	// Aggregate per CWE: check count + which language IDs cover it.
+	// Also track which CWEs have actual findings (not passed) for red border.
 	type cweInfo struct {
 		n           int
 		isUniversal bool
 		langs       map[string]bool
 	}
 	info := map[string]*cweInfo{}
+	failedCWEs := map[string]bool{}
 	for _, rr := range results {
 		if rr.Rule.CWE == "" {
 			continue
@@ -504,6 +544,9 @@ func renderSecurityRules(results []security.RuleResult) string {
 			for _, l := range rr.Rule.Languages {
 				ci.langs[l] = true
 			}
+		}
+		if !rr.Passed() {
+			failedCWEs[rr.Rule.CWE] = true
 		}
 	}
 
@@ -549,12 +592,16 @@ func renderSecurityRules(results []security.RuleResult) string {
 				}
 			}
 		}
+		itemStyle := ""
+		if failedCWEs[e.id] {
+			itemStyle = ` style="border:1px solid #c05040;"`
+		}
 		fmt.Fprintf(&b,
-			`<div class="as-cwe-item">`+
+			`<div class="as-cwe-item"%s>`+
 				`<div class="as-cwe-top"><a class="as-cwe-item-id" href="%s" target="_blank" rel="noopener noreferrer">CWE-%s</a>%s</div>`+
 				`<span class="as-cwe-item-name">%s <span class="as-cwe-count">(%d %s)</span></span>`+
 				`</div>`,
-			url, e.id, langHTML.String(), esc(name), e.ci.n, word)
+			itemStyle, url, e.id, langHTML.String(), esc(name), e.ci.n, word)
 	}
 	b.WriteString(`</div>`)
 	return b.String()
@@ -622,6 +669,7 @@ func renderTabs(res *result.AnalysisResult) string {
 	}
 
 	var b strings.Builder
+	b.WriteString(`<div class="as-sub" style="margin-top:16px;margin-bottom:4px">Platforms</div>`)
 	fmt.Fprintf(&b, `<div class="%s">`, outerClass)
 	// radios
 	for i := range platforms {
@@ -669,6 +717,17 @@ func tabFolder(p langspec.Platform) string {
 	return s
 }
 
+// platBadgeHTML returns a small colored pill showing the tab label,
+// placed before the section icon in every platform-tab card header.
+func platBadgeHTML(pg *scanner.PlatformGroup) string {
+	cls := string(pg.LanguagePlatform)
+	if cls == "" {
+		cls = string(pg.Platform)
+	}
+	return fmt.Sprintf(`<span class="as-plat-badge as-plat-%s" style="margin-right:6px;font-size:11px;vertical-align:middle">%s</span>`,
+		esc(cls), esc(pg.TabLabel()))
+}
+
 func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) string {
 	files := res.FilesForPlatform(pg.Platform)
 	lines, decls := 0, 0
@@ -679,18 +738,19 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 		langCount[f.LanguageID] = true
 	}
 
-	// Split module panels: Domain Model second, Traffic third, rest at the bottom.
-	// Architecture is already rendered in its own dedicated section above, so its
-	// panel is dropped here to avoid showing a duplicate.
-	var dddPanels, trafficPanels, otherPanels []result.ModulePanel
+	// Split panels: architecture dropped (rendered above), ddd, traffic,
+	// design patterns (move into Module Insights), rest.
+	var dddPanels, trafficPanels, designPanels, otherPanels []result.ModulePanel
 	for _, p := range res.PanelsForPlatform(pg.Platform) {
 		switch p.ModuleID {
 		case "architecture":
 			// rendered in the dedicated Architecture section above; skip
-		case "dddmodel":
+		case "dddmodel", "oopvspop":
 			dddPanels = append(dddPanels, p)
 		case "traffic":
 			trafficPanels = append(trafficPanels, p)
+		case "designpattern":
+			designPanels = append(designPanels, p)
 		default:
 			otherPanels = append(otherPanels, p)
 		}
@@ -704,32 +764,37 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 	card(&b, fmtNum(len(pg.Modules)), plural(len(pg.Modules), "module", "modules"), false)
 	b.WriteString(`</div>`)
 
-	// 1. 🏛️ Architecture layers + tech components (all platforms)
+	badge := platBadgeHTML(pg)
+
+	// 1. 🏛️ Architecture
 	if layersHTML := renderArchLayers(files); layersHTML != "" {
 		techSet := buildTechSet(res, files)
 		componentsHTML := renderArchComponents(files, techSet)
-		b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">🏛️</span><h3>Architecture</h3></div>`)
+		fmt.Fprintf(&b, `<div class="as-section"><div class="as-section__head">%s<span class="ico">🏛️</span><h3>Architecture</h3></div>`, badge)
 		b.WriteString(layersHTML)
 		b.WriteString(componentsHTML)
 		b.WriteString(`</div>`)
 	}
 
-	// 2. 📐 Domain Model — directly after Architecture
-	b.WriteString(renderModulePanels(dddPanels))
+	// 2. 📐 Domain Model
+	b.WriteString(renderModulePanels(dddPanels, badge))
 
-	// 3. 🛜 Traffic — inbound/outbound connection signals
-	b.WriteString(renderModulePanels(trafficPanels))
+	// 3. 🛜 Traffic
+	b.WriteString(renderModulePanels(trafficPanels, badge))
 
-	// 5. 🛡️ Danger Details — security findings for this platform
-	b.WriteString(renderPlatformSecurity(res, pg.Platform))
+	// 4. 💡 Module Insights — Hotspots · Modules · Design Patterns · TODOs · Longest Functions
+	b.WriteString(renderModuleInsights(res, pg, files, designPanels, res.RootPath, badge))
 
-	// 6. 💡 Module Insights — grouped: Hotspots · Microservices · Penetration · TODOs
-	b.WriteString(renderModuleInsights(res, pg, files))
+	// 5. 🐙 Git Analysis — per-platform churn + contributors
+	b.WriteString(renderPlatformGit(res, pg, files, badge))
 
-	// 7. 📏 Longest Functions
-	b.WriteString(renderLongestFunctions(files, res.RootPath))
+	// 6. 🛡️ Danger Details
+	b.WriteString(renderPlatformSecurity(res, pg.Platform, badge))
 
-	// 8. Remaining language-scoped + universal report-module panels
+	// 7. 📂 Modules & Microservices — per-platform file inventory
+	b.WriteString(renderModuleDetailsPlatform(res.RootPath, files, badge))
+
+	// Remaining panels
 	b.WriteString(renderModulePanels(otherPanels))
 	return b.String()
 }
@@ -868,10 +933,9 @@ func renderMicroservicesSection(pg *scanner.PlatformGroup, files []*parser.Parse
 	return b.String()
 }
 
-// renderModuleInsights groups Dependency Hotspots, Microservices, Module
-// Penetration, and TODOs & FIXMEs under a single "💡 Module Insights" header
-// in a responsive two-column grid.
-func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup, files []*parser.ParsedFile) string {
+// renderModuleInsights groups Dependency Hotspots, Modules, Design Patterns,
+// TODOs & FIXMEs, and Longest Functions under a single "💡 Module Insights" header.
+func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup, files []*parser.ParsedFile, designPanels []result.ModulePanel, rootPath string, headBadge string) string {
 	var parts []string
 	if h := renderHotspots(res, pg); h != "" {
 		parts = append(parts, h)
@@ -879,17 +943,20 @@ func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup,
 	if m := renderMicroservicesSection(pg, files); m != "" {
 		parts = append(parts, m)
 	}
-	if p := renderPenetrationMatrix(files); p != "" {
-		parts = append(parts, p)
+	if dp := renderModulePanels(designPanels); dp != "" {
+		parts = append(parts, dp)
 	}
 	if t := renderTodosFixmes(files); t != "" {
 		parts = append(parts, t)
+	}
+	if lf := renderLongestFunctions(files, rootPath); lf != "" {
+		parts = append(parts, lf)
 	}
 	if len(parts) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(`<div class="as-insights"><div class="as-insights__head"><span class="ico">💡</span><h3>Module Insights</h3></div>`)
+	fmt.Fprintf(&b, `<div class="as-insights"><div class="as-insights__head">%s<span class="ico">💡</span><h3>Module Insights</h3></div>`, headBadge)
 	b.WriteString(`<div class="as-insights-grid">`)
 	for _, p := range parts {
 		b.WriteString(p)
@@ -999,7 +1066,7 @@ func renderModuleGraphSVG(res *result.AnalysisResult, inPlatform map[string]bool
 }
 
 // renderPlatformSecurity shows findings whose file belongs to the platform.
-func renderPlatformSecurity(res *result.AnalysisResult, plat langspec.Platform) string {
+func renderPlatformSecurity(res *result.AnalysisResult, plat langspec.Platform, headBadge string) string {
 	pmap := map[string]langspec.Platform{}
 	for _, f := range res.Files {
 		pmap[f.FilePath] = langspec.Platform(f.Platform)
@@ -1019,7 +1086,7 @@ func renderPlatformSecurity(res *result.AnalysisResult, plat langspec.Platform) 
 		}
 	}
 	var b strings.Builder
-	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">🛡️</span><h3>Danger Details</h3></div>`)
+	fmt.Fprintf(&b, `<div class="as-section"><div class="as-section__head">%s<span class="ico">🛡️</span><h3>Danger Details</h3></div>`, headBadge)
 	if total == 0 {
 		b.WriteString(`<p class="as-clean">✓ No findings in this platform's sources.</p></div>`)
 		return b.String()
@@ -1097,20 +1164,24 @@ func renderFindings(results []security.RuleResult) string {
 	return b.String()
 }
 
-func renderModulePanels(panels []result.ModulePanel) string {
+func renderModulePanels(panels []result.ModulePanel, headBadge ...string) string {
 	if len(panels) == 0 {
 		return ""
+	}
+	badge := ""
+	if len(headBadge) > 0 {
+		badge = headBadge[0]
 	}
 	var b strings.Builder
 	for _, p := range panels {
 		b.WriteString(`<div class="as-section as-modpanel">`)
 		b.WriteString(`<div class="as-modpanel__head">`)
-		fmt.Fprintf(&b, `<span class="ico">%s</span><h4>%s</h4>`, moduleIcon(p.ModuleID), esc(p.Title))
+		fmt.Fprintf(&b, `%s<span class="ico">%s</span><h4>%s</h4>`, badge, moduleIcon(p.ModuleID), esc(p.Title))
 		for _, c := range p.Cards {
 			fmt.Fprintf(&b, `<span class="as-rule__id">%s %s</span>`, esc(c.Num), esc(c.Label))
 		}
 		b.WriteString(`</div>`)
-		b.WriteString(p.HTML) // module HTML is produced by trusted in-process modules
+		b.WriteString(p.HTML)
 		b.WriteString(`</div>`)
 	}
 	return b.String()
@@ -1131,25 +1202,195 @@ func moduleIcon(id string) string {
 	}
 }
 
-// ── Git section (repo-wide) ──────────────────────────────────────────────────
+// ── Per-platform git (churn + contributors filtered to platform files) ───────
 
-func renderGit(res *result.AnalysisResult) string {
+func renderPlatformGit(res *result.AnalysisResult, pg *scanner.PlatformGroup, files []*parser.ParsedFile, headBadge string) string {
 	g := res.Git
-	var b strings.Builder
-	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">🐙</span><h2>Git Analysis</h2></div>`)
 	if !g.Available {
-		b.WriteString(`<p class="as-empty">No git history available (the analyzed path is not a git repository, or git is not installed). Clone with full history to populate team, churn and branching insights.</p></div>`)
-		return b.String()
+		return ""
 	}
-	b.WriteString(renderBranchingModel(g.Branch))
+
+	// Each sub-project may have its own .git root. git log --name-only outputs
+	// paths relative to that repo root, not to res.RootPath. Find the deepest
+	// matching repo root for each file so the relative paths align with RelPath
+	// in the churn stats.
+	repoRoot := func(fp string) string {
+		best := res.RootPath
+		for _, repo := range g.Repos {
+			if len(repo) > len(best) &&
+				(strings.HasPrefix(fp, repo+string(filepath.Separator)) || fp == repo) {
+				best = repo
+			}
+		}
+		return best
+	}
+
+	platRel := map[string]bool{}
+	for _, f := range files {
+		root := repoRoot(f.FilePath)
+		if r, err := filepath.Rel(root, f.FilePath); err == nil {
+			platRel[r] = true
+		}
+	}
+
+	// Filter churn to this platform's files.
+	var platChurn []git.FileChurnStat
+	for _, c := range g.Churn {
+		if platRel[c.RelPath] {
+			platChurn = append(platChurn, c)
+		}
+	}
+
+	// Filter contributors to authors who touched any of this platform's modules.
+	platMods := map[string]bool{}
+	for _, m := range pg.Modules {
+		platMods[m] = true
+		if m == "" {
+			platMods["root"] = true
+		}
+	}
+	platAuthors := map[string]*git.AuthorStats{}
+	for name, a := range g.Authors {
+		for mod := range a.MicroserviceCounts {
+			if platMods[mod] {
+				platAuthors[name] = a
+				break
+			}
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, `<div class="as-section"><div class="as-section__head">%s<span class="ico">🐙</span><h3>Git Analysis</h3></div>`, headBadge)
 	b.WriteString(`<div class="as-grid2">`)
-	b.WriteString(renderTeam(g.Authors))
-	b.WriteString(renderChurn(g.Churn))
+	b.WriteString(renderTeam(platAuthors))
+	b.WriteString(renderChurn(platChurn))
 	b.WriteString(`</div>`)
 	b.WriteString(`<div class="as-grid2">`)
 	b.WriteString(renderTagsCommits(g.Tags, g.Commits))
 	b.WriteString(renderBranches(g.Branch))
 	b.WriteString(`</div>`)
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// ── Per-platform module/microservice detail ───────────────────────────────────
+
+func renderModuleDetailsPlatform(rootPath string, files []*parser.ParsedFile, headBadge string) string {
+	type mod struct {
+		name  string
+		plat  langspec.Platform
+		ptype string
+		files []*parser.ParsedFile
+		lines int
+		decls int
+		kinds map[parser.DeclKind]int
+	}
+	var order []string
+	mods := map[string]*mod{}
+	for _, f := range files {
+		m := mods[f.ModuleName]
+		if m == nil {
+			m = &mod{name: f.ModuleName, plat: langspec.Platform(f.Platform), ptype: f.ProjectType, kinds: map[parser.DeclKind]int{}}
+			mods[f.ModuleName] = m
+			order = append(order, f.ModuleName)
+		}
+		m.files = append(m.files, f)
+		m.lines += f.LineCount
+		m.decls += len(f.Declarations)
+		if m.ptype == "" {
+			m.ptype = f.ProjectType
+		}
+		for _, d := range f.Declarations {
+			m.kinds[d.Kind]++
+		}
+	}
+	if len(mods) == 0 {
+		return ""
+	}
+	list := make([]*mod, 0, len(mods))
+	for _, n := range order {
+		list = append(list, mods[n])
+	}
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].lines != list[j].lines {
+			return list[i].lines > list[j].lines
+		}
+		return list[i].name < list[j].name
+	})
+
+	var b strings.Builder
+	fmt.Fprintf(&b, `<div class="as-section"><div class="as-section__head">%s<span class="ico">📂</span><h3>Modules &amp; Microservices</h3></div>`, headBadge)
+	b.WriteString(`<p class="as-section__sub">Per-module file inventory with declarations. File names link into VS Code.</p>`)
+
+	for _, m := range list {
+		icon, _ := langspec.Default.ModuleNoun(m.plat)
+		name := m.name
+		if name == "" {
+			name = "(root)"
+		}
+		badge := ""
+		if m.ptype != "" {
+			badge = fmt.Sprintf(` <span class="as-bs-badge">%s</span>`, esc(m.ptype))
+		}
+		fmt.Fprintf(&b, `<div class="as-pkg-section" id="mod-%s"><h3>%s %s%s <span class="as-pkg-stats">%d files · %s lines · %d declarations</span></h3>`,
+			esc(anchorID(m.name)), esc(icon), esc(name), badge, len(m.files), fmtNum(m.lines), m.decls)
+
+		var parts []string
+		for _, k := range kindOrder {
+			if n := m.kinds[k]; n > 0 {
+				parts = append(parts, kindLabel(k, n))
+			}
+		}
+		if len(parts) > 0 {
+			fmt.Fprintf(&b, `<p class="as-pkg-detail">%s</p>`, strings.Join(parts, " · "))
+		}
+
+		if g := renderDeclGraph(m.name, m.files); g != "" {
+			b.WriteString(g)
+		}
+
+		all := append([]*parser.ParsedFile(nil), m.files...)
+		sort.SliceStable(all, func(i, j int) bool { return all[i].LineCount > all[j].LineCount })
+		var keep, genFiles []*parser.ParsedFile
+		for _, f := range all {
+			if isGeneratedFile(f.FilePath) {
+				if f.LineCount >= 90 {
+					genFiles = append(genFiles, f)
+				}
+				continue
+			}
+			if isTestFile(f.FilePath) {
+				continue
+			}
+			if f.LanguageID == "ts" && f.LineCount < 15 {
+				continue
+			}
+			if len(f.Declarations) == 0 && f.LineCount < 30 {
+				continue
+			}
+			keep = append(keep, f)
+		}
+		if len(keep) == 0 && len(genFiles) == 0 {
+			b.WriteString(`</div>`)
+			continue
+		}
+		if len(keep) > 0 {
+			b.WriteString(`<table class="as-table as-file-table"><thead><tr><th style="width:50%">File</th><th>Lines</th><th>Decl</th><th>Declarations</th></tr></thead><tbody>`)
+			for _, f := range keep {
+				b.WriteString(fileTableRow(f, rootPath))
+			}
+			b.WriteString(`</tbody></table>`)
+		}
+		if len(genFiles) > 0 {
+			b.WriteString(`<div class="as-sub as-gen-sub">Code Generated</div>`)
+			b.WriteString(`<table class="as-table as-file-table"><thead><tr><th style="width:50%">File</th><th>Lines</th><th>Decl</th><th>Declarations</th></tr></thead><tbody>`)
+			for _, f := range genFiles {
+				b.WriteString(fileTableRow(f, rootPath))
+			}
+			b.WriteString(`</tbody></table>`)
+		}
+		b.WriteString(`</div>`)
+	}
 	b.WriteString(`</div>`)
 	return b.String()
 }
@@ -1410,133 +1651,6 @@ func kindLabel(k parser.DeclKind, n int) string {
 		one, many = "func", "funcs"
 	}
 	return fmt.Sprintf("%s %d %s", kindIcon(k), n, plural(n, one, many))
-}
-
-// ── Bottom: per-module / per-microservice detail (goscope + ArchSwiftScope) ──
-
-func renderModuleDetails(res *result.AnalysisResult) string {
-	type mod struct {
-		name  string
-		plat  langspec.Platform
-		ptype string
-		files []*parser.ParsedFile
-		lines int
-		decls int
-		kinds map[parser.DeclKind]int
-	}
-	order := []string{}
-	mods := map[string]*mod{}
-	for _, f := range res.Files {
-		m := mods[f.ModuleName]
-		if m == nil {
-			m = &mod{name: f.ModuleName, plat: langspec.Platform(f.Platform), ptype: f.ProjectType, kinds: map[parser.DeclKind]int{}}
-			mods[f.ModuleName] = m
-			order = append(order, f.ModuleName)
-		}
-		m.files = append(m.files, f)
-		m.lines += f.LineCount
-		m.decls += len(f.Declarations)
-		if m.ptype == "" {
-			m.ptype = f.ProjectType
-		}
-		for _, d := range f.Declarations {
-			m.kinds[d.Kind]++
-		}
-	}
-	if len(mods) == 0 {
-		return ""
-	}
-	list := make([]*mod, 0, len(mods))
-	for _, n := range order {
-		list = append(list, mods[n])
-	}
-	sort.SliceStable(list, func(i, j int) bool {
-		if list[i].lines != list[j].lines {
-			return list[i].lines > list[j].lines
-		}
-		return list[i].name < list[j].name
-	})
-
-	var b strings.Builder
-	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">📂</span><h2>Modules &amp; Microservices</h2></div>`)
-	b.WriteString(`<p class="as-section__sub">Per-module file inventory with declarations. File names link into VS Code.</p>`)
-
-	for _, m := range list {
-		icon, _ := langspec.Default.ModuleNoun(m.plat)
-		name := m.name
-		if name == "" {
-			name = "(root)"
-		}
-		badge := ""
-		if m.ptype != "" {
-			badge = fmt.Sprintf(` <span class="as-bs-badge">%s</span>`, esc(m.ptype))
-		}
-		fmt.Fprintf(&b, `<div class="as-pkg-section" id="mod-%s"><h3>%s %s%s <span class="as-pkg-stats">%d files · %s lines · %d declarations</span></h3>`,
-			esc(anchorID(m.name)), esc(icon), esc(name), badge, len(m.files), fmtNum(m.lines), m.decls)
-
-		// declaration breakdown line
-		var parts []string
-		for _, k := range kindOrder {
-			if n := m.kinds[k]; n > 0 {
-				parts = append(parts, kindLabel(k, n))
-			}
-		}
-		if len(parts) > 0 {
-			fmt.Fprintf(&b, `<p class="as-pkg-detail">%s</p>`, strings.Join(parts, " · "))
-		}
-
-		// per-module declaration graph
-		if g := renderDeclGraph(m.name, m.files); g != "" {
-			b.WriteString(g)
-		}
-
-		// Split files: generated (pb.go / zz_generated) vs regular.
-		all := append([]*parser.ParsedFile(nil), m.files...)
-		sort.SliceStable(all, func(i, j int) bool { return all[i].LineCount > all[j].LineCount })
-		var files, genFiles []*parser.ParsedFile
-		for _, f := range all {
-			if isGeneratedFile(f.FilePath) {
-				if f.LineCount >= 90 {
-					genFiles = append(genFiles, f)
-				}
-				continue
-			}
-			if isTestFile(f.FilePath) {
-				continue
-			}
-			// TS/JS: always skip tiny files — the ecosystem produces many
-			// small shim/index files that add noise without signal.
-			if f.LanguageID == "ts" && f.LineCount < 15 {
-				continue
-			}
-			if len(f.Declarations) == 0 && f.LineCount < 30 {
-				continue
-			}
-			files = append(files, f)
-		}
-		if len(files) == 0 && len(genFiles) == 0 {
-			b.WriteString(`</div>`)
-			continue
-		}
-		if len(files) > 0 {
-			b.WriteString(`<table class="as-table as-file-table"><thead><tr><th style="width:50%">File</th><th>Lines</th><th>Decl</th><th>Declarations</th></tr></thead><tbody>`)
-			for _, f := range files {
-				b.WriteString(fileTableRow(f, res.RootPath))
-			}
-			b.WriteString(`</tbody></table>`)
-		}
-		if len(genFiles) > 0 {
-			b.WriteString(`<div class="as-sub as-gen-sub">Code Generated</div>`)
-			b.WriteString(`<table class="as-table as-file-table"><thead><tr><th style="width:50%">File</th><th>Lines</th><th>Decl</th><th>Declarations</th></tr></thead><tbody>`)
-			for _, f := range genFiles {
-				b.WriteString(fileTableRow(f, res.RootPath))
-			}
-			b.WriteString(`</tbody></table>`)
-		}
-		b.WriteString(`</div>`)
-	}
-	b.WriteString(`</div>`)
-	return b.String()
 }
 
 // fileTableRow renders one <tr> for the file inventory table.

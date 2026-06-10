@@ -889,40 +889,51 @@ func renderPenetrationMatrix(files []*parser.ParsedFile) string {
 // ── TODO / FIXME per module ───────────────────────────────────────────────────
 
 func renderTodosFixmes(files []*parser.ParsedFile) string {
-	type row struct {
-		name          string
-		todos, fixmes int
-	}
-	modTodo := map[string]int{}
-	modFixme := map[string]int{}
+	const limit = 50
+	var items []parser.TodoItem
 	for _, f := range files {
-		m := f.ModuleName
-		if m == "" {
-			m = "root"
-		}
-		modTodo[m] += f.TodoCount
-		modFixme[m] += f.FixmeCount
+		items = append(items, f.Todos...)
 	}
-	var rows []row
-	for m, t := range modTodo {
-		f := modFixme[m]
-		if t+f > 0 {
-			rows = append(rows, row{m, t, f})
-		}
-	}
-	if len(rows) == 0 {
+	if len(items) == 0 {
 		return ""
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].todos+rows[i].fixmes > rows[j].todos+rows[j].fixmes
+	// Sort: FIXME before TODO, then by file path + line.
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Kind != items[j].Kind {
+			return items[i].Kind == "FIXME"
+		}
+		if items[i].FilePath != items[j].FilePath {
+			return items[i].FilePath < items[j].FilePath
+		}
+		return items[i].Line < items[j].Line
 	})
+	truncated := 0
+	if len(items) > limit {
+		truncated = len(items) - limit
+		items = items[:limit]
+	}
 	var b strings.Builder
 	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">📝</span><h3>TODOs &amp; FIXMEs</h3></div>`)
-	b.WriteString(`<table class="as-table"><thead><tr><th>Module</th><th>TODO</th><th>FIXME</th></tr></thead><tbody>`)
-	for _, r := range rows {
-		fmt.Fprintf(&b, `<tr><td class="mono">%s</td><td class="mono">%d</td><td class="mono">%d</td></tr>`,
-			esc(r.name), r.todos, r.fixmes)
+	b.WriteString(`<table class="as-table"><thead><tr><th>Kind</th><th>File</th><th>Note</th></tr></thead><tbody>`)
+	for _, it := range items {
+		kindCls := "sev-low"
+		if it.Kind == "FIXME" {
+			kindCls = "sev-medium"
+		}
+		fileCell := esc(shortenPathFront(it.FilePath, 45))
+		if href := vscodeHref(it.FilePath, it.Line); href != "" {
+			fileCell = fmt.Sprintf(`<a class="as-vs" href="%s" title="Open in VS Code">%s:%d</a>`,
+				esc(href), esc(shortenPathFront(it.FilePath, 40)), it.Line)
+		} else {
+			fileCell = fmt.Sprintf(`%s:%d`, fileCell, it.Line)
+		}
+		fmt.Fprintf(&b, `<tr><td><span class="as-sev %s">%s</span></td><td class="mono">%s</td><td class="mono">%s</td></tr>`,
+			kindCls, esc(it.Kind), fileCell, esc(it.Text))
 	}
-	b.WriteString(`</tbody></table></div>`)
+	b.WriteString(`</tbody></table>`)
+	if truncated > 0 {
+		fmt.Fprintf(&b, `<p class="as-section__sub">… and %d more</p>`, truncated)
+	}
+	b.WriteString(`</div>`)
 	return b.String()
 }

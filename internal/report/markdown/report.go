@@ -54,16 +54,6 @@ func Render(res *result.AnalysisResult) string {
 		renderPlatform(&b, res, pg)
 	}
 
-	// ── Git Analysis ──────────────────────────────────────────────────────────
-	if s := renderGitMD(res.Git); s != "" {
-		b.WriteString(s)
-	}
-
-	// ── Modules & Microservices ───────────────────────────────────────────────
-	if s := renderModuleDetailsMD(res); s != "" {
-		b.WriteString(s)
-	}
-
 	// ── CWE Index ─────────────────────────────────────────────────────────────
 	b.WriteString(renderCWEIndexMD())
 
@@ -171,6 +161,16 @@ func renderPlatform(b *strings.Builder, res *result.AnalysisResult, pg *scanner.
 	// Longest functions
 	if s := renderLongestFuncsMD(files, res.RootPath); s != "" {
 		b.WriteString("### 📏 Longest Functions\n\n")
+		b.WriteString(s)
+	}
+
+	// Git Analysis — per-platform (churn + contributors filtered to platform files)
+	if s := renderPlatformGitMD(res, pg, files); s != "" {
+		b.WriteString(s)
+	}
+
+	// Modules & Microservices file inventory (platform-scoped)
+	if s := renderModuleDetailsMD(res, files); s != "" {
 		b.WriteString(s)
 	}
 
@@ -466,6 +466,131 @@ func renderLongestFuncsMD(files []*parser.ParsedFile, rootPath string) string {
 
 // ── Git Analysis ──────────────────────────────────────────────────────────────
 
+func renderPlatformGitMD(res *result.AnalysisResult, pg *scanner.PlatformGroup, files []*parser.ParsedFile) string {
+	g := res.Git
+	if !g.Available {
+		return ""
+	}
+
+	// Use the deepest matching git repo root so paths align with git log output.
+	repoRoot := func(fp string) string {
+		best := res.RootPath
+		for _, repo := range g.Repos {
+			if len(repo) > len(best) &&
+				(strings.HasPrefix(fp, repo+string(filepath.Separator)) || fp == repo) {
+				best = repo
+			}
+		}
+		return best
+	}
+
+	platRel := map[string]bool{}
+	for _, f := range files {
+		root := repoRoot(f.FilePath)
+		if r, err := filepath.Rel(root, f.FilePath); err == nil {
+			platRel[r] = true
+		}
+	}
+
+	var platChurn []git.FileChurnStat
+	for _, c := range g.Churn {
+		if platRel[c.RelPath] {
+			platChurn = append(platChurn, c)
+		}
+	}
+
+	platMods := map[string]bool{}
+	for _, m := range pg.Modules {
+		platMods[m] = true
+		if m == "" {
+			platMods["root"] = true
+		}
+	}
+	type row struct {
+		name    string
+		commits int
+		files   int
+	}
+	var authors []row
+	for name, a := range g.Authors {
+		for mod := range a.MicroserviceCounts {
+			if platMods[mod] {
+				authors = append(authors, row{name, a.TotalCommits, a.FilesModified})
+				break
+			}
+		}
+	}
+	sort.Slice(authors, func(i, j int) bool {
+		if authors[i].commits != authors[j].commits {
+			return authors[i].commits > authors[j].commits
+		}
+		return authors[i].name < authors[j].name
+	})
+	if len(authors) > 10 {
+		authors = authors[:10]
+	}
+	if len(platChurn) > 10 {
+		platChurn = platChurn[:10]
+	}
+
+	var b strings.Builder
+	b.WriteString("### 🐙 Git Analysis\n\n")
+
+	if len(authors) > 0 {
+		b.WriteString("**Top Contributors**\n\n")
+		b.WriteString("| Author | Commits | Files |\n")
+		b.WriteString("|--------|--------:|------:|\n")
+		for _, r := range authors {
+			fmt.Fprintf(&b, "| %s | %d | %d |\n", mdCell(r.name), r.commits, r.files)
+		}
+		b.WriteString("\n")
+	}
+	if len(platChurn) > 0 {
+		b.WriteString("**File Churn**\n\n")
+		b.WriteString("| File | Changes |\n")
+		b.WriteString("|------|--------:|\n")
+		for _, c := range platChurn {
+			fmt.Fprintf(&b, "| %s | %d |\n", mdCell(c.RelPath), c.ChangeCount)
+		}
+		b.WriteString("\n")
+	}
+
+	// Releases & Commit Hygiene (repo-wide)
+	t := g.Tags
+	c := g.Commits
+	fmt.Fprintf(&b, "**Releases:** %d tags · %d semver", t.TotalTags, t.SemverTags)
+	if t.LatestSemver != "" {
+		fmt.Fprintf(&b, " · latest `%s`", t.LatestSemver)
+	}
+	b.WriteString("\n\n")
+	if c.Total > 0 {
+		pct := c.Typed * 100 / c.Total
+		fmt.Fprintf(&b, "**%d%%** conventional commits (%d/%d typed)\n\n", pct, c.Typed, c.Total)
+	}
+
+	// Branches (repo-wide)
+	bs := g.Branch
+	fmt.Fprintf(&b, "**Branches:** %d total", bs.TotalBranches)
+	if bs.AvgLifetimeDays > 0 {
+		fmt.Fprintf(&b, " · avg lifetime %.0f days", bs.AvgLifetimeDays)
+	}
+	b.WriteString("\n\n")
+	if len(bs.StaleBranches) > 0 {
+		stale := bs.StaleBranches
+		if len(stale) > 5 {
+			stale = stale[:5]
+		}
+		b.WriteString("| Stale branch | Days idle |\n")
+		b.WriteString("|--------------|----------:|\n")
+		for _, br := range stale {
+			fmt.Fprintf(&b, "| %s | %d |\n", mdCell(br.Name), br.DaysInactive)
+		}
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
 func renderGitMD(g result.GitBundle) string {
 	var b strings.Builder
 	b.WriteString("## 🐙 Git Analysis\n\n")
@@ -595,7 +720,7 @@ func renderGitMD(g result.GitBundle) string {
 
 // ── Modules & Microservices ───────────────────────────────────────────────────
 
-func renderModuleDetailsMD(res *result.AnalysisResult) string {
+func renderModuleDetailsMD(res *result.AnalysisResult, platformFiles []*parser.ParsedFile) string {
 	type mod struct {
 		name  string
 		plat  langspec.Platform
@@ -606,7 +731,7 @@ func renderModuleDetailsMD(res *result.AnalysisResult) string {
 	}
 	order := []string{}
 	mods := map[string]*mod{}
-	for _, f := range res.Files {
+	for _, f := range platformFiles {
 		m := mods[f.ModuleName]
 		if m == nil {
 			m = &mod{name: f.ModuleName, plat: langspec.Platform(f.Platform), ptype: f.ProjectType}
@@ -896,15 +1021,72 @@ func renderCWEIndexMD() string {
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].num < rows[j].num })
 
+	cweDesc := map[int]string{
+		16:   "Security Configuration Errors",
+		22:   "Path Traversal",
+		78:   "OS Command Injection",
+		79:   "Cross-Site Scripting",
+		89:   "SQL Injection",
+		94:   "Code Injection",
+		117:  "Log Output Neutralization",
+		119:  "Buffer Overflow",
+		272:  "Least Privilege Violation",
+		276:  "Incorrect Default Permissions",
+		295:  "Improper Certificate Validation",
+		311:  "Missing Encryption of Sensitive Data",
+		319:  "Cleartext Transmission",
+		321:  "Hard-coded Cryptographic Key",
+		327:  "Broken or Risky Crypto Algorithm",
+		328:  "Weak Hash",
+		329:  "Not Using Random IV with CBC Mode",
+		338:  "Cryptographically Weak PRNG",
+		346:  "Origin Validation Error",
+		347:  "Improper Cryptographic Signature Check",
+		352:  "Cross-Site Request Forgery",
+		362:  "Race Condition (TOCTOU)",
+		400:  "Uncontrolled Resource Consumption",
+		434:  "Unrestricted File Upload",
+		476:  "NULL Pointer Dereference",
+		477:  "Use of Obsolete Function",
+		489:  "Active Debug Code",
+		502:  "Deserialization of Untrusted Data",
+		522:  "Insufficiently Protected Credentials",
+		530:  "Exposure of Backup File",
+		532:  "Sensitive Info in Log File",
+		601:  "URL Redirection to Untrusted Site",
+		611:  "XML External Entity (XXE)",
+		614:  "Sensitive Cookie Without Secure Flag",
+		693:  "Protection Mechanism Failure",
+		732:  "Incorrect Permission Assign for Crit. Resource",
+		749:  "Exposed Dangerous Method",
+		770:  "Allocation of Resources Without Limits",
+		798:  "Hard-coded Credentials",
+		913:  "Improper Control of Dynamic-Managed Code",
+		916:  "Weak Password Hash Algorithm",
+		918:  "Server-Side Request Forgery",
+		922:  "Insecure Storage of Sensitive Info",
+		926:  "Improper Export of Android Components",
+		942:  "Permissive CORS Policy",
+		943:  "NoSQL Injection",
+		1004: "Sensitive Cookie Without HttpOnly Flag",
+		1321: "Prototype Pollution",
+		1299: "Missing Protection for Alternate Hardware",
+		1333: "Regular Expression DoS",
+		1336: "Server-Side Template Injection",
+	}
+
 	var b strings.Builder
 	b.WriteString("## 🔐 Security Coverage — CWE Index\n\n")
 	fmt.Fprintf(&b, "%d distinct CWEs covered across all languages.\n\n", len(rows))
 	b.WriteString("| CWE | Vulnerability | Checks | Severity | Languages |\n")
 	b.WriteString("|-----|---------------|-------:|----------|-----------|\n")
 	for _, r := range rows {
-		name := strings.Join(r.names, " / ")
-		if name == "" {
-			name = "—"
+		desc := cweDesc[r.num]
+		if desc == "" {
+			desc = strings.Join(r.names, " / ")
+		}
+		if desc == "" {
+			desc = "—"
 		}
 		langs := "all"
 		if !r.universal && len(r.langs) > 0 {
@@ -912,7 +1094,7 @@ func renderCWEIndexMD() string {
 			langs = strings.Join(r.langs, ", ")
 		}
 		fmt.Fprintf(&b, "| [CWE-%d](https://cwe.mitre.org/data/definitions/%d.html) | %s | %d | %s | %s |\n",
-			r.num, r.num, mdCell(name), r.count, string(r.severity), langs)
+			r.num, r.num, mdCell(desc), r.count, string(r.severity), langs)
 	}
 	b.WriteString("\n---\n\n")
 	return b.String()
