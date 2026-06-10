@@ -39,7 +39,9 @@ go run ./cmd/archscope ~/code --open
      - *Layer Separation* (25%) — presence of `/domain/`, `/infrastructure/`, `/application/`, hex-arch port/adapter paths vs. anemic `/dao/` structure. Supports Go monorepo layouts (`/pkg/domain/`, `/internal/domain/`).
      - Verdict: **Strong Rich Domain Model → Leaning DDD → Transitional → Leaning Anemic → Strong Anemic → No Domain Model Detected**.
      - Gradient spectrum bar, per-category bars, metrics table with tooltips and found-type examples.
-
+   
+   - **⚖️ OOP vs POP** *(Swift)* — protocol-oriented vs. object-oriented signal across five categories (Type System, Abstraction, Composition, Behavior, Architecture), with a spectrum bar and per-category breakdown.
+     
    - **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
 
    - **💡 Module Insights** — four sub-sections in a responsive grid:
@@ -52,7 +54,7 @@ go run ./cmd/archscope ~/code --open
 
    - **🧩 Design Patterns** *(all languages)* — GoF pattern detection: Factory, Singleton, Observer, Strategy, Decorator, Builder, Adapter, Facade, Command, Template Method, and more.
 
-   - **⚖️ OOP vs POP** *(Swift)* — protocol-oriented vs. object-oriented signal across five categories (Type System, Abstraction, Composition, Behavior, Architecture), with a spectrum bar and per-category breakdown.
+
 
 5. **🐙 Git Analysis** (repo-wide):
 
