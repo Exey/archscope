@@ -63,6 +63,12 @@ var (
 	reTOCTOUGuard = regexp.MustCompile(`O_EXCL|sync\.(Mutex|RWMutex|Once)\b`)
 	// CWE-321: hardcoded AES/HMAC key material in a byte-slice literal
 	reGoByteArrayKey = regexp.MustCompile(`(?i)\b(key|aesKey|secretKey|cipherKey|encKey|hmacKey)\b.*\[\]byte\s*\{`)
+	// CWE-770: io/ioutil.ReadAll on r.Body without a size-limit guard
+	reGoBodyReadAll = regexp.MustCompile(`\b(?:io|ioutil)\.ReadAll\s*\(\s*r\.Body`)
+	reGoMaxBytesRdr = regexp.MustCompile(`\bhttp\.MaxBytesReader\b|\bhttp\.MaxBytesHandler\b`)
+	// CWE-276: os.Create on a sensitive-named path uses 0666 default mode
+	reGoOsCreate     = regexp.MustCompile(`\bos\.Create\s*\(`)
+	reGoSensFilePath = regexp.MustCompile(`(?i)\b(key|cert|pem|secret|private|privkey|credential|password|passwd|token)\b`)
 )
 
 func init() {
@@ -170,6 +176,15 @@ func init() {
 			"supply an off-site URL to redirect victims to a phishing page. Validate the target "+
 			"against an explicit allowlist or ensure it is a relative path. (CWE-601)",
 	).WithCWE("601"))
+	security.Default.RegisterRule(goBodySizeLimitRule())
+	security.Default.RegisterRule(twoReRule(
+		"go.sensitive_file_create", "Sensitive File Created With Default Permissions",
+		"io_validation", security.SevMedium, goLangs,
+		reGoOsCreate, reGoSensFilePath,
+		"os.Create() sets mode 0666 (before umask), which leaves key material, certificates or "+
+			"credential files group/world-readable on many systems. For secrets use os.OpenFile with "+
+			"os.O_WRONLY|os.O_CREATE|os.O_TRUNC and mode 0600 to restrict access to the owner. (CWE-276)",
+	).WithCWE("276"))
 }
 
 // goCookieNoSecureRule flags http.Cookie literals without Secure: true.
@@ -560,6 +575,43 @@ func goHTTPNoTLSRule() security.Rule {
 // goTOCTOURule fires when a file checks path existence with os.Stat/Lstat and
 // then calls os.Create/Mkdir/MkdirAll in the same file without an O_EXCL guard
 // or a sync primitive — the classic TOCTOU window.
+// goBodySizeLimitRule fires when a file reads r.Body with io.ReadAll/ioutil.ReadAll
+// but does not call http.MaxBytesReader or http.MaxBytesHandler anywhere in the
+// same file — leaving the server open to memory exhaustion via large requests.
+func goBodySizeLimitRule() security.Rule {
+	return security.Rule{
+		ID:        "go.body_no_size_limit",
+		Name:      "Request Body Read Without Size Limit",
+		Severity:  security.SevMedium,
+		Category:  "crash_factors",
+		CWE:       "770",
+		Languages: goLangs,
+		Description: "io.ReadAll(r.Body) / ioutil.ReadAll(r.Body) is used without " +
+			"http.MaxBytesReader or http.MaxBytesHandler. An attacker can send an " +
+			"arbitrarily large request body to exhaust server memory. Wrap the body " +
+			"before reading: r.Body = http.MaxBytesReader(w, r.Body, maxBytes). (CWE-770)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			readLine := -1
+			hasGuard := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reGoBodyReadAll.MatchString(line) && readLine == -1 {
+					readLine = i
+				}
+				if reGoMaxBytesRdr.MatchString(line) {
+					hasGuard = true
+				}
+			}
+			if readLine >= 0 && !hasGuard {
+				return []security.Finding{security.NewFinding(filePath, readLine, lines)}
+			}
+			return nil
+		},
+	}
+}
+
 func goTOCTOURule() security.Rule {
 	return security.Rule{
 		ID:        "go.toctou",

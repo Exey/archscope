@@ -51,7 +51,19 @@ var (
 	reJSJWTVerify     = regexp.MustCompile(`\bjwt\.verify\s*\(`)
 	reJSJWTAlgorithms = regexp.MustCompile(`\balgorithms\s*:`)
 	// CWE-916: fast hash (sha256/sha512) used in password context
-	reJSFastHashSink  = regexp.MustCompile(`\bcrypto\.createHash\s*\(\s*["'](sha256|sha512|sha384|sha3)["']`)
+	reJSFastHashSink = regexp.MustCompile(`\bcrypto\.createHash\s*\(\s*["'](sha256|sha512|sha384|sha3)["']`)
+	// CWE-913: setTimeout/setInterval with a string literal (eval-equivalent)
+	reJSSetTimeoutStr = regexp.MustCompile(`\b(?:setTimeout|setInterval)\s*\(\s*["'` + "`" + `]`)
+	// CWE-770: express.json()/bodyParser.json() called with no options (no limit)
+	reJSBodyParserNoLimit = regexp.MustCompile(`\b(?:express\.json|express\.urlencoded|bodyParser\.json|bodyParser\.urlencoded)\s*\(\s*\)`)
+	// CWE-400 / CWE-1299: express() initialisation helpers
+	reJSExpressInit = regexp.MustCompile(`\bexpress\s*\(\s*\)`)
+	reJSRateLimit   = regexp.MustCompile(`(?i)(express-rate-limit|rateLimit|rate.limit|slowDown|throttle)`)
+	reJSHelmet      = regexp.MustCompile(`\bhelmet\s*\(|require\s*\(\s*["']helmet["']\s*\)|from\s+["']helmet["']`)
+	// multer size-limit guard
+	reJSMullerLimits = regexp.MustCompile(`\blimits\s*:|\bfileSize\s*:`)
+	// explicit security header fallback for helmet check
+	reJSSecHeader = regexp.MustCompile(`Content-Security-Policy|X-Frame-Options|X-Content-Type-Options|Strict-Transport-Security`)
 )
 
 func init() {
@@ -201,6 +213,186 @@ func init() {
 			"or http.get. An attacker can redirect the request to internal services or cloud "+
 			"metadata endpoints. Validate and allowlist target URLs. (CWE-918)",
 	).WithCWE("918"))
+	security.Default.RegisterRule(jsEvalSetTimeoutRule())
+	security.Default.RegisterRule(jsBodyParserNoLimitRule())
+	security.Default.RegisterRule(jsMullerNoFileSizeRule())
+	security.Default.RegisterRule(jsNoRateLimitRule())
+	security.Default.RegisterRule(jsNoHelmetRule())
+}
+
+// jsEvalSetTimeoutRule fires when setTimeout or setInterval is called with a
+// string literal as the first argument — a direct eval() equivalent that executes
+// the string as JavaScript at runtime.
+func jsEvalSetTimeoutRule() security.Rule {
+	return security.Rule{
+		ID:        "javascript.eval_settimeout",
+		Name:      "eval-Equivalent in setTimeout / setInterval",
+		Severity:  security.SevHigh,
+		Category:  "unsafe_exec",
+		CWE:       "913",
+		Languages: tsLangs,
+		Description: "setTimeout(\"code\") and setInterval(\"code\") evaluate the string argument " +
+			"as JavaScript, identical to eval(). If any part of the string is user-controlled " +
+			"this is remote code execution. Pass a function reference instead: " +
+			"setTimeout(() => doWork(), delay). (CWE-913)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			var out []security.Finding
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reJSSetTimeoutStr.MatchString(line) {
+					out = append(out, security.NewFinding(filePath, i, lines))
+				}
+			}
+			return out
+		},
+	}
+}
+
+// jsBodyParserNoLimitRule fires when express.json() / bodyParser.json() is
+// called with no arguments — accepting requests of unlimited size, which enables
+// memory-exhaustion DoS attacks via large JSON payloads.
+func jsBodyParserNoLimitRule() security.Rule {
+	return security.Rule{
+		ID:        "javascript.body_no_size_limit",
+		Name:      "Request Body Parser Without Size Limit",
+		Severity:  security.SevMedium,
+		Category:  "crash_factors",
+		CWE:       "770",
+		Languages: tsLangs,
+		Description: "express.json() / express.urlencoded() / bodyParser.json() is called with no " +
+			"options. Without a limit: option an attacker can send arbitrarily large request " +
+			"bodies and exhaust server memory. Pass { limit: '1mb' } (or your chosen cap). (CWE-770)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			var out []security.Finding
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reJSBodyParserNoLimit.MatchString(line) {
+					out = append(out, security.NewFinding(filePath, i, lines))
+				}
+			}
+			return out
+		},
+	}
+}
+
+// jsMullerNoFileSizeRule fires when multer is initialised without a limits.fileSize
+// cap — allowing unlimited file uploads that can exhaust disk space or memory.
+func jsMullerNoFileSizeRule() security.Rule {
+	return security.Rule{
+		ID:        "javascript.multer_no_filesize_limit",
+		Name:      "File Upload Without fileSize Limit",
+		Severity:  security.SevMedium,
+		Category:  "crash_factors",
+		CWE:       "770",
+		Languages: tsLangs,
+		Description: "multer() is initialised without a limits.fileSize constraint. Without it " +
+			"clients can upload files of any size, exhausting server disk or memory. Pass " +
+			"{ limits: { fileSize: 5 * 1024 * 1024 } } (or your chosen cap). (CWE-770)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			multerLine := -1
+			hasLimit := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reJSMulterInit.MatchString(line) && multerLine == -1 {
+					multerLine = i
+				}
+				if reJSMullerLimits.MatchString(line) {
+					hasLimit = true
+				}
+			}
+			if multerLine >= 0 && !hasLimit {
+				return []security.Finding{security.NewFinding(filePath, multerLine, lines)}
+			}
+			return nil
+		},
+	}
+}
+
+// jsNoRateLimitRule fires when a file initialises an Express application but
+// imports no rate-limiting middleware — leaving all endpoints open to brute-force
+// and resource-exhaustion attacks.
+func jsNoRateLimitRule() security.Rule {
+	return security.Rule{
+		ID:        "javascript.no_rate_limit",
+		Name:      "Express App Without Rate Limiting",
+		Severity:  security.SevMedium,
+		Category:  "crash_factors",
+		CWE:       "400",
+		Languages: tsLangs,
+		Description: "An Express application is initialised (express()) without any rate-limiting " +
+			"middleware in the file (express-rate-limit, rateLimit, slowDown, throttle). " +
+			"Without rate limiting authentication endpoints and public APIs are vulnerable to " +
+			"brute-force and denial-of-service attacks. Apply rateLimit() as global or " +
+			"per-route middleware. (CWE-400)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			if security.IsTestPath(filePath) {
+				return nil
+			}
+			appLine := -1
+			hasRateLimit := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reJSExpressInit.MatchString(line) && appLine == -1 {
+					appLine = i
+				}
+				if reJSRateLimit.MatchString(line) {
+					hasRateLimit = true
+				}
+			}
+			if appLine >= 0 && !hasRateLimit {
+				return []security.Finding{security.NewFinding(filePath, appLine, lines)}
+			}
+			return nil
+		},
+	}
+}
+
+// jsNoHelmetRule fires when a file initialises an Express application but does
+// not import or call helmet() — leaving the app without the standard set of
+// security headers (CSP, HSTS, X-Frame-Options, X-Content-Type-Options, …).
+func jsNoHelmetRule() security.Rule {
+	return security.Rule{
+		ID:        "javascript.no_helmet",
+		Name:      "Express App Without Security Headers (helmet)",
+		Severity:  security.SevMedium,
+		Category:  "network_security",
+		CWE:       "1299",
+		Languages: tsLangs,
+		Description: "An Express application is created (express()) without helmet() or explicit " +
+			"Content-Security-Policy / X-Frame-Options headers in the same file. helmet() sets " +
+			"14 security-relevant HTTP response headers in one call. Import helmet and add " +
+			"app.use(helmet()) early in the middleware chain. (CWE-1299)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			if security.IsTestPath(filePath) {
+				return nil
+			}
+			appLine := -1
+			hasHelmet := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reJSExpressInit.MatchString(line) && appLine == -1 {
+					appLine = i
+				}
+				if reJSHelmet.MatchString(line) || reJSSecHeader.MatchString(line) {
+					hasHelmet = true
+				}
+			}
+			if appLine >= 0 && !hasHelmet {
+				return []security.Finding{security.NewFinding(filePath, appLine, lines)}
+			}
+			return nil
+		},
+	}
 }
 
 // jsJWTNoAlgorithmsRule fires when a file calls jwt.verify() but never specifies

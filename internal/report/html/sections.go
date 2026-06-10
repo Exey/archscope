@@ -680,9 +680,13 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 	}
 
 	// Split module panels: Domain Model second, Traffic third, rest at the bottom.
+	// Architecture is already rendered in its own dedicated section above, so its
+	// panel is dropped here to avoid showing a duplicate.
 	var dddPanels, trafficPanels, otherPanels []result.ModulePanel
 	for _, p := range res.PanelsForPlatform(pg.Platform) {
 		switch p.ModuleID {
+		case "architecture":
+			// rendered in the dedicated Architecture section above; skip
 		case "dddmodel":
 			dddPanels = append(dddPanels, p)
 		case "traffic":

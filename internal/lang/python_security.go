@@ -57,9 +57,19 @@ var (
 	rePyTOCTOUUse   = regexp.MustCompile(`\bos\.(makedirs|mkdir)\s*\(`)
 	rePyTOCTOUGuard = regexp.MustCompile(`exist_ok\s*=\s*True|tempfile\.|os\.O_EXCL\b`)
 	// CWE-347: PyJWT algorithm:none and missing algorithms parameter
-	rePyJWTNoneAlg   = regexp.MustCompile(`(?i)algorithm\s*=\s*["']none["']|algorithms\s*=\s*\[\s*["']none["']`)
-	rePyJWTDecode    = regexp.MustCompile(`\bjwt\.decode\s*\(`)
+	rePyJWTNoneAlg    = regexp.MustCompile(`(?i)algorithm\s*=\s*["']none["']|algorithms\s*=\s*\[\s*["']none["']`)
+	rePyJWTDecode     = regexp.MustCompile(`\bjwt\.decode\s*\(`)
 	rePyJWTAlgorithms = regexp.MustCompile(`\balgorithms\s*=`)
+	// CWE-770: Flask file upload without request size limit
+	rePyMaxContentLen = regexp.MustCompile(`MAX_CONTENT_LENGTH`)
+	// CWE-1299: Django security settings explicitly disabled
+	rePyDjangoSecOff = regexp.MustCompile(
+		`SECURE_CONTENT_TYPE_NOSNIFF\s*=\s*False|` +
+			`SECURE_BROWSER_XSS_FILTER\s*=\s*False|` +
+			`X_FRAME_OPTIONS\s*=\s*["']ALLOWALL["']|` +
+			`SECURE_SSL_REDIRECT\s*=\s*False`)
+	// CWE-693: Django CSRF middleware absent
+	rePyCsrfMiddleware = regexp.MustCompile(`CsrfViewMiddleware`)
 )
 
 func init() {
@@ -230,6 +240,17 @@ func init() {
 			"An attacker can supply an off-site URL to redirect victims to a phishing page. "+
 			"Validate the target against an explicit allowlist or ensure it is a safe relative path. (CWE-601)",
 	).WithCWE("601"))
+	security.Default.RegisterRule(pythonFlaskNoSizeLimitRule())
+	security.Default.RegisterRule(reRule(
+		"python.django_security_headers_off", "Django Security Headers Disabled",
+		"platform_config", security.SevMedium, pythonLangs,
+		rePyDjangoSecOff,
+		"A Django security setting is explicitly disabled: SECURE_CONTENT_TYPE_NOSNIFF=False removes "+
+			"the X-Content-Type-Options header; SECURE_BROWSER_XSS_FILTER=False removes X-XSS-Protection; "+
+			"X_FRAME_OPTIONS=ALLOWALL removes clickjacking protection; SECURE_SSL_REDIRECT=False allows "+
+			"HTTP connections. These settings should be True / absent in production. (CWE-1299)",
+	).WithCWE("1299"))
+	security.Default.RegisterRule(pythonDjangoCsrfDisabledRule())
 }
 
 // pythonJWTNoAlgorithmsRule fires when a file calls jwt.decode() but never
@@ -365,6 +386,81 @@ func pythonDjangoSecurityMWRule() security.Rule {
 				}
 			}
 			if mwLine >= 0 && !hasSecMW {
+				return []security.Finding{security.NewFinding(filePath, mwLine, lines)}
+			}
+			return nil
+		},
+	}
+}
+
+// pythonFlaskNoSizeLimitRule fires when a file accesses request.files /
+// request.FILES but does not reference MAX_CONTENT_LENGTH anywhere — leaving
+// the upload endpoint open to memory exhaustion via large file bodies.
+func pythonFlaskNoSizeLimitRule() security.Rule {
+	return security.Rule{
+		ID:        "python.flask_upload_no_size_limit",
+		Name:      "File Upload Without Size Limit",
+		Severity:  security.SevMedium,
+		Category:  "crash_factors",
+		CWE:       "770",
+		Languages: pythonLangs,
+		Description: "request.files / request.FILES is used without a MAX_CONTENT_LENGTH " +
+			"configuration anywhere in the file. Without a size cap an attacker can upload " +
+			"arbitrarily large files, exhausting disk space or memory. Set " +
+			"app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024 (or your chosen limit) " +
+			"before the upload handler. (CWE-770)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			uploadLine := -1
+			hasLimit := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if rePyFileUploadSink.MatchString(line) && uploadLine == -1 {
+					uploadLine = i
+				}
+				if rePyMaxContentLen.MatchString(line) {
+					hasLimit = true
+				}
+			}
+			if uploadLine >= 0 && !hasLimit {
+				return []security.Finding{security.NewFinding(filePath, uploadLine, lines)}
+			}
+			return nil
+		},
+	}
+}
+
+// pythonDjangoCsrfDisabledRule fires when a Django settings file defines a
+// MIDDLEWARE list that does not include CsrfViewMiddleware — disabling CSRF
+// protection for all form-based views.
+func pythonDjangoCsrfDisabledRule() security.Rule {
+	return security.Rule{
+		ID:        "python.django_csrf_disabled",
+		Name:      "Django CSRF Protection Disabled",
+		Severity:  security.SevHigh,
+		Category:  "authentication",
+		CWE:       "693",
+		Languages: pythonLangs,
+		Description: "The Django MIDDLEWARE list is defined without CsrfViewMiddleware. " +
+			"Without it all POST/PUT/DELETE views are vulnerable to Cross-Site Request Forgery: " +
+			"an attacker's page can silently submit requests on behalf of authenticated users. " +
+			"Add 'django.middleware.csrf.CsrfViewMiddleware' to MIDDLEWARE. (CWE-693)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			if !rePyIsSettings.MatchString(filePath) {
+				return nil
+			}
+			mwLine := -1
+			hasCsrf := false
+			for i, line := range lines {
+				if rePyMiddlewareBlock.MatchString(line) && mwLine == -1 {
+					mwLine = i
+				}
+				if rePyCsrfMiddleware.MatchString(line) {
+					hasCsrf = true
+				}
+			}
+			if mwLine >= 0 && !hasCsrf {
 				return []security.Finding{security.NewFinding(filePath, mwLine, lines)}
 			}
 			return nil

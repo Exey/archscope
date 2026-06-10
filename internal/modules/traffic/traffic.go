@@ -44,6 +44,7 @@ type Entry struct {
 	DataFmt  string // JSON, Protobuf, XML, or ""
 	FilePath string // absolute path for vscode:// link
 	Line     int    // approximate source line number
+	Module   string // module/microservice name the entry belongs to
 }
 
 // Result aggregates traffic signals from all analysed files.
@@ -63,9 +64,14 @@ func (Module) Analyze(files []*parser.ParsedFile) any {
 		if f.Extra == nil {
 			continue
 		}
+		mod := f.ModuleName
+		if mod == "" {
+			mod = "root"
+		}
 		if in, ok := f.Extra["trafficInbound"].([]Entry); ok {
 			for _, e := range in {
-				k := e.URI + "|" + e.Protocol
+				e.Module = mod
+				k := e.URI + "|" + e.Protocol + "|" + mod
 				if !seenIn[k] {
 					seenIn[k] = true
 					r.Inbound = append(r.Inbound, e)
@@ -74,7 +80,8 @@ func (Module) Analyze(files []*parser.ParsedFile) any {
 		}
 		if out, ok := f.Extra["trafficOutbound"].([]Entry); ok {
 			for _, e := range out {
-				k := e.URI + "|" + e.Protocol
+				e.Module = mod
+				k := e.URI + "|" + e.Protocol + "|" + mod
 				if !seenOut[k] {
 					seenOut[k] = true
 					r.Outbound = append(r.Outbound, e)
@@ -122,15 +129,23 @@ func (Module) RenderMarkdown(res any) string {
 			return
 		}
 		fmt.Fprintf(&b, "#### %s\n\n", title)
-		b.WriteString("| URI / Pattern | Port | Protocol | Format | File |\n")
-		b.WriteString("|---------------|------|----------|--------|------|\n")
+		b.WriteString("| URI / Pattern | Protocol | Format | Module | File |\n")
+		b.WriteString("|---------------|----------|--------|--------|------|\n")
 		for _, e := range entries {
+			uri := e.URI
+			if e.Port != "" && !strings.Contains(uri, e.Port) {
+				uri = uri + ":" + e.Port
+			}
 			file := filepath.Base(e.FilePath)
 			if e.Line > 0 {
 				file = fmt.Sprintf("%s:%d", file, e.Line)
 			}
+			mod := e.Module
+			if mod == "" {
+				mod = "root"
+			}
 			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n",
-				mdCell(e.URI), mdCell(e.Port), mdCell(e.Protocol), mdCell(e.DataFmt), mdCell(file))
+				mdCell(uri), mdCell(e.Protocol), mdCell(e.DataFmt), mdCell(mod), mdCell(file))
 		}
 		b.WriteString("\n")
 	}
@@ -179,20 +194,24 @@ func renderTable(b *strings.Builder, heading string, entries []Entry) {
 		return
 	}
 	b.WriteString(`<table class="as-table"><thead><tr>`)
-	b.WriteString(`<th>URI / Pattern</th><th>Port</th><th>Protocol</th><th>Data</th><th>File</th>`)
+	b.WriteString(`<th>URI / Pattern</th><th>Protocol</th><th>Data</th><th>Module</th><th>File</th>`)
 	b.WriteString(`</tr></thead><tbody>`)
 	for _, e := range entries {
-		portCell := "—"
-		if e.Port != "" {
-			portCell = e.Port
+		uri := e.URI
+		if e.Port != "" && !strings.Contains(uri, e.Port) {
+			uri = uri + ":" + e.Port
 		}
 		dataCell := "—"
 		if e.DataFmt != "" {
 			dataCell = e.DataFmt
 		}
+		mod := e.Module
+		if mod == "" {
+			mod = "root"
+		}
 		fmt.Fprintf(b,
-			`<tr><td class="mono">%s</td><td class="mono">%s</td><td>%s</td><td class="mono">%s</td><td class="mono">%s</td></tr>`,
-			esc(e.URI), esc(portCell), protoTag(e.Protocol), esc(dataCell), fileLink(e.FilePath, e.Line),
+			`<tr><td class="mono">%s</td><td>%s</td><td class="mono">%s</td><td class="mono">%s</td><td class="mono">%s</td></tr>`,
+			esc(uri), protoTag(e.Protocol), esc(dataCell), esc(mod), fileLink(e.FilePath, e.Line),
 		)
 	}
 	b.WriteString(`</tbody></table>`)
