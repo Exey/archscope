@@ -138,21 +138,13 @@ code,.mono{font-family:var(--mono)}
 .as-tab:hover{color:var(--text)}
 .as-tabpanel{display:none; padding-top:4px}
 .as-tab__count{font-family:var(--mono); font-size:11px; color:var(--text-faint); margin-left:6px}
-#t0:checked~.as-tabbar label[for=t0],
-#t1:checked~.as-tabbar label[for=t1],
-#t2:checked~.as-tabbar label[for=t2],
-#t3:checked~.as-tabbar label[for=t3],
-#t4:checked~.as-tabbar label[for=t4],
-#t5:checked~.as-tabbar label[for=t5]{
+.as-tabs--folders .as-tab{font-size:11px; padding:7px 10px}
+.as-tab-sep{width:0; border-left:1px dashed var(--border); margin:4px 8px; align-self:stretch}
+#t0:checked~.as-tabbar label[for=t0],#t1:checked~.as-tabbar label[for=t1],#t2:checked~.as-tabbar label[for=t2],#t3:checked~.as-tabbar label[for=t3],#t4:checked~.as-tabbar label[for=t4],#t5:checked~.as-tabbar label[for=t5],#t6:checked~.as-tabbar label[for=t6],#t7:checked~.as-tabbar label[for=t7],#t8:checked~.as-tabbar label[for=t8],#t9:checked~.as-tabbar label[for=t9],#t10:checked~.as-tabbar label[for=t10],#t11:checked~.as-tabbar label[for=t11],#t12:checked~.as-tabbar label[for=t12],#t13:checked~.as-tabbar label[for=t13],#t14:checked~.as-tabbar label[for=t14],#t15:checked~.as-tabbar label[for=t15],#t16:checked~.as-tabbar label[for=t16],#t17:checked~.as-tabbar label[for=t17],#t18:checked~.as-tabbar label[for=t18],#t19:checked~.as-tabbar label[for=t19],#t20:checked~.as-tabbar label[for=t20],#t21:checked~.as-tabbar label[for=t21],#t22:checked~.as-tabbar label[for=t22],#t23:checked~.as-tabbar label[for=t23],#t24:checked~.as-tabbar label[for=t24],#t25:checked~.as-tabbar label[for=t25],#t26:checked~.as-tabbar label[for=t26],#t27:checked~.as-tabbar label[for=t27],#t28:checked~.as-tabbar label[for=t28],#t29:checked~.as-tabbar label[for=t29]{
   color:var(--accent); background:var(--bg-elev);
   border-color:var(--border); border-bottom-color:var(--bg-elev);
 }
-#t0:checked~.as-panels #p0,
-#t1:checked~.as-panels #p1,
-#t2:checked~.as-panels #p2,
-#t3:checked~.as-panels #p3,
-#t4:checked~.as-panels #p4,
-#t5:checked~.as-panels #p5{display:block}
+#t0:checked~.as-panels #p0,#t1:checked~.as-panels #p1,#t2:checked~.as-panels #p2,#t3:checked~.as-panels #p3,#t4:checked~.as-panels #p4,#t5:checked~.as-panels #p5,#t6:checked~.as-panels #p6,#t7:checked~.as-panels #p7,#t8:checked~.as-panels #p8,#t9:checked~.as-panels #p9,#t10:checked~.as-panels #p10,#t11:checked~.as-panels #p11,#t12:checked~.as-panels #p12,#t13:checked~.as-panels #p13,#t14:checked~.as-panels #p14,#t15:checked~.as-panels #p15,#t16:checked~.as-panels #p16,#t17:checked~.as-panels #p17,#t18:checked~.as-panels #p18,#t19:checked~.as-panels #p19,#t20:checked~.as-panels #p20,#t21:checked~.as-panels #p21,#t22:checked~.as-panels #p22,#t23:checked~.as-panels #p23,#t24:checked~.as-panels #p24,#t25:checked~.as-panels #p25,#t26:checked~.as-panels #p26,#t27:checked~.as-panels #p27,#t28:checked~.as-panels #p28,#t29:checked~.as-panels #p29{display:block}
 .as-count{font-weight:400; color:var(--text-faint)}
 
 /* Module / package grid */

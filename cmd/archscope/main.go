@@ -25,12 +25,14 @@ import (
 
 	"github.com/exey/archscope/internal/config"
 	"github.com/exey/archscope/internal/fetch"
-	_ "github.com/exey/archscope/internal/lang"                    // register language specs
-	_ "github.com/exey/archscope/internal/modules/arch"            // register report modules
+	_ "github.com/exey/archscope/internal/lang"         // register language specs
+	_ "github.com/exey/archscope/internal/modules/arch" // register report modules
 	_ "github.com/exey/archscope/internal/modules/dddmodel"
 	_ "github.com/exey/archscope/internal/modules/designpattern"
 	_ "github.com/exey/archscope/internal/modules/oopvspop"
+	_ "github.com/exey/archscope/internal/modules/traffic"
 	htmlreport "github.com/exey/archscope/internal/report/html"
+	mdreport "github.com/exey/archscope/internal/report/markdown"
 	"github.com/exey/archscope/internal/report/sarif"
 	"github.com/exey/archscope/internal/result"
 )
@@ -41,13 +43,14 @@ func main() {
 	//   archscope --open ~/code
 	//   archscope ~/code --format both --output ./out
 	var (
-		target    string
-		openFlag  bool
-		outputDir string
-		format    string
-		cfgPath   string
-		ref       string
-		depth     int
+		target      string
+		openFlag    bool
+		outputDir   string
+		format      string
+		cfgPath     string
+		ref         string
+		depth       int
+		folderAsTab bool
 	)
 
 	args := os.Args[1:]
@@ -91,6 +94,8 @@ func main() {
 			}
 		case strings.HasPrefix(a, "--depth=") || strings.HasPrefix(a, "-depth="):
 			depth, _ = strconv.Atoi(a[strings.Index(a, "=")+1:])
+		case a == "--folder-as-tab" || a == "-folder-as-tab":
+			folderAsTab = true
 		case a == "--help" || a == "-h":
 			printUsage()
 			os.Exit(0)
@@ -116,6 +121,9 @@ func main() {
 	}
 	if format == "" {
 		format = cfg.Output.Format
+	}
+	if folderAsTab {
+		cfg.FolderAsTab = true
 	}
 
 	src := fetch.FromArg(target, ref, depth)
@@ -153,6 +161,13 @@ func main() {
 			fatalf("archscope: sarif write failed: %v\n", err)
 		}
 		fmt.Println("SARIF →", outPath)
+	case "md", "markdown":
+		mdPath := filepath.Join(outputDir, name+".md")
+		if err := mdreport.Write(res, mdPath); err != nil {
+			fatalf("archscope: markdown write failed: %v\n", err)
+		}
+		fmt.Println("MD    →", mdPath)
+		reportPath = mdPath
 	case "both":
 		htmlPath := filepath.Join(outputDir, name+".html")
 		if err := htmlreport.Write(res, htmlPath); err != nil {
@@ -184,12 +199,13 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, `Usage: archscope <path-or-url> [flags]
 
 Flags:
-  --open            open the HTML report in the browser when done
-  --format <fmt>    html | sarif | both  (default: from config)
-  --output, -o <dir> output directory    (default: from config, usually "output")
-  --config <file>   path to .archscope.json
-  --ref <ref>       git ref for remote URLs (branch/tag/sha)
-  --depth <n>       clone depth for remote URLs (0 = full history)
+  --open              open the HTML report in the browser when done
+  --format <fmt>      html | sarif | md | both  (default: from config)
+  --output, -o <dir>  output directory    (default: from config, usually "output")
+  --config <file>     path to .archscope.json
+  --ref <ref>         git ref for remote URLs (branch/tag/sha)
+  --depth <n>         clone depth for remote URLs (0 = full history)
+  --folder-as-tab     show each top-level folder as its own tab (e.g. "pharmen Py", "gptzakaz Go")
 `)
 }
 

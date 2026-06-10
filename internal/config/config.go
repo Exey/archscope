@@ -52,6 +52,7 @@ type Config struct {
 	EnableParallel  bool      `json:"enableParallel"`
 	EnableCache     bool      `json:"enableCache"`
 	HotspotCount    int       `json:"hotspotCount"`
+	FolderAsTab     bool      `json:"folderAsTab"` // split per-folder into separate tabs
 	Output          Output    `json:"output"`
 	Languages       Languages `json:"languages"`
 	Security        Security  `json:"security"`

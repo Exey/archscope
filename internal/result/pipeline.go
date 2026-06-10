@@ -79,6 +79,9 @@ func RunWithProgress(rootPath string, cfg config.Config, progress func(string)) 
 		if err != nil || pf == nil {
 			continue
 		}
+		// Override the parser's default platform with the scanner's tab key so
+		// that folder-as-tab synthetic keys ("go:pharmen") propagate correctly.
+		pf.Platform = string(fe.Platform)
 		files = append(files, pf)
 	}
 

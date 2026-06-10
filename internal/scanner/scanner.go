@@ -24,23 +24,38 @@ type FileEntry struct {
 
 // PlatformGroup buckets files for one report tab.
 type PlatformGroup struct {
-	Platform  langspec.Platform
-	Files     []FileEntry
-	FileCount int
-	Modules   []string // distinct module names in this platform, sorted
+	Platform         langspec.Platform // unique tab key (may be synthetic in folder-as-tab mode)
+	LanguagePlatform langspec.Platform // actual language platform, for module routing
+	Label            string            // display label, e.g. "pharmen Py" (empty → PlatformTitle)
+	Files            []FileEntry
+	FileCount        int
+	Modules          []string // distinct module names in this platform, sorted
+}
+
+// TabLabel returns the display string for the HTML tab button.
+func (pg *PlatformGroup) TabLabel() string {
+	if pg.Label != "" {
+		return pg.Label
+	}
+	p := pg.LanguagePlatform
+	if p == "" {
+		p = pg.Platform
+	}
+	return langspec.PlatformTitle(p)
 }
 
 // ScanResult is the scanner's product.
 type ScanResult struct {
-	Root          string
-	Files         []FileEntry
-	Platforms     map[langspec.Platform]*PlatformGroup
-	Modules       map[string][]FileEntry // moduleName -> files
-	GitRepos      []string               // dirs containing .git
-	ProjectTypes  []string               // distinct detected project types, sorted
+	Root           string
+	Files          []FileEntry
+	Platforms      map[langspec.Platform]*PlatformGroup
+	Modules        map[string][]FileEntry // moduleName -> files
+	GitRepos       []string               // dirs containing .git
+	ProjectTypes   []string               // distinct detected project types, sorted
 	Technologies   []string               // tech detected from docker-compose/go.mod/Makefile
 	DockerServices []string               // service names from docker-compose files
 	DevOpsTools    []DevOpsTool           // CI/CD, container, orchestration tools
+	FolderAsTab    bool                   // true when --folder-as-tab was used
 }
 
 // moduleRoot records a detected module-root directory and the language/project
@@ -117,20 +132,36 @@ func Scan(rootPath string, cfg config.Config, reg *langspec.Registry) (*ScanResu
 		}
 
 		mod, projType := attributeModule(abs, path, spec, roots)
+
+		// In folder-as-tab mode each (language, top-level folder) pair becomes
+		// its own tab; otherwise all files of a language share one tab.
+		tabPlatform := spec.Platform
+		tabLabel := ""
+		if cfg.FolderAsTab {
+			if folder := topFolder(abs, path); folder != "" {
+				tabPlatform = langspec.Platform(string(spec.Platform) + ":" + folder)
+				tabLabel = folder + " " + platformShortLabel(spec.Platform)
+			}
+		}
+
 		entry := FileEntry{
 			Path:        path,
 			LanguageID:  spec.ID,
-			Platform:    spec.Platform,
+			Platform:    tabPlatform,
 			ModuleName:  mod,
 			ProjectType: projType,
 		}
 		res.Files = append(res.Files, entry)
 		res.Modules[mod] = append(res.Modules[mod], entry)
 
-		g := res.Platforms[spec.Platform]
+		g := res.Platforms[tabPlatform]
 		if g == nil {
-			g = &PlatformGroup{Platform: spec.Platform}
-			res.Platforms[spec.Platform] = g
+			g = &PlatformGroup{
+				Platform:         tabPlatform,
+				LanguagePlatform: spec.Platform,
+				Label:            tabLabel,
+			}
+			res.Platforms[tabPlatform] = g
 		}
 		g.Files = append(g.Files, entry)
 
@@ -162,32 +193,85 @@ func Scan(rootPath string, cfg config.Config, reg *langspec.Registry) (*ScanResu
 
 	res.DockerServices, res.Technologies = ScanDockerCompose(abs)
 	res.DevOpsTools = ScanDevOps(abs)
+	res.FolderAsTab = cfg.FolderAsTab
 
 	return res, nil
 }
 
 // PlatformsOrdered returns the platform groups in canonical tab order.
+// In folder-as-tab mode groups are sorted by language order first, then
+// alphabetically by label within each language.
 func (r *ScanResult) PlatformsOrdered() []*PlatformGroup {
 	var out []*PlatformGroup
 	seen := map[langspec.Platform]bool{}
-	for _, p := range langspec.PlatformOrder {
-		if g := r.Platforms[p]; g != nil {
-			out = append(out, g)
-			seen[p] = true
+
+	// For each canonical language, collect all tab groups whose effective
+	// language matches (handles both plain and synthetic platform keys).
+	for _, langP := range langspec.PlatformOrder {
+		var groups []*PlatformGroup
+		for key, g := range r.Platforms {
+			if seen[key] {
+				continue
+			}
+			effLang := g.LanguagePlatform
+			if effLang == "" {
+				effLang = g.Platform
+			}
+			if effLang == langP {
+				groups = append(groups, g)
+				seen[key] = true
+			}
+		}
+		sort.Slice(groups, func(i, j int) bool {
+			return groups[i].TabLabel() < groups[j].TabLabel()
+		})
+		out = append(out, groups...)
+	}
+
+	// Remaining platforms not in canonical order, alphabetically.
+	var rest []*PlatformGroup
+	for key, g := range r.Platforms {
+		if !seen[key] {
+			rest = append(rest, g)
 		}
 	}
-	// any platforms not in canonical order, appended alphabetically
-	var rest []langspec.Platform
-	for p := range r.Platforms {
-		if !seen[p] {
-			rest = append(rest, p)
-		}
+	sort.Slice(rest, func(i, j int) bool {
+		return rest[i].TabLabel() < rest[j].TabLabel()
+	})
+	return append(out, rest...)
+}
+
+// topFolder returns the first path component of filePath relative to rootPath,
+// or "" if the file sits directly in rootPath.
+func topFolder(rootPath, filePath string) string {
+	rel, err := filepath.Rel(rootPath, filePath)
+	if err != nil {
+		return ""
 	}
-	sort.Slice(rest, func(i, j int) bool { return rest[i] < rest[j] })
-	for _, p := range rest {
-		out = append(out, r.Platforms[p])
+	rel = filepath.ToSlash(rel)
+	if i := strings.IndexByte(rel, '/'); i > 0 {
+		return rel[:i]
 	}
-	return out
+	return ""
+}
+
+// platformShortLabel returns the abbreviated language name used in folder-as-tab
+// tab labels: "pharmen Py", "gptzakaz TS", etc.
+func platformShortLabel(p langspec.Platform) string {
+	switch p {
+	case langspec.PlatformPython:
+		return "Py"
+	case langspec.PlatformTSJS:
+		return "TS"
+	case langspec.PlatformKotlin:
+		return "Kt"
+	case langspec.PlatformSwiftObjC:
+		return "Swift"
+	case langspec.PlatformGo:
+		return "Go"
+	default:
+		return string(p)
+	}
 }
 
 func enabledSet(cfg config.Config, reg *langspec.Registry) map[string]bool {

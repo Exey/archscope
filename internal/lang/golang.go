@@ -2,6 +2,7 @@ package lang
 
 import (
 	"github.com/exey/archscope/internal/langspec"
+	"github.com/exey/archscope/internal/modules/traffic"
 	"github.com/exey/archscope/internal/parser"
 )
 
@@ -58,7 +59,8 @@ func init() {
 
 // goParseHook scans the (already-loaded) lines for the `package` clause and
 // stores it in Extra["packageName"]; if the file has no module name yet, it
-// uses the package name.
+// uses the package name. It also runs traffic detection and stores results in
+// Extra["trafficInbound"] and Extra["trafficOutbound"].
 func goParseHook(filePath string, lines []string, pfAny any) {
 	pf, ok := pfAny.(*parser.ParsedFile)
 	if !ok {
@@ -77,7 +79,20 @@ func goParseHook(filePath string, lines []string, pfAny any) {
 					pf.ModuleName = name
 				}
 			}
-			return
+			break
+		}
+	}
+
+	in, out := traffic.ExtractGoTraffic(filePath, lines, pf.Imports)
+	if len(in) > 0 || len(out) > 0 {
+		if pf.Extra == nil {
+			pf.Extra = map[string]any{}
+		}
+		if len(in) > 0 {
+			pf.Extra["trafficInbound"] = in
+		}
+		if len(out) > 0 {
+			pf.Extra["trafficOutbound"] = out
 		}
 	}
 }

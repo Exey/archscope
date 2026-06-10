@@ -181,6 +181,26 @@ func (Module) SummaryCards(res any) []modules.SummaryCard {
 	}
 }
 
+// RenderMarkdown renders detected patterns as a markdown table.
+func (Module) RenderMarkdown(res any) string {
+	r, ok := res.(Result)
+	if !ok || !r.HasDetection() {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("| Pattern | Count | Examples |\n")
+	b.WriteString("|---------|------:|---------|\n")
+	for _, m := range r.Matches {
+		ex := strings.Join(m.Examples, ", ")
+		if len(ex) > 80 {
+			ex = ex[:77] + "…"
+		}
+		fmt.Fprintf(&b, "| %s | %d | %s |\n", m.Pattern, m.Count, ex)
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
 // RenderHTML renders the patterns grouped by GoF category.
 func (Module) RenderHTML(res any) string {
 	r, ok := res.(Result)

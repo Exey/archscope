@@ -2,6 +2,7 @@ package lang
 
 import (
 	"github.com/exey/archscope/internal/langspec"
+	"github.com/exey/archscope/internal/modules/traffic"
 	"github.com/exey/archscope/internal/parser"
 )
 
@@ -50,8 +51,8 @@ func init() {
 }
 
 // pythonParseHook marks declarations captured by the class regex as DeclClass
-// (the universal scanner defaults unmapped type decls to DeclType). Python has
-// no brace blocks, so big-function sizing is left to a future indent-based hook.
+// (the universal scanner defaults unmapped type decls to DeclType). It also
+// runs traffic detection and stores results in pf.Extra.
 func pythonParseHook(filePath string, lines []string, pfAny any) {
 	pf, ok := pfAny.(*parser.ParsedFile)
 	if !ok {
@@ -60,6 +61,19 @@ func pythonParseHook(filePath string, lines []string, pfAny any) {
 	for i := range pf.Declarations {
 		if pf.Declarations[i].Kind == parser.DeclType {
 			pf.Declarations[i].Kind = parser.DeclClass
+		}
+	}
+
+	in, out := traffic.ExtractPythonTraffic(filePath, lines)
+	if len(in) > 0 || len(out) > 0 {
+		if pf.Extra == nil {
+			pf.Extra = map[string]any{}
+		}
+		if len(in) > 0 {
+			pf.Extra["trafficInbound"] = in
+		}
+		if len(out) > 0 {
+			pf.Extra["trafficOutbound"] = out
 		}
 	}
 }

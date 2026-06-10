@@ -380,7 +380,7 @@ func renderSecurityIndex(res *result.AnalysisResult) string {
 					`<div class="as-sec-plat-name">%s</div>`+
 					`<div class="as-sec-plat-count">%d%s</div>`+
 					`</div>`,
-				esc(langspec.PlatformTitle(pg.Platform)), total, hiHTML)
+				esc(pg.TabLabel()), total, hiHTML)
 		}
 		b.WriteString(`</div>`)
 	}
@@ -580,21 +580,49 @@ func renderTabs(res *result.AnalysisResult) string {
 	if len(platforms) == 0 {
 		return `<p class="as-empty">No source files matched any registered language.</p>`
 	}
-	// Sort tabs by total lines of code, largest first (most-left).
+
+	// Compute per-tab LOC from parsed files.
 	loc := map[langspec.Platform]int{}
 	for _, f := range res.Files {
 		loc[langspec.Platform(f.Platform)] += f.LineCount
 	}
 	platforms = append([]*scanner.PlatformGroup(nil), platforms...)
-	sort.SliceStable(platforms, func(i, j int) bool {
-		li, lj := loc[platforms[i].Platform], loc[platforms[j].Platform]
-		if li != lj {
-			return li > lj
+
+	if res.Scan.FolderAsTab {
+		// Folder-as-tab: group by folder, sort folder groups by total LOC desc,
+		// within each folder sort alphabetically by language label.
+		folderLOC := map[string]int{}
+		for _, pg := range platforms {
+			folderLOC[tabFolder(pg.Platform)] += loc[pg.Platform]
 		}
-		return platforms[i].FileCount > platforms[j].FileCount
-	})
+		sort.SliceStable(platforms, func(i, j int) bool {
+			fi, fj := tabFolder(platforms[i].Platform), tabFolder(platforms[j].Platform)
+			if fi != fj {
+				li, lj := folderLOC[fi], folderLOC[fj]
+				if li != lj {
+					return li > lj
+				}
+				return fi < fj
+			}
+			return platforms[i].TabLabel() < platforms[j].TabLabel()
+		})
+	} else {
+		sort.SliceStable(platforms, func(i, j int) bool {
+			li, lj := loc[platforms[i].Platform], loc[platforms[j].Platform]
+			if li != lj {
+				return li > lj
+			}
+			return platforms[i].FileCount > platforms[j].FileCount
+		})
+	}
+
+	outerClass := "as-tabs"
+	if res.Scan.FolderAsTab {
+		outerClass = "as-tabs as-tabs--folders"
+	}
+
 	var b strings.Builder
-	b.WriteString(`<div class="as-tabs">`)
+	fmt.Fprintf(&b, `<div class="%s">`, outerClass)
 	// radios
 	for i := range platforms {
 		checked := ""
@@ -605,9 +633,19 @@ func renderTabs(res *result.AnalysisResult) string {
 	}
 	// tab bar
 	b.WriteString(`<div class="as-tabbar">`)
+	prevFolder := ""
 	for i, pg := range platforms {
-		fmt.Fprintf(&b, `<label class="as-tab" for="t%d">%s<span class="as-tab__count">%d</span></label>`,
-			i, esc(langspec.PlatformTitle(pg.Platform)), pg.FileCount)
+		folder := tabFolder(pg.Platform)
+		if res.Scan.FolderAsTab && i > 0 && folder != prevFolder {
+			b.WriteString(`<span class="as-tab-sep"></span>`)
+		}
+		prevFolder = folder
+		if pg.Label != "" {
+			fmt.Fprintf(&b, `<label class="as-tab" for="t%d">%s</label>`, i, esc(pg.TabLabel()))
+		} else {
+			fmt.Fprintf(&b, `<label class="as-tab" for="t%d">%s<span class="as-tab__count">%d</span></label>`,
+				i, esc(pg.TabLabel()), pg.FileCount)
+		}
 	}
 	b.WriteString(`</div>`)
 	// panels
@@ -621,6 +659,16 @@ func renderTabs(res *result.AnalysisResult) string {
 	return b.String()
 }
 
+// tabFolder extracts the folder name from a synthetic platform key "lang:folder".
+// For non-synthetic keys returns the platform string itself (used as group key).
+func tabFolder(p langspec.Platform) string {
+	s := string(p)
+	if i := strings.IndexByte(s, ':'); i >= 0 {
+		return s[i+1:]
+	}
+	return s
+}
+
 func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) string {
 	files := res.FilesForPlatform(pg.Platform)
 	lines, decls := 0, 0
@@ -631,18 +679,20 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 		langCount[f.LanguageID] = true
 	}
 
-	// Split module panels so Domain Model sits immediately after Architecture.
-	var dddPanels, otherPanels []result.ModulePanel
+	// Split module panels: Domain Model second, Traffic third, rest at the bottom.
+	var dddPanels, trafficPanels, otherPanels []result.ModulePanel
 	for _, p := range res.PanelsForPlatform(pg.Platform) {
-		if p.ModuleID == "dddmodel" {
+		switch p.ModuleID {
+		case "dddmodel":
 			dddPanels = append(dddPanels, p)
-		} else {
+		case "traffic":
+			trafficPanels = append(trafficPanels, p)
+		default:
 			otherPanels = append(otherPanels, p)
 		}
 	}
 
 	var b strings.Builder
-	// per-platform cards
 	b.WriteString(`<div class="as-cards">`)
 	card(&b, fmtNum(pg.FileCount), "files", false)
 	card(&b, fmtNum(lines), "lines", false)
@@ -663,16 +713,19 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 	// 2. 📐 Domain Model — directly after Architecture
 	b.WriteString(renderModulePanels(dddPanels))
 
-	// 3. 🛡️ Danger Details — security findings for this platform
+	// 3. 🛜 Traffic — inbound/outbound connection signals
+	b.WriteString(renderModulePanels(trafficPanels))
+
+	// 5. 🛡️ Danger Details — security findings for this platform
 	b.WriteString(renderPlatformSecurity(res, pg.Platform))
 
-	// 4. 💡 Module Insights — grouped: Hotspots · Microservices · Penetration · TODOs
+	// 6. 💡 Module Insights — grouped: Hotspots · Microservices · Penetration · TODOs
 	b.WriteString(renderModuleInsights(res, pg, files))
 
-	// 5. 📏 Longest Functions
+	// 7. 📏 Longest Functions
 	b.WriteString(renderLongestFunctions(files, res.RootPath))
 
-	// 6. Remaining language-scoped + universal report-module panels
+	// 8. Remaining language-scoped + universal report-module panels
 	b.WriteString(renderModulePanels(otherPanels))
 	return b.String()
 }
@@ -701,6 +754,17 @@ func renderHotspots(res *result.AnalysisResult, pg *scanner.PlatformGroup) strin
 	for _, m := range pg.Modules {
 		inPlatform[m] = true
 	}
+
+	// When rendering a folder-as-tab platform, qualify module names with the
+	// folder so that "backend(pharmen)" and "backend(pharmzakaz)" are distinct.
+	folder := platformFolderSuffix(pg.Platform)
+	qualify := func(name string) string {
+		if folder == "" || name == "(root)" {
+			return name
+		}
+		return name + "(" + folder + ")"
+	}
+
 	// Per-module Lines / Decl tallies for this platform.
 	mloc := map[string]int{}
 	mdecl := map[string]int{}
@@ -745,7 +809,7 @@ func renderHotspots(res *result.AnalysisResult, pg *scanner.PlatformGroup) strin
 
 	// Backend platforms additionally get an inline module dependency graph.
 	if !langspec.Default.IsClientPlatform(pg.Platform) {
-		if g := renderModuleGraphSVG(res, inPlatform); g != "" {
+		if g := renderModuleGraphSVG(res, inPlatform, folder); g != "" {
 			b.WriteString(g)
 		}
 	}
@@ -757,10 +821,20 @@ func renderHotspots(res *result.AnalysisResult, pg *scanner.PlatformGroup) strin
 			name = "(root)"
 		}
 		fmt.Fprintf(&b, `<tr><td class="mono">%s</td><td class="mono">%d</td><td class="mono">%s</td><td class="mono">%d</td></tr>`,
-			esc(name), r.uses, fmtNum(r.lines), r.decl)
+			esc(qualify(name)), r.uses, fmtNum(r.lines), r.decl)
 	}
 	b.WriteString(`</tbody></table></div>`)
 	return b.String()
+}
+
+// platformFolderSuffix extracts the folder from a synthetic platform key
+// "lang:folder", returning "" for plain (non-folder-as-tab) platform keys.
+func platformFolderSuffix(p langspec.Platform) string {
+	s := string(p)
+	if i := strings.IndexByte(s, ':'); i >= 0 {
+		return s[i+1:]
+	}
+	return ""
 }
 
 // renderMicroservicesSection renders the module/package grid card.
@@ -824,12 +898,18 @@ func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup,
 // graph of the platform's modules: node radius scales with in-degree, edges are
 // drawn as arrows from dependent → dependency. Pure inline SVG (no JS/CDN), so
 // the report stays a single self-contained file.
-func renderModuleGraphSVG(res *result.AnalysisResult, inPlatform map[string]bool) string {
+func renderModuleGraphSVG(res *result.AnalysisResult, inPlatform map[string]bool, folder string) string {
 	if res.Graph == nil {
 		return ""
 	}
 	keep := func(m string) bool {
 		return inPlatform[m] || (m == "root" && inPlatform[""])
+	}
+	qualifyNode := func(name string) string {
+		if folder == "" {
+			return name
+		}
+		return name + "(" + folder + ")"
 	}
 	// Collect nodes present in this platform with their in-degree.
 	indeg := map[string]int{}
@@ -902,6 +982,8 @@ func renderModuleGraphSVG(res *result.AnalysisResult, inPlatform map[string]bool
 		label := n
 		if label == "root" {
 			label = "(root)"
+		} else {
+			label = qualifyNode(label)
 		}
 		fmt.Fprintf(&b, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="var(--accent)" fill-opacity="0.85" stroke="var(--bg-elev)" stroke-width="1.5"><title>%s — %d dependents</title></circle>`,
 			pos[i].x, pos[i].y, r, esc(label), indeg[n])
@@ -1038,6 +1120,8 @@ func moduleIcon(id string) string {
 		return "🧩"
 	case "oopvspop":
 		return "⚖️"
+	case "traffic":
+		return "🛜"
 	default:
 		return "📐"
 	}
@@ -1414,6 +1498,11 @@ func renderModuleDetails(res *result.AnalysisResult) string {
 				continue
 			}
 			if isTestFile(f.FilePath) {
+				continue
+			}
+			// TS/JS: always skip tiny files — the ecosystem produces many
+			// small shim/index files that add noise without signal.
+			if f.LanguageID == "ts" && f.LineCount < 15 {
 				continue
 			}
 			if len(f.Declarations) == 0 && f.LineCount < 30 {

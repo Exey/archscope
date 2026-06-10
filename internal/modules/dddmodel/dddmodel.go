@@ -599,6 +599,46 @@ func (m Module) SummaryCards(res any) []modules.SummaryCard {
 	}
 }
 
+// ── RenderMarkdown ─────────────────────────────────────────────────────────
+
+func (m Module) RenderMarkdown(res any) string {
+	r, ok := res.(Result)
+	if !ok || !r.HasData() {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "**DDD Score: %d%%** — %s\n\n", r.DDDScore, r.Verdict)
+
+	type pat struct {
+		label    string
+		count    int
+		examples []string
+	}
+	rows := []pat{
+		{"Aggregates", r.AggregateCount, r.ExAgg},
+		{"Entities", r.EntitiesCount, r.ExEntity},
+		{"Value Objects", r.VOCount, r.ExVO},
+		{"Domain Events", r.DomainEvtCount, r.ExEvent},
+		{"Repositories", r.RepositoryCount, r.ExRepo},
+		{"Domain Services", r.DomainSvcCount, r.ExDomSvc},
+		{"Use Cases", r.UseCaseCount, r.ExUseCase},
+		{"Factories", r.FactoryCount, r.ExFactory},
+		{"Specifications", r.SpecCount, r.ExSpec},
+		{"Event Handlers", r.EventHandlerCount, r.ExEventHandler},
+	}
+	b.WriteString("| Pattern | Count | Examples |\n")
+	b.WriteString("|---------|------:|---------|\n")
+	for _, row := range rows {
+		if row.count == 0 {
+			continue
+		}
+		ex := strings.Join(row.examples, ", ")
+		fmt.Fprintf(&b, "| %s | %d | %s |\n", row.label, row.count, ex)
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
 // ── RenderHTML ─────────────────────────────────────────────────────────────
 
 func (m Module) RenderHTML(res any) string {

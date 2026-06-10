@@ -1,6 +1,6 @@
 # 🏛️🔭 ArchScope
 
-**Universal CLI for multi-language codebase intelligence** — analyze architecture, security, dependencies and git history across Swift/Objective-C, Kotlin, TypeScript/JavaScript, Python and Go, and produce one interactive HTML report (+ SARIF).
+**Universal CLI for multi-language codebase intelligence** — analyze architecture, security, dependencies and git history across Swift/Objective-C, Kotlin, TypeScript/JavaScript, Python and Go, and produce one interactive HTML report, a Markdown document, or a SARIF log.
 
 ---
 
@@ -11,7 +11,7 @@ cd archscope
 go run ./cmd/archscope ~/code --open
 ```
 
-`~/code` is any directory: a single app, a service repo, or a **parent folder** where several repositories are cloned side by side. Modules/services are auto-detected up to 3 levels deep, so `services/<svc>/`, `src/<module>/` and monorepo layouts all work. `--open` launches the finished report in your browser. A SARIF 2.1.0 log is also available via `--format sarif` or `--format both`.
+`~/code` is any directory: a single app, a service repo, or a **parent folder** where several repositories are cloned side by side. Modules/services are auto-detected up to 3 levels deep, so `services/<svc>/`, `src/<module>/` and monorepo layouts all work. `--open` launches the finished report in your browser. Use `--format md` for a Markdown report, `--format sarif` for SARIF 2.1.0, or `--format both` for HTML + SARIF together.
 
 ---
 
@@ -23,7 +23,7 @@ go run ./cmd/archscope ~/code --open
 
 2. **🧰 Tech Stack & Modules** — repo-wide tag cloud: languages present + frameworks auto-detected from imports (SwiftUI, Combine, React, Next.js, Django, FastAPI, gRPC, GORM, …) and from config files (docker-compose, go.mod, Makefile). Below it: a package grid sized by LOC with per-language badges. DevOps tools (Docker, Kubernetes, GitHub Actions, etc.) appear when detected.
 
-3. **🛡️ Danger Index** — weighted security score (0 = hardened → 100% = critical) across **14 categories**, each with its own weight and a saturating violation-density curve. Risk band: Hardened / Minor exposure / Elevated risk / Critical exposure. Backed by **130+ security rules** across all languages plus universal cross-language checks.
+3. **🛡️ Danger Index** — weighted security score (0 = hardened → 100% = critical) across **14 categories**, each with its own weight and a saturating violation-density curve. Risk band: Hardened / Minor exposure / Elevated risk / Critical exposure. Backed by **137+ security rules** across all languages plus universal cross-language checks.
 
 ![ArchScope](https://exey.github.io/ArchScopeDocs/as_danger.svg)
 
@@ -39,9 +39,11 @@ go run ./cmd/archscope ~/code --open
      - *Layer Separation* (25%) — presence of `/domain/`, `/infrastructure/`, `/application/`, hex-arch port/adapter paths vs. anemic `/dao/` structure. Supports Go monorepo layouts (`/pkg/domain/`, `/internal/domain/`).
      - Verdict: **Strong Rich Domain Model → Leaning DDD → Transitional → Leaning Anemic → Strong Anemic → No Domain Model Detected**.
      - Gradient spectrum bar, per-category bars, metrics table with tooltips and found-type examples.
-   
-   - **⚖️ OOP vs POP** *(Swift)* — protocol-oriented vs. object-oriented signal across five categories (Type System, Abstraction, Composition, Behavior, Architecture), with a spectrum bar and per-category breakdown.
-     
+
+   - **⚖️ OOP vs POP** *(Swift)* — protocol-oriented vs. object-oriented signal across five categories (Type System, Abstraction, Composition, Behavior, Architecture), with a spectrum bar and per-category breakdown. Appears in place of Domain Model for Swift platforms.
+
+   - **🛜 Traffic** *(Go · Python)* — detected inbound and outbound connection signals: HTTP/gRPC endpoints, listener ports, external service calls, and data formats (JSON, Protobuf, …). Shown as two tables — 📥 Inbound and 📤 Outbound — with URI/pattern, port, protocol, format, and source file.
+
    - **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
 
    - **💡 Module Insights** — four sub-sections in a responsive grid:
@@ -52,9 +54,7 @@ go run ./cmd/archscope ~/code --open
 
    - **📏 Longest Functions** — top 20 non-test functions by line count, with module and VS Code link.
 
-   - **🧩 Design Patterns** *(all languages)* — GoF pattern detection: Factory, Singleton, Observer, Strategy, Decorator, Builder, Adapter, Facade, Command, Template Method, and more.
-
-
+   - **🧩 Design Patterns** *(all languages)* — GoF pattern detection from naming conventions: Factory, Singleton, Builder, Observer, Strategy, Decorator, Adapter, Facade, Command, and more — grouped by Creational / Structural / Behavioral category.
 
 5. **🐙 Git Analysis** (repo-wide):
 
@@ -95,6 +95,15 @@ go run ./cmd/archscope ~/code --open
 # Write both HTML and SARIF to ./reports/
 go run ./cmd/archscope ~/code --format both --output ./reports
 
+# Write a Markdown report (no CSS/JS — ideal for wikis, CI artefacts, LLM input)
+go run ./cmd/archscope ~/code --format md --output ./reports
+
+# Monorepo: show each top-level folder as its own tab / section
+go run ./cmd/archscope ~/code --folder-as-tab --open
+
+# Monorepo: Markdown report with one section per folder
+go run ./cmd/archscope ~/code --folder-as-tab --format md --output ./reports
+
 # Analyze a remote repository (cloned to a temp dir; full history for git insights)
 go run ./cmd/archscope https://github.com/owner/repo --open
 
@@ -111,13 +120,18 @@ go build -o archscope ./cmd/archscope
 | Flag | Meaning | Default |
 |------|---------|---------|
 | `--open` | open the HTML report in the browser when done | off |
-| `--format` | `html` \| `sarif` \| `both` | from config (`html`) |
+| `--format` | `html` \| `sarif` \| `md` \| `both` | from config (`html`) |
 | `--output`, `-o` | output directory | from config (`output/`) |
 | `--config` | path to an `.archscope.json` override file | `.archscope.json` |
 | `--ref` | git branch/tag/sha to check out (remote URLs only) | default branch |
 | `--depth` | shallow-clone depth (remote URLs only; `0` = full history) | `0` |
+| `--folder-as-tab` | monorepo mode: show each top-level folder as its own tab/section | off |
 
-Outputs are written as `<project-name>.html` and/or `<project-name>.sarif` inside the output directory. Progress is printed per stage:
+Outputs are written as `<project-name>.html`, `<project-name>.md`, and/or `<project-name>.sarif` inside the output directory.
+
+#### `--folder-as-tab`
+
+In a monorepo where several services share a language, all Go files would otherwise land in one tab. `--folder-as-tab` splits them by top-level folder, producing tabs like **pharmzakaz Py**, **pharmen Go**, **gptzakaz TS**. Short language labels are used: `Go`, `Py`, `TS`, `Kt`, `Swift`. Tabs for the same folder are kept visually adjacent with a separator. Module names in the dependency graph are folder-qualified (`backend(pharmen)` vs `backend(pharmzakaz)`) so they remain unambiguous across tabs. The Markdown report mirrors this — each folder+language combination becomes its own `##` section. Progress is printed per stage:
 
 ```text
  → Scanning source tree…
@@ -195,7 +209,8 @@ archscope:
 | --- | --- |
 | `--format html` | `<output>/<project>.html` |
 | `--format sarif` | `<output>/<project>.sarif` |
-| `--format both` | both of the above |
+| `--format md` | `<output>/<project>.md` |
+| `--format both` | `<output>/<project>.html` + `<output>/<project>.sarif` |
 
 The SARIF log maps each security rule to a `reportingDescriptor`, each finding to a `result` with `physicalLocation` (file + line), and severity to SARIF levels (`error` = HIGH, `warning` = MEDIUM, `note` = LOW).
 
@@ -236,6 +251,7 @@ internal/
   report/      shared HTML theme
     html/        HTML writer (tabs, panels, SVG dependency graph, git section)
     sarif/       SARIF 2.1.0 writer
+    markdown/    Markdown writer (mirrors HTML content; no CSS/JS)
 testdata/      go-sample · multi (5-language) · arch-sample (MVVM + patterns)
 ```
 

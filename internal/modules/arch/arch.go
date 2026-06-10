@@ -309,6 +309,63 @@ func (Module) SummaryCards(res any) []modules.SummaryCard {
 	return cards
 }
 
+// RenderMarkdown renders the architecture result as markdown.
+func (Module) RenderMarkdown(res any) string {
+	r, ok := res.(Result)
+	if !ok || !r.HasDetection() {
+		return ""
+	}
+	var b strings.Builder
+	if r.Mode == "backend" && len(r.Layers) > 0 {
+		b.WriteString("#### Layers\n\n")
+		b.WriteString("| Layer | Files | Lines |\n")
+		b.WriteString("|-------|------:|------:|\n")
+		for _, l := range r.Layers {
+			fmt.Fprintf(&b, "| %s %s | %d | %s |\n",
+				l.Icon, l.Name, l.FileCount, fmtNumMD(l.LineCount))
+		}
+		b.WriteString("\n")
+	} else if r.Mode == "client" && len(r.Patterns) > 0 {
+		b.WriteString("#### Patterns\n\n")
+		b.WriteString("| Pattern | Confidence |\n")
+		b.WriteString("|---------|----------:|\n")
+		for _, p := range r.Patterns {
+			if p.Confidence >= confidenceThreshold {
+				fmt.Fprintf(&b, "| %s | %.0f%% |\n", p.Name, p.Confidence*100)
+			}
+		}
+		b.WriteString("\n")
+	}
+	if len(r.Components) > 0 {
+		b.WriteString("#### Components\n\n")
+		for _, c := range r.Components {
+			if c.Detail != "" {
+				fmt.Fprintf(&b, "- %s **%s** — %s\n", c.Icon, c.Name, c.Detail)
+			} else {
+				fmt.Fprintf(&b, "- %s **%s**\n", c.Icon, c.Name)
+			}
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// fmtNumMD formats an integer with comma thousands separators.
+func fmtNumMD(n int) string {
+	s := fmt.Sprintf("%d", n)
+	if n < 1000 {
+		return s
+	}
+	var out []byte
+	for i, ch := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, byte(ch))
+	}
+	return string(out)
+}
+
 // RenderHTML renders the architecture panel: detected patterns with their
 // role breakdown and a confidence bar, plus the framework component list.
 func (Module) RenderHTML(res any) string {

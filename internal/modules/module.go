@@ -31,6 +31,13 @@ type ReportModule interface {
 	SummaryCards(result any) []SummaryCard
 }
 
+// MarkdownRenderer is an optional extension of ReportModule. Modules that
+// implement it will produce rich markdown sections in --md output reports.
+// Modules that do not implement it show only their summary cards.
+type MarkdownRenderer interface {
+	RenderMarkdown(result any) string
+}
+
 // Registry holds modules by ID.
 type Registry struct {
 	byID map[string]ReportModule
