@@ -81,20 +81,23 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 	b.WriteString(`</div>`)
 
 	// Packages & modules grid, sized by LOC.
+	// Key by (moduleName, platform) so same-named modules in different languages
+	// are not merged.
 	type modAgg struct {
-		name      string
-		loc       int
-		platforms map[langspec.Platform]bool
+		name string
+		plat langspec.Platform
+		loc  int
 	}
+	aggKey := func(name string, p langspec.Platform) string { return name + "\x00" + string(p) }
 	aggs := map[string]*modAgg{}
 	for _, f := range res.Files {
-		a := aggs[f.ModuleName]
+		k := aggKey(f.ModuleName, langspec.Platform(f.Platform))
+		a := aggs[k]
 		if a == nil {
-			a = &modAgg{name: f.ModuleName, platforms: map[langspec.Platform]bool{}}
-			aggs[f.ModuleName] = a
+			a = &modAgg{name: f.ModuleName, plat: langspec.Platform(f.Platform)}
+			aggs[k] = a
 		}
 		a.loc += f.LineCount
-		a.platforms[langspec.Platform(f.Platform)] = true
 	}
 	var list []*modAgg
 	for _, a := range aggs {
@@ -104,8 +107,22 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 		if list[i].loc != list[j].loc {
 			return list[i].loc > list[j].loc
 		}
-		return list[i].name < list[j].name
+		if list[i].name != list[j].name {
+			return list[i].name < list[j].name
+		}
+		return string(list[i].plat) < string(list[j].plat)
 	})
+	// Check if the project has multiple languages — if so, always show lang badge.
+	platSet := map[langspec.Platform]bool{}
+	for _, a := range list {
+		platSet[a.plat] = true
+	}
+	multiLang := len(platSet) > 1
+	// For same-name conflicts across platforms, always badge regardless.
+	namePlatCount := map[string]int{}
+	for _, a := range list {
+		namePlatCount[a.name]++
+	}
 	fmt.Fprintf(&b, `<div class="as-sub" style="margin-top:16px">Packages &amp; modules <span style="color:var(--text-faint);font-weight:400;text-transform:none;letter-spacing:0">(%d)</span></div>`, len(list))
 	if len(list) == 0 {
 		b.WriteString(`<p class="as-empty">No modules detected.</p>`)
@@ -116,9 +133,12 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 			if name == "" {
 				name = "(root)"
 			}
-			platBadges := platformBadges(a.platforms)
+			badge := ""
+			if multiLang || namePlatCount[a.name] > 1 {
+				badge = shortLangBadge(a.plat)
+			}
 			fmt.Fprintf(&b, `<div class="as-pkg"><span class="as-pkg__name">📦 %s</span><span class="as-pkg__meta">%s<span class="as-pkg__loc">%s loc</span></span></div>`,
-				esc(name), platBadges, fmtNum(a.loc))
+				esc(name), badge, fmtNum(a.loc))
 		}
 		b.WriteString(`</div>`)
 	}
@@ -170,6 +190,41 @@ func platformBadges(platforms map[langspec.Platform]bool) string {
 	return b.String()
 }
 
+// shortLangLabel returns a short display label ("Go", "Py", "TS", "Swift", "Kt")
+// for a platform, stripping the ":folder" suffix used in FolderAsTab mode.
+func shortLangLabel(plat langspec.Platform) string {
+	s := string(plat)
+	if i := strings.IndexByte(s, ':'); i >= 0 {
+		s = s[:i]
+	}
+	switch langspec.Platform(s) {
+	case langspec.PlatformGo:
+		return "Go"
+	case langspec.PlatformPython:
+		return "Py"
+	case langspec.PlatformTSJS:
+		return "TS"
+	case langspec.PlatformSwiftObjC:
+		return "Swift"
+	case langspec.PlatformKotlin:
+		return "Kt"
+	}
+	return s
+}
+
+// shortLangBadge renders a single compact language pill for module cards.
+func shortLangBadge(plat langspec.Platform) string {
+	label := shortLangLabel(plat)
+	if label == "" {
+		return ""
+	}
+	cls := string(plat)
+	if i := strings.IndexByte(cls, ':'); i >= 0 {
+		cls = cls[:i]
+	}
+	return fmt.Sprintf(`<span class="as-plat-badge as-plat-%s" style="font-size:10px;margin-right:4px">%s</span>`, cls, label)
+}
+
 func sortedKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -181,7 +236,22 @@ func sortedKeys(m map[string]bool) []string {
 
 // fmtNum is an alias kept for plain-text / SVG contexts.
 func fmtNum(n int) string {
-	return fmtNumHTML(n)
+	s := strconv.Itoa(n)
+	if len(s) <= 3 {
+		return s
+	}
+	var b strings.Builder
+	start := len(s) % 3
+	if start > 0 {
+		b.WriteString(s[:start])
+	}
+	for i := start; i < len(s); i += 3 {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
 }
 
 // fmtNumHTML formats n as HTML with an inline-block <span class="as-g"> as
@@ -395,7 +465,7 @@ func renderSecurityIndex(res *result.AnalysisResult) string {
 		}
 		b.WriteString(`<div class="as-sub" style="margin-bottom:8px">Findings by Platform</div>`)
 		b.WriteString(`<div class="as-sec-plat-row">`)
-		for _, pg := range orderedPlats {
+		for i, pg := range orderedPlats {
 			total := platFindings[pg.Platform]
 			if total == 0 {
 				continue
@@ -403,15 +473,14 @@ func renderSecurityIndex(res *result.AnalysisResult) string {
 			hi := platHigh[pg.Platform]
 			hiHTML := ""
 			if hi > 0 {
-				fmt.Fprintf(&b, ``)
 				hiHTML = fmt.Sprintf(` <span class="as-sev sev-high" style="font-size:10px">%d HIGH</span>`, hi)
 			}
 			fmt.Fprintf(&b,
-				`<div class="as-sec-plat-card">`+
+				`<div class="as-sec-plat-card" data-tab="%d" style="cursor:pointer">`+
 					`<div class="as-sec-plat-name">%s</div>`+
 					`<div class="as-sec-plat-count">%d%s</div>`+
 					`</div>`,
-				esc(pg.TabLabel()), total, hiHTML)
+				i, esc(pg.TabLabel()), total, hiHTML)
 		}
 		b.WriteString(`</div>`)
 	}
@@ -1085,12 +1154,6 @@ func renderPlatformSecurity(res *result.AnalysisResult, plat langspec.Platform, 
 			total += len(fs)
 		}
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, `<div class="as-section"><div class="as-section__head">%s<span class="ico">🛡️</span><h3>Danger Details</h3></div>`, headBadge)
-	if total == 0 {
-		b.WriteString(`<p class="as-clean">✓ No findings in this platform's sources.</p></div>`)
-		return b.String()
-	}
 	// severity tally
 	hi, med, lo := 0, 0, 0
 	for _, rr := range filtered {
@@ -1103,7 +1166,20 @@ func renderPlatformSecurity(res *result.AnalysisResult, plat langspec.Platform, 
 			lo += rr.TotalCount
 		}
 	}
-	fmt.Fprintf(&b, `<p class="as-section__sub"><span class="as-sev sev-high">HIGH %d</span> <span class="as-sev sev-medium">MED %d</span> <span class="as-sev sev-low">LOW %d</span></p>`, hi, med, lo)
+	var b strings.Builder
+	if total == 0 {
+		fmt.Fprintf(&b, `<div class="as-section as-danger-section"><div class="as-section__head">%s<span class="ico">🛡️</span><h3>Danger Details</h3></div>`, headBadge)
+		b.WriteString(`<p class="as-clean">✓ No findings in this platform's sources.</p></div>`)
+		return b.String()
+	}
+	fmt.Fprintf(&b,
+		`<div class="as-section as-danger-section"><div class="as-section__head">%s<span class="ico">🛡️</span><h3>Danger Details</h3>`+
+			`<span style="margin-left:10px;font-size:12px;font-weight:400">`+
+			`<span class="as-sev sev-high">HIGH %d</span> `+
+			`<span class="as-sev sev-medium">MED %d</span> `+
+			`<span class="as-sev sev-low">LOW %d</span>`+
+			`</span></div>`,
+		headBadge, hi, med, lo)
 	b.WriteString(renderFindings(filtered))
 	b.WriteString(`</div>`)
 	return b.String()
@@ -1204,10 +1280,38 @@ func moduleIcon(id string) string {
 
 // ── Per-platform git (churn + contributors filtered to platform files) ───────
 
+// platformLangExts maps a LanguagePlatform to its canonical file extensions.
+func platformLangExts(lp langspec.Platform) map[string]bool {
+	table := map[langspec.Platform][]string{
+		"go":         {".go"},
+		"python":     {".py"},
+		"ts_js":      {".ts", ".tsx", ".js", ".jsx"},
+		"swift_objc": {".swift", ".m", ".mm"},
+		"kotlin":     {".kt", ".kts"},
+		"java":       {".java"},
+		"ruby":       {".rb"},
+		"rust":       {".rs"},
+		"csharp":     {".cs"},
+		"cpp":        {".cpp", ".cc", ".cxx", ".hpp", ".h"},
+	}
+	exts, ok := table[lp]
+	if !ok {
+		return nil
+	}
+	m := make(map[string]bool, len(exts))
+	for _, e := range exts {
+		m[e] = true
+	}
+	return m
+}
+
 func renderPlatformGit(res *result.AnalysisResult, pg *scanner.PlatformGroup, files []*parser.ParsedFile, headBadge string) string {
 	g := res.Git
 	if !g.Available {
-		return ""
+		var b strings.Builder
+		fmt.Fprintf(&b, `<div class="as-section"><div class="as-section__head">%s<span class="ico">🐙</span><h3>Git Analysis</h3></div>`, headBadge)
+		b.WriteString(`<p class="as-empty">No git history available.</p></div>`)
+		return b.String()
 	}
 
 	// Each sub-project may have its own .git root. git log --name-only outputs
@@ -1233,28 +1337,47 @@ func renderPlatformGit(res *result.AnalysisResult, pg *scanner.PlatformGroup, fi
 		}
 	}
 
-	// Filter churn to this platform's files.
+	// Filter churn to this platform's files; fall back to language-extension
+	// match when path matching yields nothing (single .git + small topN).
 	var platChurn []git.FileChurnStat
 	for _, c := range g.Churn {
 		if platRel[c.RelPath] {
 			platChurn = append(platChurn, c)
 		}
 	}
-
-	// Filter contributors to authors who touched any of this platform's modules.
-	platMods := map[string]bool{}
-	for _, m := range pg.Modules {
-		platMods[m] = true
-		if m == "" {
-			platMods["root"] = true
+	if len(platChurn) == 0 {
+		exts := platformLangExts(pg.LanguagePlatform)
+		for _, c := range g.Churn {
+			if exts[strings.ToLower(filepath.Ext(c.RelPath))] {
+				platChurn = append(platChurn, c)
+			}
 		}
 	}
+
+	// Contributors: derive from platform churn (language-accurate).
+	// Fall back to module-name matching (works for per-folder git repos).
 	platAuthors := map[string]*git.AuthorStats{}
-	for name, a := range g.Authors {
-		for mod := range a.MicroserviceCounts {
-			if platMods[mod] {
-				platAuthors[name] = a
-				break
+	for _, c := range platChurn {
+		for _, authorName := range c.TopAuthors {
+			if a, ok := g.Authors[authorName]; ok {
+				platAuthors[authorName] = a
+			}
+		}
+	}
+	if len(platAuthors) == 0 {
+		platMods := map[string]bool{}
+		for _, m := range pg.Modules {
+			platMods[m] = true
+			if m == "" {
+				platMods["root"] = true
+			}
+		}
+		for name, a := range g.Authors {
+			for mod := range a.MicroserviceCounts {
+				if platMods[mod] {
+					platAuthors[name] = a
+					break
+				}
 			}
 		}
 	}

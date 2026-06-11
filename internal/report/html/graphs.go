@@ -21,11 +21,13 @@ type gNode struct {
 	Sublabel string  `json:"sublabel"`
 	Kind     string  `json:"kind"`
 	Score    float64 `json:"score"`
+	Group    string  `json:"group,omitempty"`
 }
 
 type gLink struct {
 	Source string `json:"source"`
 	Target string `json:"target"`
+	Kind   string `json:"kind,omitempty"`
 }
 
 type gData struct {
@@ -44,20 +46,40 @@ func nextGraphID() string {
 
 func renderGlobalArchGraph(res *result.AnalysisResult) string {
 	type modInfo struct {
-		name string
-		loc  int
-		plat langspec.Platform
+		key         string
+		origName    string
+		displayName string
+		loc         int
+		plat        langspec.Platform
 	}
+	mkKey := func(name string, p langspec.Platform) string { return name + "\x00" + string(p) }
 	modMap := map[string]*modInfo{}
 	for _, f := range res.Files {
 		m := f.ModuleName
 		if m == "" {
 			m = "root"
 		}
-		if modMap[m] == nil {
-			modMap[m] = &modInfo{name: m, plat: langspec.Platform(f.Platform)}
+		k := mkKey(m, langspec.Platform(f.Platform))
+		if modMap[k] == nil {
+			modMap[k] = &modInfo{key: k, origName: m, displayName: m, plat: langspec.Platform(f.Platform)}
 		}
-		modMap[m].loc += f.LineCount
+		modMap[k].loc += f.LineCount
+	}
+
+	// Suffix display names when the same module name appears in multiple platforms.
+	nameCount := map[string]int{}
+	for _, mi := range modMap {
+		nameCount[mi.origName]++
+	}
+	for _, mi := range modMap {
+		if nameCount[mi.origName] > 1 {
+			folder := string(tabFolder(mi.plat))
+			if folder != string(mi.plat) {
+				mi.displayName = mi.origName + "(" + folder + ")"
+			} else {
+				mi.displayName = mi.origName + "(" + shortLangLabel(mi.plat) + ")"
+			}
+		}
 	}
 
 	skipTech := map[string]bool{
@@ -71,22 +93,23 @@ func renderGlobalArchGraph(res *result.AnalysisResult) string {
 		}
 	}
 
-	// tech used per module (from imports)
+	// tech used per module (keyed by modKey)
 	modTechs := map[string]map[string]bool{}
 	for _, f := range res.Files {
 		m := f.ModuleName
 		if m == "" {
 			m = "root"
 		}
+		k := mkKey(m, langspec.Platform(f.Platform))
 		for _, imp := range f.Imports {
 			ts := map[string]bool{}
 			detectTechFromImportLocal(imp, ts)
 			for t := range ts {
 				if techSet[t] {
-					if modTechs[m] == nil {
-						modTechs[m] = map[string]bool{}
+					if modTechs[k] == nil {
+						modTechs[k] = map[string]bool{}
 					}
-					modTechs[m][t] = true
+					modTechs[k][t] = true
 				}
 			}
 		}
@@ -112,14 +135,23 @@ func renderGlobalArchGraph(res *result.AnalysisResult) string {
 	var links []gLink
 	nodeSet := map[string]bool{}
 
+	// Determine group per module: folder name (FolderAsTab) or short lang label.
+	modGroup := func(plat langspec.Platform) string {
+		folder := string(tabFolder(plat))
+		if folder != string(plat) {
+			return folder
+		}
+		return shortLangLabel(plat)
+	}
 	for _, mi := range mods {
-		id := "m:" + mi.name
+		id := "m:" + mi.displayName
+		grp := modGroup(mi.plat)
 		nodes = append(nodes, gNode{
-			ID:       id,
-			Label:    mi.name,
-			Sublabel: fmtNum(mi.loc) + " loc",
-			Kind:     "module",
-			Score:    float64(mi.loc) / float64(maxLOC),
+			ID:    id,
+			Label: mi.displayName,
+			Kind:  "module",
+			Score: float64(mi.loc) / float64(maxLOC),
+			Group: grp,
 		})
 		nodeSet[id] = true
 	}
@@ -137,13 +169,30 @@ func renderGlobalArchGraph(res *result.AnalysisResult) string {
 
 	// module → tech edges
 	for _, mi := range mods {
-		for t := range modTechs[mi.name] {
+		for t := range modTechs[mi.key] {
 			if techSet[t] {
-				links = append(links, gLink{"m:" + mi.name, "t:" + t})
+				links = append(links, gLink{Source: "m:" + mi.displayName, Target: "t:" + t, Kind: "tech"})
 			}
 		}
 	}
-	// module → module edges
+	// module → module edges.
+	// Pass 1: edges from graph.Build (coarse first/last-segment heuristic).
+	origToDisplay := map[string][]string{}
+	for _, mi := range mods {
+		origToDisplay[mi.origName] = append(origToDisplay[mi.origName], mi.displayName)
+	}
+	seenLinks := map[[2]string]bool{}
+	addModLink := func(s, d string) {
+		if s == d || !nodeSet["m:"+s] || !nodeSet["m:"+d] {
+			return
+		}
+		k := [2]string{s, d}
+		if seenLinks[k] {
+			return
+		}
+		seenLinks[k] = true
+		links = append(links, gLink{Source: "m:" + s, Target: "m:" + d, Kind: "mod"})
+	}
 	if res.Graph != nil {
 		for _, e := range res.Graph.Edges() {
 			src, dst := e[0], e[1]
@@ -153,8 +202,38 @@ func renderGlobalArchGraph(res *result.AnalysisResult) string {
 			if dst == "" {
 				dst = "root"
 			}
-			if nodeSet["m:"+src] && nodeSet["m:"+dst] {
-				links = append(links, gLink{"m:" + src, "m:" + dst})
+			for _, sd := range origToDisplay[src] {
+				for _, dd := range origToDisplay[dst] {
+					addModLink(sd, dd)
+				}
+			}
+		}
+	}
+	// Pass 2: supplemental edges by scanning all import path segments.
+	// This catches Go-style full-path imports (e.g. github.com/co/repo/backend/api)
+	// that graph.Build's first/last-segment heuristic misses.
+	knownOrigLow := map[string][]string{} // lowercase origName → []displayName
+	for _, mi := range mods {
+		low := strings.ToLower(mi.origName)
+		knownOrigLow[low] = append(knownOrigLow[low], mi.displayName)
+	}
+	for _, f := range res.Files {
+		fromName := f.ModuleName
+		if fromName == "" {
+			fromName = "root"
+		}
+		fromMI := modMap[mkKey(fromName, langspec.Platform(f.Platform))]
+		if fromMI == nil {
+			continue
+		}
+		for _, imp := range f.Imports {
+			segs := strings.FieldsFunc(strings.ToLower(imp), func(r rune) bool {
+				return r == '/' || r == '@'
+			})
+			for _, seg := range segs {
+				for _, toDisplay := range knownOrigLow[seg] {
+					addModLink(fromMI.displayName, toDisplay)
+				}
 			}
 		}
 	}
@@ -184,25 +263,57 @@ func renderGlobalArchGraph(res *result.AnalysisResult) string {
 		`if(!d.nodes.length||!el)return;`+
 		`const kc={'module':'#0a84ff','technology':'#30d158','foreign':'#ff9f0a'};`+
 		`const dark=()=>document.documentElement.getAttribute('data-theme')!=='light';`+
+		// group → color palette
+		`const pal=['#0a84ff','#ff9f0a','#ff375f','#bf5af2','#64d2ff','#ac8e68','#30d158','#ff6961','#5e5ce6','#ffd60a'];`+
+		`const grps=[...new Set(d.nodes.filter(n=>n.group).map(n=>n.group))];`+
+		`const gc={};grps.forEach((g,i)=>{gc[g]=pal[i%%pal.length];});`+
+		`const nodeCol=n=>(n.kind==='module'&&n.group&&gc[n.group])?gc[n.group]:(kc[n.kind]||'#8e8e93');`+
 		`const g=ForceGraph()(el).graphData(d)`+
 		`.nodeLabel(n=>n.label+(n.sublabel?' · '+n.sublabel:''))`+
 		`.nodeVal(n=>n.kind==='module'?Math.max(n.score*80,3):3)`+
-		`.nodeColor(n=>kc[n.kind]||'#8e8e93')`+
+		`.nodeColor(nodeCol)`+
 		`.nodeCanvasObject((node,ctx,gs)=>{`+
 		`const r=node.kind==='module'?Math.max(Math.sqrt(Math.max(node.score*80,3))*0.9,3):4;`+
+		`const col=nodeCol(node);`+
+		// halo: semi-transparent circle in group color — overlapping halos create cloud
+		`if(node.kind==='module'&&node.group){`+
+		`ctx.beginPath();ctx.arc(node.x,node.y,r*2.8,0,2*Math.PI);`+
+		`ctx.fillStyle=col+'28';ctx.fill();}`+
+		// node circle
 		`ctx.beginPath();ctx.arc(node.x,node.y,r,0,2*Math.PI);`+
-		`ctx.fillStyle=kc[node.kind]||'#8e8e93';ctx.fill();`+
-		`if(gs>0.4){ctx.font=Math.max(10/gs,3)+'px -apple-system,sans-serif';`+
+		`ctx.fillStyle=col;ctx.fill();`+
+		// label + sublabel
+		`if(gs>0.4){`+
 		`ctx.textAlign='center';`+
 		`ctx.fillStyle=dark()?'rgba(240,240,240,0.9)':'rgba(0,0,0,0.85)';`+
-		`ctx.fillText(node.label,node.x,node.y+r+10/gs);}})`+
-		`.linkColor(()=>dark()?'rgba(255,255,255,0.18)':'rgba(0,0,0,0.12)').linkWidth(1.2)`+
+		`ctx.font='bold '+Math.max(10/gs,3)+'px -apple-system,sans-serif';`+
+		`ctx.fillText(node.label,node.x,node.y+r+10/gs);`+
+		`if(node.sublabel&&gs>0.7){`+
+		`ctx.font=Math.max(8/gs,2)+'px -apple-system,sans-serif';`+
+		`ctx.fillStyle=dark()?'rgba(180,180,180,0.7)':'rgba(80,80,80,0.65)';`+
+		`ctx.fillText(node.sublabel,node.x,node.y+r+18/gs);}}})`+
+		`.linkColor(l=>l.kind==='mod'?(dark()?'rgba(100,180,255,0.55)':'rgba(10,100,210,0.4)'):(dark()?'rgba(48,209,88,0.45)':'rgba(0,140,60,0.35)'))`+
+		`.linkWidth(l=>l.kind==='mod'?1.6:1.1)`+
+		`.linkDirectionalArrowLength(l=>l.kind==='mod'?5:0)`+
+		`.linkDirectionalArrowRelPos(1)`+
+		`.linkDirectionalArrowColor(l=>dark()?'rgba(100,180,255,0.8)':'rgba(10,100,210,0.7)')`+
 		`.width(el.offsetWidth).height(460)`+
 		`.onEngineStop(()=>g.zoomToFit(400,40));`+
-		`g.d3Force('charge').strength(-500);`+
-		`g.d3Force('link').distance(150);`+
-		`g.d3Force('x',d3.forceX().strength(0.05));`+
-		`g.d3Force('y',d3.forceY().strength(0.05));`+
+		`g.d3Force('charge').strength(-250);`+
+		`g.d3Force('link').distance(120);`+
+		`g.d3Force('x',d3.forceX().strength(0.04));`+
+		`g.d3Force('y',d3.forceY().strength(0.04));`+
+		// cluster force: pull same-group nodes toward their group centroid
+		`g.d3Force('cluster',(function(){`+
+		`let ns;`+
+		`const f=function(a){`+
+		`if(!ns)return;`+
+		`const cx={},cy={},cn={};`+
+		`ns.forEach(n=>{if(!n.group)return;cx[n.group]=(cx[n.group]||0)+(n.x||0);cy[n.group]=(cy[n.group]||0)+(n.y||0);cn[n.group]=(cn[n.group]||0)+1;});`+
+		`Object.keys(cn).forEach(k=>{cx[k]/=cn[k];cy[k]/=cn[k];});`+
+		`ns.forEach(n=>{if(!n.group)return;n.vx=(n.vx||0)+(cx[n.group]-(n.x||0))*a*0.25;n.vy=(n.vy||0)+(cy[n.group]-(n.y||0))*a*0.25;});`+
+		`};f.initialize=function(nodes){ns=nodes;};return f;`+
+		`})());`+
 		`},`+
 		// ── fallback: rendered when CDN is unreachable ─────────────────────
 		`function(){`+
@@ -394,7 +505,7 @@ func renderDeclGraph(modName string, files []*parser.ParsedFile) string {
 	}
 	links := make([]gLink, 0, len(edges))
 	for _, e := range edges {
-		links = append(links, gLink{e.src, e.dst})
+		links = append(links, gLink{Source: e.src, Target: e.dst})
 	}
 
 	d := gData{Nodes: nodes, Links: links}
@@ -907,13 +1018,20 @@ func renderTodosFixmes(files []*parser.ParsedFile) string {
 		}
 		return items[i].Line < items[j].Line
 	})
+	total := len(items)
 	truncated := 0
-	if len(items) > limit {
-		truncated = len(items) - limit
+	if total > limit {
+		truncated = total - limit
 		items = items[:limit]
 	}
+	var headCount string
+	if truncated > 0 {
+		headCount = fmt.Sprintf("(showed %d from %d)", limit, total)
+	} else {
+		headCount = fmt.Sprintf("(%d)", total)
+	}
 	var b strings.Builder
-	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">📝</span><h3>TODOs &amp; FIXMEs</h3></div>`)
+	fmt.Fprintf(&b, `<div class="as-section"><div class="as-section__head"><span class="ico">📝</span><h3>TODOs &amp; FIXMEs <span style="font-weight:400;opacity:.7">%s</span></h3></div>`, headCount)
 	b.WriteString(`<table class="as-table"><thead><tr><th>Kind</th><th>File</th><th>Note</th></tr></thead><tbody>`)
 	for _, it := range items {
 		kindCls := "sev-low"
