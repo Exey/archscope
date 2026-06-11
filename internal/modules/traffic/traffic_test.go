@@ -351,6 +351,65 @@ func TestPythonInbound_DRFRouter(t *testing.T) {
 	}
 }
 
+func TestPythonInbound_DRFRouterWithPrefix(t *testing.T) {
+	lines := []string{
+		`router_v3 = routers.DefaultRouter()`,
+		`router_v3.register("stores", StoreViewSetNew, basename="stores")`,
+		`router_v3.register("products", ProductViewSet, basename="products")`,
+		`urlpatterns = [`,
+		`    path('api/v3/', include(router_v3.urls)),`,
+		`]`,
+	}
+	in, _ := ExtractPythonTraffic("/app/urls.py", lines)
+	uris := map[string]bool{}
+	for _, e := range in {
+		uris[e.URI] = true
+	}
+	if !uris["/api/v3/stores"] {
+		t.Errorf("missing /api/v3/stores, got: %v", uris)
+	}
+	if !uris["/api/v3/products"] {
+		t.Errorf("missing /api/v3/products, got: %v", uris)
+	}
+}
+
+func TestPythonInbound_DRFRouterMultiLine(t *testing.T) {
+	// Multi-line router.register() calls with nested include prefix (api/v1/).
+	lines := []string{
+		`router = routers.DefaultRouter()`,
+		`router.register(`,
+		`    r"notification-settings",`,
+		`    NotificationSettingsViewSet,`,
+		`    basename="notification-settings",`,
+		`)`,
+		`router.register(r"pages", PageViewSet, basename="pages")`,
+		`urlpatterns = [`,
+		`    path(`,
+		`        "api/v1/",`,
+		`        include(`,
+		`            (`,
+		`                [`,
+		`                    path("", include(router.urls)),`,
+		`                ],`,
+		`                "dtp",`,
+		`            ),`,
+		`        ),`,
+		`    ),`,
+		`]`,
+	}
+	in, _ := ExtractPythonTraffic("/app/urls.py", lines)
+	uris := map[string]bool{}
+	for _, e := range in {
+		uris[e.URI] = true
+	}
+	if !uris["/api/v1/notification-settings"] {
+		t.Errorf("missing /api/v1/notification-settings, got: %v", uris)
+	}
+	if !uris["/api/v1/pages"] {
+		t.Errorf("missing /api/v1/pages, got: %v", uris)
+	}
+}
+
 // ── Module.Analyze integration ───────────────────────────────────────────────
 
 func TestAnalyze_Integration(t *testing.T) {

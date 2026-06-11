@@ -6,6 +6,7 @@ import "strings"
 // connection signals. Called from pythonParseHook in internal/lang/python.go.
 func ExtractPythonTraffic(filePath string, lines []string) (inbound, outbound []Entry) {
 	dfmt := pyFileFmt(lines)
+	routerPrefixes := pyBuildRouterPrefixMap(lines)
 
 	seenIn := map[string]bool{}
 	seenOut := map[string]bool{}
@@ -71,15 +72,26 @@ func ExtractPythonTraffic(filePath string, lines []string) (inbound, outbound []
 				addIn(Entry{URI: p, Protocol: "REST", DataFmt: dfmt, Line: no})
 			}
 		}
-		// DRF router.register(r'prefix', ViewSet)
-		if sfx, ok := substringAfter(ln, "router.register("); ok {
-			prefix := pyFirstStrLit(sfx)
-			if prefix != "" {
-				prefix = strings.TrimPrefix(prefix, "^")
-				if !strings.HasPrefix(prefix, "/") {
-					prefix = "/" + prefix
+		// DRF router.register(r'prefix', ViewSet) — matches router_v3, api_router, etc.
+		if strings.Contains(strings.ToLower(ln), "router") {
+			if sfx, ok := substringAfter(ln, ".register("); ok {
+				// Route string may be on the next line for multi-line calls
+				route := pyFirstStrLit(append([]string{sfx}, win...)...)
+				if route != "" {
+					route = strings.TrimPrefix(route, "^")
+					varName := pyRouterVarName(ln)
+					urlPrefix := routerPrefixes[varName]
+					var uri string
+					if urlPrefix != "" {
+						uri = "/" + strings.Trim(urlPrefix, "/") + "/" + strings.TrimPrefix(route, "/")
+					} else {
+						if !strings.HasPrefix(route, "/") {
+							route = "/" + route
+						}
+						uri = route
+					}
+					addIn(Entry{URI: uri, Protocol: "REST", DataFmt: dfmt, Line: no})
 				}
-				addIn(Entry{URI: prefix, Protocol: "REST", DataFmt: dfmt, Line: no})
 			}
 		}
 
@@ -289,6 +301,101 @@ func pyFileFmt(lines []string) string {
 		}
 	}
 	return ""
+}
+
+// pyBuildRouterPrefixMap scans lines for path('prefix/', include(router_name.urls))
+// and returns a map of routerVarName → urlPrefix. Handles two cases:
+//  1. Single-line: path("api/v3/", include(router_v3.urls))
+//  2. Nested: path("", include(router.urls)) nested inside path("api/v1/", include(...))
+func pyBuildRouterPrefixMap(lines []string) map[string]string {
+	type pending struct {
+		lineIdx int
+		name    string
+	}
+	var needBackscan []pending
+	prefixes := map[string]string{}
+
+	for idx, raw := range lines {
+		ln := strings.TrimSpace(raw)
+		if strings.HasPrefix(ln, "#") {
+			continue
+		}
+		includeIdx := strings.Index(ln, "include(")
+		if includeIdx < 0 {
+			continue
+		}
+		sfx := ln[includeIdx+len("include("):]
+		dotIdx := strings.Index(sfx, ".urls")
+		if dotIdx < 0 {
+			continue
+		}
+		routerName := strings.TrimSpace(sfx[:dotIdx])
+		if routerName == "" || strings.ContainsAny(routerName, " \t()\"',") {
+			continue
+		}
+		if _, ok := substringAfter(ln, "path(", "url(", "re_path("); ok {
+			if p := pyFirstStrLit(ln); p != "" {
+				prefixes[routerName] = strings.TrimPrefix(p, "^")
+				continue
+			}
+		}
+		// Same-line prefix not found (empty string or no path() on this line);
+		// queue for backward indent-aware scan.
+		needBackscan = append(needBackscan, pending{idx, routerName})
+	}
+
+	for _, p := range needBackscan {
+		if _, already := prefixes[p.name]; already {
+			continue
+		}
+		myIndent := pyIndentLevel(lines[p.lineIdx])
+		for j := p.lineIdx - 1; j >= 0; j-- {
+			braw := lines[j]
+			bln := strings.TrimSpace(braw)
+			if bln == "" || strings.HasPrefix(bln, "#") {
+				continue
+			}
+			if pyIndentLevel(braw) >= myIndent {
+				continue // same or deeper — not an enclosing block
+			}
+			if !strings.Contains(bln, "path(") && !strings.Contains(bln, "url(") {
+				continue
+			}
+			prefix := pyFirstStrLit(bln)
+			if prefix == "" && j+1 < len(lines) {
+				// path( on its own line; string is on the next line
+				prefix = pyFirstStrLit(strings.TrimSpace(lines[j+1]))
+			}
+			if prefix != "" && strings.Contains(prefix, "/") {
+				prefixes[p.name] = strings.TrimPrefix(prefix, "^")
+				break
+			}
+		}
+	}
+	return prefixes
+}
+
+// pyIndentLevel returns the number of leading spaces/tabs in a raw (untrimmed) line.
+func pyIndentLevel(s string) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] != ' ' && s[i] != '\t' {
+			return i
+		}
+	}
+	return len(s)
+}
+
+// pyRouterVarName extracts the variable name immediately before .register( in ln.
+func pyRouterVarName(ln string) string {
+	idx := strings.Index(ln, ".register(")
+	if idx < 0 {
+		return ""
+	}
+	i := idx - 1
+	for i >= 0 && (ln[i] == '_' || (ln[i] >= 'a' && ln[i] <= 'z') || (ln[i] >= 'A' && ln[i] <= 'Z') || (ln[i] >= '0' && ln[i] <= '9')) {
+		i--
+	}
+	return ln[i+1 : idx]
 }
 
 // pyFirstStrLit extracts the first single- or double-quoted string literal
