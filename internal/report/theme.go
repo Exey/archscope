@@ -306,8 +306,14 @@ a.as-mod:hover{border-color:var(--accent)}
 .as-graph__svg{display:block; width:100%; height:auto}
 .as-graph__lbl{fill:var(--text-dim); font-family:var(--mono); font-size:9.5px}
 .as-fg-container{width:100%; height:460px; border:1px solid var(--border); border-radius:var(--radius); margin:4px 0 14px; overflow:hidden; background:var(--bg-inset)}
-.as-fg-container--decl{height:380px; margin:0 0 10px}
+.as-fg-container--decl{height:280px; margin:0 0 10px}
+.as-fg-container canvas{display:block}
+.as-fg-container>div{height:100%}
 .as-graph-offline{color:var(--text-faint); font-size:11px; margin:8px 0 0; font-style:italic}
+.as-decl-chips{padding:6px 0 12px;line-height:2.4}
+.as-chip{display:inline-block;margin:2px 3px;padding:2px 9px;border-radius:6px;font-size:11px;font-family:var(--mono);text-decoration:none;white-space:nowrap}
+a.as-chip:hover{opacity:.8}
+.as-pkg--link:hover{border-color:var(--accent)!important;opacity:.85}
 
 /* Danger Index — half-gauge + weight bars + platform row */
 .as-sec-toprow{display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap; margin-top:8px}
@@ -436,5 +442,39 @@ const JS = `
       if(sec)sec.scrollIntoView({behavior:'smooth',block:'start'});
     },50);
   });
+  // Module card → jump to platform tab + scroll to module
+  document.addEventListener('click',function(e){
+    var card=e.target.closest('.as-pkg--link[data-mod]');
+    if(!card)return;
+    var modId='mod-'+card.getAttribute('data-mod');
+    var el=document.getElementById(modId);
+    if(!el)return;
+    var panel=el.closest('[id^="p"]');
+    if(!panel)return;
+    var idx=panel.id.slice(1);
+    var radio=document.getElementById('t'+idx);
+    if(radio)radio.checked=true;
+    setTimeout(function(){el.scrollIntoView({behavior:'smooth',block:'start'});},50);
+  });
+  // VS Code path updater
+  var vsBtn=document.getElementById('as-vs-btn');
+  if(vsBtn){
+    vsBtn.addEventListener('click',function(){
+      var inp=document.getElementById('as-vs-path');
+      var msg=document.getElementById('as-vs-msg');
+      if(!inp)return;
+      var newBase=inp.value.trim().replace(/\/+$/,'');
+      var origBase=inp.dataset.orig;
+      if(!newBase||newBase===origBase)return;
+      var prefix='vscode://file'+origBase;
+      var newPrefix='vscode://file'+newBase;
+      var links=document.querySelectorAll('a[href^="'+prefix+'"]');
+      links.forEach(function(a){
+        a.setAttribute('href',newPrefix+a.getAttribute('href').slice(prefix.length));
+      });
+      inp.dataset.orig=newBase;
+      if(msg)msg.textContent=links.length+' links updated';
+    });
+  }
 })();
 `

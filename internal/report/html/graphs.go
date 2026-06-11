@@ -3,7 +3,6 @@ package html
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -297,7 +296,7 @@ func renderGlobalArchGraph(res *result.AnalysisResult) string {
 		`.linkDirectionalArrowLength(l=>l.kind==='mod'?5:0)`+
 		`.linkDirectionalArrowRelPos(1)`+
 		`.linkDirectionalArrowColor(l=>dark()?'rgba(100,180,255,0.8)':'rgba(10,100,210,0.7)')`+
-		`.width(el.offsetWidth).height(460)`+
+		`.width(el.offsetWidth||800).height(460)`+
 		`.onEngineStop(()=>g.zoomToFit(400,40));`+
 		`g.d3Force('charge').strength(-250);`+
 		`g.d3Force('link').distance(120);`+
@@ -371,30 +370,38 @@ func detectTechFromImportLocal(imp string, techSet map[string]bool) {
 
 // ── Per-module declaration graph ──────────────────────────────────────────────
 
+// renderDeclGraph renders a ForceGraph of module declarations using the same
+// CDN loader as the global arch graph. Types (classes, interfaces, enums…)
+// are larger nodes; functions are smaller. Same-file type nodes are connected.
+// Falls back to inline chips when the CDN is unavailable.
 func renderDeclGraph(modName string, files []*parser.ParsedFile) string {
 	type di struct {
-		name string
-		fp   string
-		fn   string
-		kind parser.DeclKind
-		loc  int
+		name   string
+		fp     string
+		line   int
+		kind   parser.DeclKind
+		isType bool
 	}
 	typeKinds := map[parser.DeclKind]bool{
-		parser.DeclStruct: true, parser.DeclInterface: true,
+		parser.DeclStruct: true, parser.DeclClass: true, parser.DeclInterface: true,
 		parser.DeclMessage: true, parser.DeclService: true, parser.DeclEnum: true,
+		parser.DeclActor: true, parser.DeclExtension: true,
 	}
 
-	var ad []di
+	var types, funcs []di
 	funcSeen := map[string]bool{}
 	for _, f := range files {
+		if isGeneratedFile(f.FilePath) {
+			continue
+		}
 		for _, d := range f.Declarations {
 			if typeKinds[d.Kind] && len(d.Name) >= 3 {
-				ad = append(ad, di{d.Name, f.FilePath, f.FileName(), d.Kind, f.LineCount})
+				types = append(types, di{d.Name, f.FilePath, d.Line, d.Kind, true})
 			}
 			if d.Kind == parser.DeclFunc && len(d.Name) >= 3 {
 				key := f.FilePath + "::" + d.Name
 				if !funcSeen[key] {
-					ad = append(ad, di{d.Name, f.FilePath, f.FileName(), parser.DeclFunc, f.LineCount})
+					funcs = append(funcs, di{d.Name, f.FilePath, d.Line, parser.DeclFunc, false})
 					funcSeen[key] = true
 				}
 			}
@@ -402,185 +409,128 @@ func renderDeclGraph(modName string, files []*parser.ParsedFile) string {
 		for _, bf := range f.BigFunctions {
 			key := bf.FilePath + "::" + bf.Name
 			if !funcSeen[key] && len(bf.Name) >= 3 {
-				ad = append(ad, di{bf.Name, bf.FilePath, f.FileName(), parser.DeclFunc, f.LineCount})
+				funcs = append(funcs, di{bf.Name, bf.FilePath, bf.StartLine, parser.DeclFunc, false})
 				funcSeen[key] = true
 			}
 		}
 	}
-	if len(ad) == 0 {
+
+	const maxTypes, maxFuncs = 40, 20
+	if len(types) > maxTypes {
+		types = types[:maxTypes]
+	}
+	if len(funcs) > maxFuncs {
+		funcs = funcs[:maxFuncs]
+	}
+	all := append(types, funcs...)
+	if len(all) < 2 {
 		return ""
 	}
-	if len(ad) > 80 {
-		sort.Slice(ad, func(i, j int) bool { return ad[i].loc > ad[j].loc })
-		ad = ad[:80]
-	}
 
-	// Read file contents for edge detection
-	fileContents := map[string]string{}
-	for _, f := range files {
-		if data, err := os.ReadFile(f.FilePath); err == nil {
-			fileContents[f.FilePath] = string(data)
+	// Same-file edges between type nodes only.
+	type edge struct{ s, t int }
+	fileIdx := map[string][]int{}
+	for i, d := range all {
+		if d.isType {
+			fileIdx[d.fp] = append(fileIdx[d.fp], i)
 		}
 	}
-	fileNodes := map[string][]di{}
-	for _, d := range ad {
-		fileNodes[d.fp] = append(fileNodes[d.fp], d)
-	}
-
-	type edge struct{ src, dst string }
-	seen := map[string]bool{}
 	var edges []edge
-
-	// Cross-file type references
-	for fp, cs := range fileContents {
-		for _, src := range fileNodes[fp] {
-			srcID := src.fp + "::" + src.name
-			for _, tgt := range ad {
-				if tgt.fp == fp || tgt.name == src.name || len(tgt.name) <= 4 {
-					continue
-				}
-				ek := srcID + "->" + tgt.fp + "::" + tgt.name
-				if !seen[ek] && matchRef(cs, tgt.name) {
-					edges = append(edges, edge{srcID, tgt.fp + "::" + tgt.name})
-					seen[ek] = true
-				}
-			}
-		}
-	}
-	// Co-location
-	for _, nodesInFile := range fileNodes {
-		if len(nodesInFile) < 2 || len(nodesInFile) > 20 {
+	edgeSeen := map[[2]int]bool{}
+	for _, idxs := range fileIdx {
+		if len(idxs) < 2 || len(idxs) > 12 {
 			continue
 		}
-		for i, src := range nodesInFile {
-			for j, tgt := range nodesInFile {
-				if i == j {
-					continue
-				}
-				ek := src.fp + "::" + src.name + "->" + tgt.fp + "::" + tgt.name
-				if !seen[ek] {
-					edges = append(edges, edge{src.fp + "::" + src.name, tgt.fp + "::" + tgt.name})
-					seen[ek] = true
+		for a := 0; a < len(idxs); a++ {
+			for b := a + 1; b < len(idxs); b++ {
+				k := [2]int{idxs[a], idxs[b]}
+				if !edgeSeen[k] {
+					edges = append(edges, edge{idxs[a], idxs[b]})
+					edgeSeen[k] = true
 				}
 			}
 		}
 	}
-
-	maxEdges := len(ad) * 3
-	if maxEdges < 10 {
-		maxEdges = 10
-	}
-	if len(edges) > maxEdges {
-		edges = edges[:maxEdges]
+	if len(edges) > 40 {
+		edges = edges[:40]
 	}
 
-	linked := map[string]bool{}
-	for _, e := range edges {
-		linked[e.src] = true
-		linked[e.dst] = true
+	// ForceGraph-compatible data: nodes need numeric id, links use id references.
+	type jsNode struct {
+		ID int    `json:"id"`
+		L  string `json:"l"`
+		K  string `json:"k"`
+		T  bool   `json:"t"`
 	}
-	var kept []di
-	for _, d := range ad {
-		if linked[d.fp+"::"+d.name] {
-			kept = append(kept, d)
-		}
+	type jsEdge struct {
+		Source int `json:"source"`
+		Target int `json:"target"`
 	}
-	if len(kept) < 2 {
-		return ""
+	jNodes := make([]jsNode, len(all))
+	for i, d := range all {
+		jNodes[i] = jsNode{i, d.name, string(d.kind), d.isType}
 	}
-
-	nodes := make([]gNode, 0, len(kept))
-	for _, d := range kept {
-		score := float64(d.loc) / 500.0
-		if score > 1 {
-			score = 1
-		}
-		nodes = append(nodes, gNode{
-			ID:       d.fp + "::" + d.name,
-			Label:    d.name,
-			Sublabel: d.fn,
-			Kind:     string(d.kind),
-			Score:    score,
-		})
-	}
-	links := make([]gLink, 0, len(edges))
-	for _, e := range edges {
-		links = append(links, gLink{Source: e.src, Target: e.dst})
+	jEdges := make([]jsEdge, len(edges))
+	for i, e := range edges {
+		jEdges[i] = jsEdge{e.s, e.t}
 	}
 
-	d := gData{Nodes: nodes, Links: links}
-	dj, _ := json.Marshal(d)
+	type gdata struct {
+		Nodes []jsNode `json:"nodes"`
+		Links []jsEdge `json:"links"`
+	}
+	dj, _ := json.Marshal(gdata{jNodes, jEdges})
+
 	id := nextGraphID()
+	const kc = `{'struct':'#34c759','class':'#0a84ff','interface':'#007aff','message':'#ff9f0a','service':'#ff453a','enum':'#bf5af2','func':'#ff9f0a','actor':'#ff453a','extension':'#64d2ff'}`
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `<div id="%s" class="as-fg-container as-fg-container--decl"></div>`, id)
 	fmt.Fprintf(&b, `<script>{const d=%s;(window.__asgq=window.__asgq||[]).push([`+
-		// ── init ──────────────────────────────────────────────────────────────
+		// ── ForceGraph init ───────────────────────────────────────────────────
 		`function(){`+
 		`const el=document.getElementById('%s');`+
 		`if(!d.nodes.length||!el)return;`+
-		`const kc={'struct':'#34c759','interface':'#007aff','message':'#ff9f0a','service':'#ff453a','enum':'#bf5af2','func':'#ff9f0a'};`+
+		`const kc=%s;`+
 		`const dark=()=>document.documentElement.getAttribute('data-theme')!=='light';`+
 		`const g=ForceGraph()(el).graphData(d)`+
-		`.nodeLabel(n=>n.label+' ('+n.sublabel+') · '+n.kind)`+
-		`.nodeVal(n=>Math.max(Math.pow(n.score,0.6)*200,3))`+
-		`.nodeColor(n=>kc[n.kind]||'#8e8e93')`+
+		`.nodeLabel(n=>n.l+' · '+n.k)`+
+		`.nodeVal(n=>n.t?8:3)`+
+		`.nodeColor(n=>kc[n.k]||'#8e8e93')`+
 		`.nodeCanvasObject((node,ctx,gs)=>{`+
-		`const r=Math.max(Math.sqrt(Math.max(Math.pow(node.score,0.6)*200,3))*0.9,3);`+
-		`ctx.beginPath();ctx.arc(node.x,node.y,r,0,2*Math.PI);`+
-		`ctx.fillStyle=kc[node.kind]||'#8e8e93';ctx.fill();`+
-		`if(gs>0.5){ctx.font=Math.max(10/gs,3)+'px -apple-system,sans-serif';`+
-		`ctx.textAlign='center';`+
-		`ctx.fillStyle=dark()?'rgba(224,224,224,0.9)':'rgba(0,0,0,0.85)';`+
-		`ctx.fillText(node.label,node.x,node.y+r+10/gs);}})`+
-		`.linkDirectionalArrowLength(8).linkDirectionalArrowRelPos(1)`+
-		`.linkColor(()=>dark()?'rgba(255,255,255,0.22)':'rgba(0,0,0,0.12)')`+
-		`.width(el.offsetWidth).height(380)`+
-		`.onEngineStop(()=>g.zoomToFit(400,40));`+
-		`g.d3Force('charge').strength(-380);`+
-		`g.d3Force('link').distance(120);`+
-		`g.d3Force('x',d3.forceX().strength(0.08));`+
-		`g.d3Force('y',d3.forceY().strength(0.08));`+
-		`},`+
-		// ── fallback: colored chips, one per declaration ───────────────────
+		`const col=kc[node.k]||'#8e8e93',r=node.t?5:3.5;`+
+		`ctx.beginPath();ctx.arc(node.x,node.y,r*2.2,0,2*Math.PI);ctx.fillStyle=col+'22';ctx.fill();`+
+		`ctx.beginPath();ctx.arc(node.x,node.y,r,0,2*Math.PI);ctx.fillStyle=col;ctx.fill();`+
+		`if(gs>0.5){ctx.font='9px -apple-system,sans-serif';ctx.textAlign='center';`+
+		`ctx.fillStyle=dark()?'rgba(210,210,210,0.85)':'rgba(30,30,30,0.75)';`+
+		`const lbl=node.l.length>14?node.l.slice(0,12)+'…':node.l;`+
+		`ctx.fillText(lbl,node.x,node.y+r+9);}})`+
+		`.linkColor(()=>dark()?'rgba(255,255,255,0.15)':'rgba(0,0,0,0.1)')`+
+		`.linkWidth(1)`+
+		`.width(el.offsetWidth||800).height(el.offsetHeight||280)`+
+		`.onEngineStop(()=>g.zoomToFit(400,30));`+
+		`g.d3Force('charge').strength(-150);`+
+		`g.d3Force('link').distance(70);`+
+		`g.d3Force('x',d3.forceX().strength(0.06));`+
+		`g.d3Force('y',d3.forceY().strength(0.06));`+
+		`if(window.ResizeObserver){const ro=new ResizeObserver(function(es){`+
+		`const w=es[0].contentRect.width,h=es[0].contentRect.height;`+
+		`if(w>0){g.width(w).height(h||280);setTimeout(function(){g.zoomToFit(400,30);},100);}});`+
+		`ro.observe(el);}},`+
+		// ── Chip fallback ─────────────────────────────────────────────────────
 		`function(){`+
 		`const el=document.getElementById('%s');`+
 		`if(!el)return;`+
+		`const kc=%s;`+
 		`el.style.height='auto';el.style.padding='8px';`+
-		`const kc={'struct':'#34c759','interface':'#007aff','message':'#ff9f0a','service':'#ff453a','enum':'#bf5af2','func':'#ff9f0a'};`+
-		`var chips=d.nodes.slice(0,40).map(n=>`+
-		`'<span style="display:inline-block;margin:2px 3px;padding:1px 7px;border-radius:5px;'`+
-		`+'font-size:11px;font-family:var(--mono);background:'+(kc[n.kind]||'#8e8e93')+'22;'`+
-		`+'color:'+(kc[n.kind]||'#8e8e93')+'">'+n.label+'</span>').join('');`+
-		`el.innerHTML='<div style="line-height:2.2;padding:4px 0">'+chips+'</div>'`+
-		`+'<p class="as-graph-offline">&#x26A1; Interactive graph requires an internet connection</p>';`+
-		`}`+
+		`el.innerHTML='<div style="line-height:2.4;padding:4px 0">'+`+
+		`d.nodes.map(n=>'<span style="display:inline-block;margin:2px 3px;padding:2px 9px;border-radius:6px;font-size:11px;font-family:var(--mono);background:'+(kc[n.k]||'#8e8e93')+'22;color:'+(kc[n.k]||'#8e8e93')+'">'+n.l+'</span>').join('')+`+
+		`'</div><p class="as-graph-offline">&#x26A1; Interactive graph requires internet</p>';}`+
 		`]);}</script>`,
-		string(dj), id, id)
+		string(dj), id, kc, id, kc)
 	return b.String()
 }
 
-func matchRef(source, name string) bool {
-	tl := len(name)
-	sl := len(source)
-	for i := 0; i <= sl-tl; i++ {
-		if source[i:i+tl] != name {
-			continue
-		}
-		if i > 0 && isIdentByte(source[i-1]) {
-			continue
-		}
-		if after := i + tl; after < sl && isIdentByte(source[after]) {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
-func isIdentByte(b byte) bool {
-	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
-}
 
 // ── Architecture layers ───────────────────────────────────────────────────────
 

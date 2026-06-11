@@ -137,8 +137,12 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 			if multiLang || namePlatCount[a.name] > 1 {
 				badge = shortLangBadge(a.plat)
 			}
-			fmt.Fprintf(&b, `<div class="as-pkg"><span class="as-pkg__name">📦 %s</span><span class="as-pkg__meta">%s<span class="as-pkg__loc">%s loc</span></span></div>`,
-				esc(name), badge, fmtNum(a.loc))
+			fmt.Fprintf(&b,
+				`<div class="as-pkg as-pkg--link" data-mod="%s" style="cursor:pointer" title="Open in Modules &amp; Microservices">`+
+					`<span class="as-pkg__name">📦 %s</span>`+
+					`<span class="as-pkg__meta">%s<span class="as-pkg__loc">%s loc</span></span>`+
+					`</div>`,
+				esc(anchorID(a.name)), esc(name), badge, fmtNum(a.loc))
 		}
 		b.WriteString(`</div>`)
 	}
@@ -1696,7 +1700,18 @@ func isTestFile(path string) bool {
 // protobuf outputs (*.pb.go) and controller-gen outputs (zz_generated*.go).
 func isGeneratedFile(path string) bool {
 	base := filepath.Base(path)
-	return strings.HasSuffix(base, ".pb.go") || strings.HasPrefix(base, "zz_generated")
+	if strings.HasSuffix(base, ".pb.go") ||
+		strings.HasSuffix(base, ".pb.gw.go") ||
+		strings.HasPrefix(base, "zz_generated") {
+		return true
+	}
+	// Django migrations: digit-prefixed .py files inside a migrations/ directory.
+	if strings.HasSuffix(base, ".py") && len(base) > 0 && base[0] >= '0' && base[0] <= '9' {
+		if filepath.Base(filepath.Dir(path)) == "migrations" {
+			return true
+		}
+	}
+	return false
 }
 
 // shortenPathFront shortens s to max chars by removing the beginning, e.g.
@@ -1706,6 +1721,30 @@ func shortenPathFront(s string, max int) string {
 		return s
 	}
 	return "…" + s[len(s)-(max-1):]
+}
+
+// ── VS Code path settings card ───────────────────────────────────────────────
+
+// renderVSCodePathCard renders a one-time global card that lets the user
+// update the vscode:// link prefix when sharing a report with someone whose
+// project lives at a different path.
+func renderVSCodePathCard(rootPath string) string {
+	if rootPath == "" {
+		return ""
+	}
+	p := strings.ReplaceAll(rootPath, "\\", "/")
+	return fmt.Sprintf(
+		`<div class="as-section" id="as-vs-card" style="margin-bottom:14px">`+
+			`<div class="as-section__head"><span class="ico">🔗</span><h3>VS Code Links</h3></div>`+
+			`<p class="as-section__sub">Edit the path prefix for <code>vscode://</code> links — useful when sharing this report with someone whose project is at a different location.</p>`+
+			`<div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">`+
+			`<input id="as-vs-path" type="text" value="%s" data-orig="%s"`+
+			` style="flex:1;min-width:200px;padding:6px 10px;background:var(--bg-ele);border:1px solid var(--border);`+
+			`border-radius:6px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none">`+
+			`<button id="as-vs-btn" class="as-toggle" style="white-space:nowrap">Change Path</button>`+
+			`<span id="as-vs-msg" style="font-size:12px;color:var(--text-faint)"></span>`+
+			`</div></div>`,
+		esc(p), esc(p))
 }
 
 // ── vscode:// links + declaration icons ──────────────────────────────────────

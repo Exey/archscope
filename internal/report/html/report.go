@@ -79,6 +79,9 @@ func Render(res *result.AnalysisResult) string {
 	// Global security index (gauge + categories)
 	b.WriteString(renderSecurityIndex(res))
 
+	// VS Code path editor (global, shown once before the platform tabs)
+	b.WriteString(renderVSCodePathCard(res.RootPath))
+
 	// Platform tabs (Git Analysis + Modules & Microservices are per-platform inside)
 	b.WriteString(renderTabs(res))
 
