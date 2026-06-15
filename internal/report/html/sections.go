@@ -1833,7 +1833,7 @@ func renderModuleDetailsPlatform(rootPath string, files []*parser.ParsedFile, he
 		var parts []string
 		for _, k := range kindOrder {
 			if n := m.kinds[k]; n > 0 {
-				parts = append(parts, kindLabel(k, n))
+				parts = append(parts, kindLabel(k, n, string(m.plat)))
 			}
 		}
 		if len(parts) > 0 {
@@ -2170,11 +2170,15 @@ var kindOrder = []parser.DeclKind{
 	parser.DeclRPC, parser.DeclMessage,
 }
 
-func kindLabel(k parser.DeclKind, n int) string {
+func kindLabel(k parser.DeclKind, n int, langID string) string {
 	one, many := string(k), string(k)+"s"
 	switch k {
 	case parser.DeclInterface:
-		one, many = "protocol", "protocols"
+		if langID == "swift" || langID == "objc" {
+			one, many = "protocol", "protocols"
+		} else {
+			one, many = "interface", "interfaces"
+		}
 	case parser.DeclClass:
 		one, many = "class", "classes"
 	case parser.DeclFunc:
