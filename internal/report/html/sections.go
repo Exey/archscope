@@ -23,15 +23,81 @@ import (
 // library label surfaced in the tech-stack cloud. Cross-language, like
 // goscope's detectTechFromImport generalized.
 var techImportMap = []struct{ needle, label string }{
+	// Swift / Apple platforms
 	{"swiftui", "SwiftUI"}, {"uikit", "UIKit"}, {"combine", "Combine"},
 	{"coredata", "Core Data"}, {"foundation", "Foundation"}, {"xctest", "XCTest"},
-	{"react", "React"}, {"next", "Next.js"}, {"vue", "Vue"}, {"angular", "Angular"},
-	{"express", "Express"}, {"@nestjs", "NestJS"}, {"redux", "Redux"}, {"rxjs", "RxJS"},
-	{"django", "Django"}, {"flask", "Flask"}, {"fastapi", "FastAPI"},
-	{"sqlalchemy", "SQLAlchemy"}, {"pytest", "pytest"}, {"numpy", "NumPy"},
-	{"pandas", "pandas"}, {"tensorflow", "TensorFlow"}, {"torch", "PyTorch"},
-	{"net/http", "net/http"}, {"gin-gonic", "Gin"}, {"gorilla", "Gorilla"},
-	{"gorm.io", "GORM"}, {"grpc", "gRPC"}, {"graphql", "GraphQL"}, {"cobra", "Cobra"},
+	{"swiftdata", "SwiftData"}, {"observation", "Observation"}, {"appintents", "AppIntents"},
+	{"widgetkit", "WidgetKit"}, {"mapkit", "MapKit"}, {"arkit", "ARKit"},
+	{"healthkit", "HealthKit"}, {"storekit", "StoreKit"},
+	{"alamofire", "Alamofire"}, {"snapkit", "SnapKit"}, {"kingfisher", "Kingfisher"},
+	{"rxswift", "RxSwift"}, {"realmswift", "Realm"}, {"swiftlint", "SwiftLint"},
+	{"moya", "Moya"}, {"promisekit", "PromiseKit"}, {"sdwebimage", "SDWebImage"},
+	{"swiftgen", "SwiftGen"}, {"cocoalumberjack", "CocoaLumberjack"}, {"swiftprotobuf", "SwiftProtobuf"},
+	{"grdb", "GRDB"}, {"keychainaccess", "KeychainAccess"}, {"lottie", "Lottie"},
+	{"charts", "Charts"},
+
+	// JavaScript / TypeScript
+	{"react-native", "React Native"}, {"expo", "Expo"},
+	{"react", "React"}, {"next/", "Next.js"}, {"vue", "Vue"}, {"nuxt", "Nuxt"}, {"angular", "Angular"},
+	{"svelte", "Svelte"}, {"solid-js", "SolidJS"}, {"astro", "Astro"},
+	{"express", "Express"}, {"@nestjs", "NestJS"},
+	{"redux", "Redux"}, {"rxjs", "RxJS"},
+	{"@apollo/client", "Apollo Client"}, {"relay", "Relay"},
+	{"prisma", "Prisma"}, {"typeorm", "TypeORM"}, {"sequelize", "Sequelize"}, {"mongoose", "Mongoose"},
+	{"tailwindcss", "Tailwind CSS"}, {"bootstrap", "Bootstrap"},
+	{"@mui/", "MUI"}, {"@chakra-ui/", "Chakra UI"}, {"antd", "Ant Design"},
+	{"jquery", "jQuery"}, {"d3-", "D3.js"}, {"three", "Three.js"},
+	{"axios", "Axios"}, {"lodash", "Lodash"},
+	{"moment", "Moment.js"}, {"dayjs", "Day.js"},
+	{"webpack", "Webpack"}, {"vite", "Vite"}, {"eslint", "ESLint"}, {"prettier", "Prettier"},
+	{"graphql", "GraphQL"},
+
+	// Python
+	{"djangorestframework", "Django REST Framework"}, {"django", "Django"},
+	{"flask", "Flask"}, {"fastapi", "FastAPI"},
+	{"sqlalchemy", "SQLAlchemy"}, {"sqlmodel", "SQLModel"},
+	{"scikit-learn", "scikit-learn"}, {"scipy", "SciPy"},
+	{"numpy", "NumPy"}, {"pandas", "pandas"},
+	{"matplotlib", "Matplotlib"}, {"seaborn", "Seaborn"}, {"plotly", "Plotly"},
+	{"tensorflow", "TensorFlow"}, {"torch", "PyTorch"},
+	{"beautifulsoup4", "Beautiful Soup"}, {"scrapy", "Scrapy"},
+	{"requests", "Requests"}, {"httpx", "HTTPx"},
+	{"jinja2", "Jinja2"}, {"click", "Click"},
+	{"uvicorn", "Uvicorn"}, {"starlette", "Starlette"}, {"aiohttp", "aiohttp"},
+	{"celery", "Celery"}, {"dramatiq", "Dramatiq"},
+	{"streamlit", "Streamlit"}, {"dash", "Dash"},
+	{"pydantic", "Pydantic"}, {"pytest", "pytest"},
+
+	// Go
+	{"net/http", "net/http"}, {"gin-gonic", "Gin"},
+	{"github.com/labstack/echo", "Echo"}, {"github.com/go-chi/chi", "Chi"},
+	{"github.com/gofiber/fiber", "Fiber"}, {"github.com/gorilla/mux", "Gorilla Mux"},
+	{"gorm.io", "GORM"},
+	{"go.uber.org/zap", "Zap"}, {"github.com/sirupsen/logrus", "Logrus"},
+	{"github.com/spf13/viper", "Viper"},
+	{"github.com/go-sql-driver/mysql", "MySQL driver"}, {"github.com/lib/pq", "PostgreSQL driver"},
+	{"go.mongodb.org/mongo-driver", "MongoDB driver"}, {"github.com/go-redis/redis", "Go Redis"},
+	{"grpc", "gRPC"}, {"google.golang.org/protobuf", "Protobuf"},
+	{"cobra", "Cobra"},
+
+	// Java
+	{"springframework.boot", "Spring Boot"}, {"org.springframework", "Spring"},
+	{"hibernate", "Hibernate"},
+	{"junit", "JUnit"}, {"mockito", "Mockito"},
+	{"org.slf4j", "SLF4J"}, {"log4j", "Log4j"},
+	{"lombok", "Lombok"},
+	{"retrofit2", "Retrofit"}, {"okhttp3", "OkHttp"},
+	{"javax.servlet", "Java Servlet"}, {"jakarta.servlet", "Jakarta Servlet"},
+	{"java.util", "Java Standard Library"},
+	{"google.guava", "Guava"}, {"apache.commons", "Apache Commons"},
+	{"jackson", "Jackson"},
+
+	// Kotlin
+	{"kotlinx.coroutines", "Kotlin Coroutines"}, {"kotlinx.serialization", "Kotlin Serialization"},
+	{"io.ktor", "Ktor"}, {"org.jetbrains.exposed", "Exposed"},
+	{"kotlin.test", "Kotlin Test"}, {"com.google.dagger", "Dagger (Kotlin)"},
+	{"androidx.compose", "Jetpack Compose"},
+	{"kotlinx.datetime", "Kotlinx Datetime"}, {"kotlinx.html", "Kotlinx HTML"},
 }
 
 var langLabels = map[string]string{
@@ -623,7 +689,10 @@ func renderSecurityRules(results []security.RuleResult) string {
 		}
 	}
 
-	type entry struct{ id string; ci *cweInfo }
+	type entry struct {
+		id string
+		ci *cweInfo
+	}
 	list := make([]entry, 0, len(info))
 	for id, ci := range info {
 		list = append(list, entry{id, ci})
@@ -811,15 +880,17 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 		langCount[f.LanguageID] = true
 	}
 
-	// Split panels: architecture dropped (rendered above), ddd, traffic,
-	// design patterns (move into Module Insights), rest.
-	var dddPanels, trafficPanels, designPanels, otherPanels []result.ModulePanel
+	// Split panels: architecture dropped (rendered above), ddd, spec coverage,
+	// traffic, design patterns (move into Module Insights), rest.
+	var dddPanels, specPanels, trafficPanels, designPanels, otherPanels []result.ModulePanel
 	for _, p := range res.PanelsForPlatform(pg.Platform) {
 		switch p.ModuleID {
 		case "architecture":
 			// rendered in the dedicated Architecture section above; skip
 		case "dddmodel", "oopvspop":
 			dddPanels = append(dddPanels, p)
+		case "speccoverage":
+			specPanels = append(specPanels, p)
 		case "traffic":
 			trafficPanels = append(trafficPanels, p)
 		case "designpattern":
@@ -849,22 +920,25 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 		b.WriteString(`</div>`)
 	}
 
-	// 2. 📐 Domain Model
+	// 2. 🎯 Domain Model
 	b.WriteString(renderModulePanels(dddPanels, badge))
 
-	// 3. 🛜 Traffic
+	// 3. 🧱 Spec Coverage
+	b.WriteString(renderModulePanels(specPanels, badge))
+
+	// 4. 🛜 Traffic
 	b.WriteString(renderModulePanels(trafficPanels, badge))
 
-	// 4. 💡 Module Insights — Hotspots · Modules · Design Patterns · TODOs · Longest Functions
+	// 5. 💡 Module Insights — Hotspots · Modules · Design Patterns · TODOs · Longest Functions
 	b.WriteString(renderModuleInsights(res, pg, files, designPanels, res.RootPath, badge))
 
-	// 5. 🐙 Git Analysis — per-platform churn + contributors
+	// 6. 🐙 Git Analysis — per-platform churn + contributors
 	b.WriteString(renderPlatformGit(res, pg, files, badge))
 
-	// 6. 🛡️ Danger Details
+	// 7. 🛡️ Danger Details
 	b.WriteString(renderPlatformSecurity(res, pg.Platform, badge))
 
-	// 7. 📂 Modules & Microservices — per-platform file inventory
+	// 8. 📂 Modules & Microservices — per-platform file inventory
 	b.WriteString(renderModuleDetailsPlatform(res.RootPath, files, badge))
 
 	// Remaining panels
@@ -1277,6 +1351,10 @@ func moduleIcon(id string) string {
 		return "⚖️"
 	case "traffic":
 		return "🛜"
+	case "dddmodel":
+		return "🍱"
+	case "speccoverage":
+		return "🧱"
 	default:
 		return "📐"
 	}

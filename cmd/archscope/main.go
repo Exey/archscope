@@ -30,6 +30,7 @@ import (
 	_ "github.com/exey/archscope/internal/modules/dddmodel"
 	_ "github.com/exey/archscope/internal/modules/designpattern"
 	_ "github.com/exey/archscope/internal/modules/oopvspop"
+	_ "github.com/exey/archscope/internal/modules/speccoverage"
 	_ "github.com/exey/archscope/internal/modules/traffic"
 	htmlreport "github.com/exey/archscope/internal/report/html"
 	mdreport "github.com/exey/archscope/internal/report/markdown"

@@ -33,7 +33,7 @@ go run ./cmd/archscope ~/code --open
 
 ![ArchScope](https://exey.github.io/ArchScopeDocs/as_platform.svg)
 
-   - **📐 Domain Model** *(Go · Python · Kotlin · Java)* — spectrum from **Anemic Domain Model** (DAO/DTO/Manager-heavy service layer) to **Rich Domain Model** (DDD tactical patterns). Scored across three weighted dimensions:
+   - **🍱 Domain Model** *(Go · Python · Kotlin · Java)* — spectrum from **Anemic Domain Model** (DAO/DTO/Manager-heavy service layer) to **Rich Domain Model** (DDD tactical patterns). Scored across three weighted dimensions:
      - *Rich Domain Types* (40%) — Entities, Value Objects, Aggregates (×2) vs. DAO/DTO/Manager/BO/DO/PO. Detects both **Java/Kotlin-style suffixes** (`*Entity`, `*Repository`) and **Go/Python-style directory conventions** (`aggregate/`, `entity/`, `valueobject/`).
      - *Tactical DDD Patterns* (35%) — Repository, Domain Event, Domain Service, Specification, Use Case, Factory, Event Handler. 5 of 7 = full score.
      - *Layer Separation* (25%) — presence of `/domain/`, `/infrastructure/`, `/application/`, hex-arch port/adapter paths vs. anemic `/dao/` structure. Supports Go monorepo layouts (`/pkg/domain/`, `/internal/domain/`).
