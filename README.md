@@ -126,7 +126,7 @@ go build -o archscope ./cmd/archscope
 | `--config` | path to an `.archscope.json` override file | `.archscope.json` |
 | `--ref` | git branch/tag/sha to check out (remote URLs only) | default branch |
 | `--depth` | shallow-clone depth (remote URLs only; `0` = full history) | `0` |
-| `--folder-as-tab` | monorepo mode: show each top-level folder as its own tab/section | off |
+| `--folder-as-tab` | show each top-level folder as its own tab/section (monorepo/few services) | off |
 
 Outputs are written as `<project-name>.html`, `<project-name>.md`, and/or `<project-name>.sarif` inside the output directory.
 
