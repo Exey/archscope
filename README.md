@@ -72,14 +72,14 @@ go run ./cmd/archscope ~/code --open
 
 Each language is **one self-registering file** in `internal/lang/`. A `LanguageSpec` declares its extensions, detection markers, parse patterns, whether it is a `Client` (UI) language, and its module noun:
 
-| Language | Security | UI scan | Module noun |
-| --- | --- | --- | --- |
-| Go | ✅ language rules + universal | — | 🔧 Microservices |
-| Python | ✅ language rules + universal | — | 📦 Packages |
-| Java | ✅ language rules + universal | — | ☕ Packages & Services |
-| TypeScript / JavaScript | ✅ language rules + universal | ✅ | 📦 Packages |
-| Kotlin | ✅ language rules + universal | ✅ | 📦 Packages & Modules |
-| Swift / Objective-C | ✅ language rules + universal | ✅ | 📦 Packages & Modules |
+| Language | Security | UI scan |
+| --- | --- | --- | 
+| Go | ✅ language rules + universal | — | 
+| Python | ✅ language rules + universal | — | 
+| Java | ✅ language rules + universal | — |
+| TypeScript / JavaScript | ✅ language rules + universal | ✅ |
+| Kotlin | ✅ language rules + universal | ✅ |
+| Swift / Objective-C | ✅ language rules + universal | ✅ |
 
 Adding a language (e.g. `rust.go`) needs no central edit — importing the package triggers its `init()`. The `Client` flag is what routes a tab to pattern detection vs. the layered backend view; the module noun/icon control how its modules are labeled.
 
@@ -126,13 +126,13 @@ go build -o archscope ./cmd/archscope
 | `--config` | path to an `.archscope.json` override file | `.archscope.json` |
 | `--ref` | git branch/tag/sha to check out (remote URLs only) | default branch |
 | `--depth` | shallow-clone depth (remote URLs only; `0` = full history) | `0` |
-| `--folder-as-tab` | monorepo mode: show each top-level folder as its own tab/section | off |
+| `--folder-as-tab` | show each top-level folder as its own tab/section (monorepo/few services) | off |
 
 Outputs are written as `<project-name>.html`, `<project-name>.md`, and/or `<project-name>.sarif` inside the output directory.
 
 #### `--folder-as-tab`
 
-In a monorepo where several services share a language, all Go files would otherwise land in one tab. `--folder-as-tab` splits them by top-level folder, producing tabs like **pharmzakaz Py**, **pharmen Go**, **gptzakaz TS**. Short language labels are used: `Go`, `Py`, `TS`, `Kt`, `Swift`. Tabs for the same folder are kept visually adjacent with a separator. Module names in the dependency graph are folder-qualified (`backend(pharmen)` vs `backend(pharmzakaz)`) so they remain unambiguous across tabs. The Markdown report mirrors this — each folder+language combination becomes its own `##` section. Progress is printed per stage:
+When several services share a language. `--folder-as-tab` splits them by top-level folder, producing tabs. Short language labels are used: `Go`, `Py`, `TS`, `Kt`, `Swift`. Tabs for the same folder are kept visually adjacent with a separator. The Markdown report mirrors this — each folder+language combination becomes its own `##` section. Progress is printed per stage:
 
 ```text
  → Scanning source tree…
