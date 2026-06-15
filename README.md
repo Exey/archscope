@@ -132,7 +132,7 @@ Outputs are written as `<project-name>.html`, `<project-name>.md`, and/or `<proj
 
 #### `--folder-as-tab`
 
-In a monorepo where several services share a language, all Go files would otherwise land in one tab. `--folder-as-tab` splits them by top-level folder, producing tabs like **pharmzakaz Py**, **pharmen Go**, **gptzakaz TS**. Short language labels are used: `Go`, `Py`, `TS`, `Kt`, `Swift`. Tabs for the same folder are kept visually adjacent with a separator. Module names in the dependency graph are folder-qualified (`backend(pharmen)` vs `backend(pharmzakaz)`) so they remain unambiguous across tabs. The Markdown report mirrors this — each folder+language combination becomes its own `##` section. Progress is printed per stage:
+When several services share a language. `--folder-as-tab` splits them by top-level folder, producing tabs. Short language labels are used: `Go`, `Py`, `TS`, `Kt`, `Swift`. Tabs for the same folder are kept visually adjacent with a separator. The Markdown report mirrors this — each folder+language combination becomes its own `##` section. Progress is printed per stage:
 
 ```text
  → Scanning source tree…
