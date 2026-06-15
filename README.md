@@ -72,14 +72,14 @@ go run ./cmd/archscope ~/code --open
 
 Each language is **one self-registering file** in `internal/lang/`. A `LanguageSpec` declares its extensions, detection markers, parse patterns, whether it is a `Client` (UI) language, and its module noun:
 
-| Language | Security | UI scan | Module noun |
-| --- | --- | --- | --- |
-| Go | ✅ language rules + universal | — | 🔧 Microservices |
-| Python | ✅ language rules + universal | — | 📦 Packages |
-| Java | ✅ language rules + universal | — | ☕ Packages & Services |
-| TypeScript / JavaScript | ✅ language rules + universal | ✅ | 📦 Packages |
-| Kotlin | ✅ language rules + universal | ✅ | 📦 Packages & Modules |
-| Swift / Objective-C | ✅ language rules + universal | ✅ | 📦 Packages & Modules |
+| Language | Security | UI scan |
+| --- | --- | --- | 
+| Go | ✅ language rules + universal | — | 
+| Python | ✅ language rules + universal | — | 
+| Java | ✅ language rules + universal | — |
+| TypeScript / JavaScript | ✅ language rules + universal | ✅ |
+| Kotlin | ✅ language rules + universal | ✅ |
+| Swift / Objective-C | ✅ language rules + universal | ✅ |
 
 Adding a language (e.g. `rust.go`) needs no central edit — importing the package triggers its `init()`. The `Client` flag is what routes a tab to pattern detection vs. the layered backend view; the module noun/icon control how its modules are labeled.
 
