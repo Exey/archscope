@@ -34,7 +34,7 @@ type Module struct{}
 
 func (Module) ID() string              { return "traffic" }
 func (Module) Title() string           { return "Traffic" }
-func (Module) AppliesTo(l string) bool { return l == "go" || l == "python" }
+func (Module) AppliesTo(l string) bool { return l == "go" || l == "python" || l == "java" }
 
 // Entry is one detected inbound or outbound connection signal.
 type Entry struct {

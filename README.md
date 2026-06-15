@@ -1,6 +1,6 @@
 # 🏛️🔭 ArchScope
 
-**Universal CLI for multi-language codebase intelligence** — analyze architecture, security, dependencies and git history across Swift/Objective-C, Kotlin, TypeScript/JavaScript, Python and Go, and produce one interactive HTML report, a Markdown document, or a SARIF log.
+**Universal CLI for multi-language codebase intelligence** — analyze architecture, security, dependencies and git history across Swift/Objective-C, Kotlin, TypeScript/JavaScript, Python, Go and Java, and produce one interactive HTML report, a Markdown document, or a SARIF log.
 
 ---
 
@@ -29,11 +29,11 @@ go run ./cmd/archscope ~/code --open
 
 4. **Per-platform tabs** — one tab per language, each containing:
 
-   - **🏛️ Architecture** — *client* languages (Swift/ObjC, Kotlin, TS/JS) get **app-architecture pattern detection**: MVC, MVVM (and variants), VIPER, VIP, RIBs, Clean, Redux, TCA, MVP, MV — scored by role conventions and weighted signals. *Backend* languages (Go, Python) get a **layered architecture view**: API / Models / Services / Persistence / Auth / Config / CLI / Infra / Tests bars + detected component chips.
+   - **🏛️ Architecture** — *client* languages (Swift/ObjC, Kotlin, TS/JS) get **app-architecture pattern detection**: MVC, MVVM (and variants), VIPER, VIP, RIBs, Clean, Redux, TCA, MVP, MV — scored by role conventions and weighted signals. *Backend* languages (Go, Python, Java) get a **layered architecture view**: API / Models / Services / Persistence / Auth / Config / CLI / Infra / Tests bars + detected component chips.
 
 ![ArchScope](https://exey.github.io/ArchScopeDocs/as_platform.svg)
 
-   - **📐 Domain Model** *(Go · Python · Kotlin)* — spectrum from **Anemic Domain Model** (DAO/DTO/Manager-heavy service layer) to **Rich Domain Model** (DDD tactical patterns). Scored across three weighted dimensions:
+   - **📐 Domain Model** *(Go · Python · Kotlin · Java)* — spectrum from **Anemic Domain Model** (DAO/DTO/Manager-heavy service layer) to **Rich Domain Model** (DDD tactical patterns). Scored across three weighted dimensions:
      - *Rich Domain Types* (40%) — Entities, Value Objects, Aggregates (×2) vs. DAO/DTO/Manager/BO/DO/PO. Detects both **Java/Kotlin-style suffixes** (`*Entity`, `*Repository`) and **Go/Python-style directory conventions** (`aggregate/`, `entity/`, `valueobject/`).
      - *Tactical DDD Patterns* (35%) — Repository, Domain Event, Domain Service, Specification, Use Case, Factory, Event Handler. 5 of 7 = full score.
      - *Layer Separation* (25%) — presence of `/domain/`, `/infrastructure/`, `/application/`, hex-arch port/adapter paths vs. anemic `/dao/` structure. Supports Go monorepo layouts (`/pkg/domain/`, `/internal/domain/`).
@@ -42,7 +42,7 @@ go run ./cmd/archscope ~/code --open
 
    - **⚖️ OOP vs POP** *(Swift)* — protocol-oriented vs. object-oriented signal across five categories (Type System, Abstraction, Composition, Behavior, Architecture), with a spectrum bar and per-category breakdown. Appears in place of Domain Model for Swift platforms.
 
-   - **🛜 Traffic** *(Go · Python)* — detected inbound and outbound connection signals: HTTP/gRPC endpoints, listener ports, external service calls, and data formats (JSON, Protobuf, …). Shown as two tables — 📥 Inbound and 📤 Outbound — with URI/pattern, port, protocol, format, and source file.
+   - **🛜 Traffic** *(Go · Python · Java)* — detected inbound and outbound connection signals: HTTP/gRPC endpoints, listener ports, external service calls, and data formats (JSON, Protobuf, …). Shown as two tables — 📥 Inbound and 📤 Outbound — with URI/pattern, port, protocol, format, and source file.
 
    - **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
 
@@ -76,6 +76,7 @@ Each language is **one self-registering file** in `internal/lang/`. A `LanguageS
 | --- | --- | --- | --- |
 | Go | ✅ language rules + universal | — | 🔧 Microservices |
 | Python | ✅ language rules + universal | — | 📦 Packages |
+| Java | ✅ language rules + universal | — | ☕ Packages & Services |
 | TypeScript / JavaScript | ✅ language rules + universal | ✅ | 📦 Packages |
 | Kotlin | ✅ language rules + universal | ✅ | 📦 Packages & Modules |
 | Swift / Objective-C | ✅ language rules + universal | ✅ | 📦 Packages & Modules |
@@ -244,7 +245,7 @@ internal/
   fetch/       remote git-URL resolution (clone + cleanup)
   modules/     pluggable report modules
     arch/        architecture: client pattern detection + backend layered view
-    dddmodel/    DDD vs. Anemic Domain Model analyzer (Go · Python · Kotlin)
+    dddmodel/    DDD vs. Anemic Domain Model analyzer (Go · Python · Kotlin · Java)
     designpattern/ universal GoF detector
     oopvspop/    Swift-only OOP↔POP analyzer
   result/      AnalysisResult aggregate + pipeline (Run / RunWithProgress)

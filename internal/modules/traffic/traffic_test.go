@@ -451,6 +451,173 @@ func TestAnalyze_Empty(t *testing.T) {
 	}
 }
 
+// ── Java inbound ─────────────────────────────────────────────────────────────
+
+func TestJavaInbound_SpringMVC(t *testing.T) {
+	lines := []string{
+		`@RestController`,
+		`@RequestMapping("/api/v1")`,
+		`public class UserController {`,
+		`    @GetMapping("/users")`,
+		`    public List<User> getUsers() { return null; }`,
+		`    @PostMapping("/users")`,
+		`    public User createUser(@RequestBody User u) { return null; }`,
+		`    @DeleteMapping("/{id}")`,
+		`    public void delete(@PathVariable Long id) {}`,
+		`}`,
+	}
+	in, _ := ExtractJavaTraffic("/app/UserController.java", lines)
+	uris := map[string]bool{}
+	for _, e := range in {
+		uris[e.URI] = true
+	}
+	if !uris["GET /api/v1/users"] {
+		t.Errorf("missing GET /api/v1/users, got: %v", uris)
+	}
+	if !uris["POST /api/v1/users"] {
+		t.Errorf("missing POST /api/v1/users, got: %v", uris)
+	}
+	if !uris["DELETE /api/v1/{id}"] {
+		t.Errorf("missing DELETE /api/v1/{id}, got: %v", uris)
+	}
+}
+
+func TestJavaInbound_SpringBootStartup(t *testing.T) {
+	lines := []string{`SpringApplication.run(App.class, args);`}
+	in, _ := ExtractJavaTraffic("/app/App.java", lines)
+	if len(in) == 0 {
+		t.Fatal("want at least 1 inbound (HTTP Server)")
+	}
+	if in[0].URI != "HTTP Server" || in[0].Protocol != "REST" {
+		t.Errorf("unexpected: %+v", in[0])
+	}
+}
+
+func TestJavaInbound_JAXRS(t *testing.T) {
+	lines := []string{
+		`@Path("/orders")`,
+		`@GET`,
+		`public Response listOrders() { return null; }`,
+	}
+	in, _ := ExtractJavaTraffic("/app/OrderResource.java", lines)
+	if len(in) == 0 {
+		t.Fatal("want inbound entry for @Path")
+	}
+	if in[0].URI != "GET /orders" {
+		t.Errorf("want GET /orders, got %s", in[0].URI)
+	}
+}
+
+func TestJavaInbound_gRPCServer(t *testing.T) {
+	lines := []string{
+		`Server server = ServerBuilder.forPort(50051)`,
+		`    .addService(new OrderServiceImpl())`,
+		`    .build().start();`,
+	}
+	in, _ := ExtractJavaTraffic("/app/GrpcServer.java", lines)
+	protos := map[string]bool{}
+	uris := map[string]bool{}
+	for _, e := range in {
+		protos[e.Protocol] = true
+		uris[e.URI] = true
+	}
+	if !protos["gRPC"] {
+		t.Errorf("want gRPC inbound, got: %v", in)
+	}
+	if !uris["gRPC Server"] && !uris["OrderService"] {
+		t.Errorf("want gRPC Server or OrderService, got: %v", uris)
+	}
+}
+
+func TestJavaInbound_KafkaListener(t *testing.T) {
+	lines := []string{`@KafkaListener(topics = "order-events", groupId = "grp")`}
+	in, _ := ExtractJavaTraffic("/app/Consumer.java", lines)
+	if len(in) == 0 {
+		t.Fatal("want KafkaListener inbound")
+	}
+	if in[0].Protocol != "Kafka" {
+		t.Errorf("want Kafka, got %s", in[0].Protocol)
+	}
+	if in[0].URI != "order-events" {
+		t.Errorf("want order-events, got %s", in[0].URI)
+	}
+}
+
+// ── Java outbound ─────────────────────────────────────────────────────────────
+
+func TestJavaOutbound_RestTemplate(t *testing.T) {
+	lines := []string{
+		`String result = restTemplate.getForObject("https://api.example.com/data", String.class);`,
+	}
+	_, out := ExtractJavaTraffic("/app/Client.java", lines)
+	if len(out) != 1 {
+		t.Fatalf("want 1 outbound, got %d: %v", len(out), out)
+	}
+	if out[0].Protocol != "REST" {
+		t.Errorf("want REST, got %s", out[0].Protocol)
+	}
+	if out[0].URI != "https://api.example.com/data" {
+		t.Errorf("unexpected URI: %s", out[0].URI)
+	}
+}
+
+func TestJavaOutbound_HttpClientURI(t *testing.T) {
+	lines := []string{
+		`HttpRequest request = HttpRequest.newBuilder().uri(URI.create("https://payments.example.com/charge")).build();`,
+	}
+	_, out := ExtractJavaTraffic("/app/PaymentClient.java", lines)
+	if len(out) == 0 {
+		t.Fatal("want outbound for URI.create")
+	}
+	if out[0].Protocol != "REST" {
+		t.Errorf("want REST, got %s", out[0].Protocol)
+	}
+}
+
+func TestJavaOutbound_KafkaTemplate(t *testing.T) {
+	lines := []string{`kafkaTemplate.send("payment-events", event);`}
+	_, out := ExtractJavaTraffic("/app/Producer.java", lines)
+	if len(out) == 0 {
+		t.Fatal("want Kafka outbound")
+	}
+	if out[0].Protocol != "Kafka" {
+		t.Errorf("want Kafka, got %s", out[0].Protocol)
+	}
+	if out[0].URI != "payment-events" {
+		t.Errorf("want payment-events, got %s", out[0].URI)
+	}
+}
+
+func TestJavaOutbound_Jedis(t *testing.T) {
+	lines := []string{`Jedis jedis = new Jedis("localhost", 6379);`}
+	_, out := ExtractJavaTraffic("/app/Cache.java", lines)
+	if len(out) == 0 {
+		t.Fatal("want Redis outbound")
+	}
+	if out[0].Protocol != "Redis" {
+		t.Errorf("want Redis, got %s", out[0].Protocol)
+	}
+	if out[0].Port != "6379" {
+		t.Errorf("want port 6379, got %s", out[0].Port)
+	}
+}
+
+func TestJavaOutbound_gRPCChannel(t *testing.T) {
+	lines := []string{
+		`ManagedChannel channel = ManagedChannelBuilder.forAddress("inventory-service", 50051).usePlaintext().build();`,
+	}
+	_, out := ExtractJavaTraffic("/app/GrpcClient.java", lines)
+	if len(out) == 0 {
+		t.Fatal("want gRPC outbound")
+	}
+	if out[0].Protocol != "gRPC" {
+		t.Errorf("want gRPC, got %s", out[0].Protocol)
+	}
+	if out[0].Port != "50051" {
+		t.Errorf("want port 50051, got %s", out[0].Port)
+	}
+}
+
 // ── RenderHTML ───────────────────────────────────────────────────────────────
 
 func TestRenderHTML_EmptyReturnsNothing(t *testing.T) {

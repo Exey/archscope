@@ -45,7 +45,9 @@ func IsTestPath(filePath string) bool {
 		strings.HasSuffix(base, ".test.js") ||
 		strings.HasSuffix(base, ".spec.js") ||
 		strings.HasSuffix(base, "_test.py") ||
-		(strings.HasPrefix(base, "test_") && strings.Contains(base, ".py"))
+		(strings.HasPrefix(base, "test_") && strings.Contains(base, ".py")) ||
+		strings.HasSuffix(base, "test.java") ||
+		strings.HasSuffix(base, "tests.java")
 }
 
 // StripStringsAndComments returns a copy of line with the contents of string

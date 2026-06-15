@@ -16,13 +16,14 @@ const (
 	PlatformPython    Platform = "python"     // Python tab
 	PlatformTSJS      Platform = "ts_js"      // TypeScript + JavaScript tab
 	PlatformGo        Platform = "go"         // Go tab
+	PlatformJava      Platform = "java"       // Java tab
 )
 
 // PlatformOrder is the canonical left-to-right tab order in the HTML report.
 // (The report itself re-sorts tabs by lines of code; this is only the
 // tie-break / fallback order.)
 var PlatformOrder = []Platform{
-	PlatformSwiftObjC, PlatformKotlin, PlatformPython, PlatformTSJS, PlatformGo,
+	PlatformSwiftObjC, PlatformKotlin, PlatformPython, PlatformTSJS, PlatformGo, PlatformJava,
 }
 
 // PlatformTitle is the human label shown on a tab.
@@ -38,6 +39,8 @@ func PlatformTitle(p Platform) string {
 		return "TS + JS"
 	case PlatformGo:
 		return "Go"
+	case PlatformJava:
+		return "Java"
 	default:
 		return string(p)
 	}

@@ -333,7 +333,7 @@ func TestAnalyze_CustomConfig(t *testing.T) {
 
 func TestAppliesTo(t *testing.T) {
 	m := Module{Cfg: DefaultConfig}
-	for _, id := range []string{"go", "python", "kotlin"} {
+	for _, id := range []string{"go", "python", "kotlin", "java"} {
 		if !m.AppliesTo(id) {
 			t.Errorf("AppliesTo(%q) = false, want true", id)
 		}
@@ -342,6 +342,100 @@ func TestAppliesTo(t *testing.T) {
 		if m.AppliesTo(id) {
 			t.Errorf("AppliesTo(%q) = true, want false", id)
 		}
+	}
+}
+
+func TestAnalyze_JavaSuffixConventions(t *testing.T) {
+	files := []*parser.ParsedFile{
+		javaFile("/project/domain/order/OrderEntity.java", "OrderEntity"),
+		javaFile("/project/domain/money/MoneyValueObject.java", "MoneyValueObject"),
+		javaFile("/project/domain/cart/CartAggregate.java", "CartAggregate"),
+		javaFile("/project/domain/event/OrderPlacedDomainEvent.java", "OrderPlacedDomainEvent"),
+		javaFile("/project/infrastructure/OrderRepository.java", "OrderRepository"),
+		javaFile("/project/application/PlaceOrderUseCase.java", "PlaceOrderUseCase"),
+	}
+	res := Module{Cfg: DefaultConfig}.Analyze(files).(Result)
+
+	if res.EntitiesCount != 1 {
+		t.Errorf("expected 1 entity, got %d", res.EntitiesCount)
+	}
+	if res.VOCount != 1 {
+		t.Errorf("expected 1 value object, got %d", res.VOCount)
+	}
+	if res.AggregateCount != 1 {
+		t.Errorf("expected 1 aggregate, got %d", res.AggregateCount)
+	}
+	if res.DomainEvtCount != 1 {
+		t.Errorf("expected 1 domain event, got %d", res.DomainEvtCount)
+	}
+	if res.RepositoryCount != 1 {
+		t.Errorf("expected 1 repository, got %d", res.RepositoryCount)
+	}
+	if res.UseCaseCount != 1 {
+		t.Errorf("expected 1 use case, got %d", res.UseCaseCount)
+	}
+	if res.DDDScore < 60 {
+		t.Errorf("Java DDD project: expected DDDScore >= 60, got %d", res.DDDScore)
+	}
+}
+
+func TestAnalyze_JavaTestFileExclusion(t *testing.T) {
+	files := []*parser.ParsedFile{
+		javaFile("/project/src/test/java/OrderTest.java", "FakeRepository", "OrderDTO"),
+		javaFile("/project/src/main/java/OrderEntity.java", "OrderEntity"),
+	}
+	res := Module{Cfg: DefaultConfig}.Analyze(files).(Result)
+
+	if res.BackendFiles != 1 {
+		t.Errorf("expected 1 non-test file, got %d", res.BackendFiles)
+	}
+	if res.EntitiesCount != 1 {
+		t.Errorf("expected 1 entity from production file, got %d", res.EntitiesCount)
+	}
+	if res.RepositoryCount != 0 {
+		t.Errorf("FakeRepository from test file should be excluded, got %d", res.RepositoryCount)
+	}
+}
+
+func TestAnalyze_JavaTestFileSuffix(t *testing.T) {
+	// *Test.java, *Tests.java, *IT.java must all be excluded.
+	files := []*parser.ParsedFile{
+		javaFile("/project/OrderTest.java", "OrderRepository"),
+		javaFile("/project/OrderTests.java", "CartAggregate"),
+		javaFile("/project/OrderIT.java", "OrderEntity"),
+		javaFile("/project/Order.java", "OrderFactory"),
+	}
+	res := Module{Cfg: DefaultConfig}.Analyze(files).(Result)
+
+	if res.BackendFiles != 1 {
+		t.Errorf("expected only 1 production file, got %d", res.BackendFiles)
+	}
+	if res.FactoryCount != 1 {
+		t.Errorf("expected 1 factory from production file, got %d", res.FactoryCount)
+	}
+}
+
+func TestAnalyze_JavaDirectoryConventions(t *testing.T) {
+	// Java projects using DDD package names (no suffix needed).
+	files := []*parser.ParsedFile{
+		javaFile("/project/domain/entity/Order.java", "Order"),
+		javaFile("/project/domain/valueobject/Money.java", "Money"),
+		javaFile("/project/domain/aggregate/Cart.java", "Cart"),
+		javaFile("/project/domain/repository/OrderRepo.java", "OrderRepo"),
+	}
+	res := Module{Cfg: DefaultConfig}.Analyze(files).(Result)
+
+	if res.EntitiesCount != 1 {
+		t.Errorf("entity dir: expected 1, got %d", res.EntitiesCount)
+	}
+	if res.VOCount != 1 {
+		t.Errorf("valueobject dir: expected 1, got %d", res.VOCount)
+	}
+	if res.AggregateCount != 1 {
+		t.Errorf("aggregate dir: expected 1, got %d", res.AggregateCount)
+	}
+	if res.RepositoryCount != 1 {
+		t.Errorf("repository dir: expected 1, got %d", res.RepositoryCount)
 	}
 }
 
@@ -468,4 +562,19 @@ func goFile(path string, typeNames ...string) *parser.ParsedFile {
 // clarify intent when the test is about path structure rather than declarations.
 func goFileIn(path string, typeNames ...string) *parser.ParsedFile {
 	return goFile(path, typeNames...)
+}
+
+func javaFile(path string, typeNames ...string) *parser.ParsedFile {
+	pf := &parser.ParsedFile{
+		FilePath:   path,
+		LanguageID: "java",
+		Platform:   "java",
+	}
+	for _, n := range typeNames {
+		pf.Declarations = append(pf.Declarations, parser.Declaration{
+			Name: n,
+			Kind: parser.DeclClass,
+		})
+	}
+	return pf
 }

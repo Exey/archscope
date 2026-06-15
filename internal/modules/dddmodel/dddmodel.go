@@ -105,7 +105,7 @@ func (Module) Title() string { return "Domain Model" }
 // AppliesTo runs for backend languages only.
 func (Module) AppliesTo(languageID string) bool {
 	switch languageID {
-	case "go", "python", "kotlin":
+	case "go", "python", "kotlin", "java":
 		return true
 	}
 	return false
@@ -300,7 +300,11 @@ func isTestPath(pathL string) bool {
 	return strings.HasSuffix(pathL, "_test.go") ||
 		strings.Contains(pathL, "/testdata/") ||
 		strings.Contains(pathL, "/__tests__/") ||
-		strings.Contains(pathL, "/test_") // Python test_ prefix at dir level
+		strings.Contains(pathL, "/test_") || // Python test_ prefix at dir level
+		strings.Contains(pathL, "/src/test/") || // Maven/Gradle standard test tree
+		strings.HasSuffix(pathL, "test.java") || // *Test.java (JUnit)
+		strings.HasSuffix(pathL, "tests.java") || // *Tests.java
+		strings.HasSuffix(pathL, "it.java") // *IT.java (Maven Failsafe integration tests)
 }
 
 // ── Analyze ────────────────────────────────────────────────────────────────
