@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/exey/archscope/internal/config"
 	"github.com/exey/archscope/internal/fetch"
@@ -134,8 +135,9 @@ func main() {
 	}
 	defer resolved.Cleanup() //nolint:errcheck
 
+	pipelineStart := time.Now()
 	res, err := result.RunWithProgress(resolved.Path, cfg, func(msg string) {
-		fmt.Println(" →", msg)
+		fmt.Printf(" → [%5.1fs] %s\n", time.Since(pipelineStart).Seconds(), msg)
 	})
 	if err != nil {
 		fatalf("archscope: analysis failed: %v\n", err)

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/exey/archscope/internal/parser"
 )
@@ -57,9 +58,27 @@ var skipDirs = map[string]bool{
 	"__pycache__": true, ".gradle": true, ".idea": true,
 }
 
+// specCache avoids re-walking the same project root for every platform tab.
+var specCacheMu sync.Mutex
+var specCache = map[string]specCacheEntry{}
+
+type specCacheEntry struct {
+	ops       []SpecOp
+	fileCount int
+}
+
 // scanSpecFiles walks root up to 4 levels deep, parsing OpenAPI YAML/JSON,
-// .proto, and .graphql/.gql files it finds.
-func scanSpecFiles(root string) (ops []SpecOp, fileCount int) {
+// .proto, and .graphql/.gql files it finds. Results are cached by root path.
+func scanSpecFiles(root string) ([]SpecOp, int) {
+	specCacheMu.Lock()
+	if e, ok := specCache[root]; ok {
+		specCacheMu.Unlock()
+		return e.ops, e.fileCount
+	}
+	specCacheMu.Unlock()
+
+	var ops []SpecOp
+	var fileCount int
 	var walk func(dir string, depth int)
 	walk = func(dir string, depth int) {
 		if depth > 4 {
@@ -78,23 +97,28 @@ func scanSpecFiles(root string) (ops []SpecOp, fileCount int) {
 				walk(filepath.Join(dir, name), depth+1)
 				continue
 			}
+			// Check filename before reading — skip non-spec files cheaply.
+			nameL := strings.ToLower(name)
+			if !isOpenAPIFilename(nameL) &&
+				!strings.HasSuffix(nameL, ".proto") &&
+				!strings.HasSuffix(nameL, ".graphql") &&
+				!strings.HasSuffix(nameL, ".gql") {
+				continue
+			}
 			abs := filepath.Join(dir, name)
 			rel, _ := filepath.Rel(root, abs)
-			nameL := strings.ToLower(name)
-
 			content, err := os.ReadFile(abs)
 			if err != nil {
 				continue
 			}
 			src := string(content)
-
 			var found []SpecOp
 			switch {
 			case isOpenAPIFilename(nameL):
 				found = parseOpenAPI(src, rel)
 			case strings.HasSuffix(nameL, ".proto"):
 				found = parseProto(src, rel)
-			case strings.HasSuffix(nameL, ".graphql") || strings.HasSuffix(nameL, ".gql"):
+			default:
 				found = parseGraphQL(src, rel)
 			}
 			if len(found) > 0 {
@@ -104,7 +128,11 @@ func scanSpecFiles(root string) (ops []SpecOp, fileCount int) {
 		}
 	}
 	walk(root, 0)
-	return
+
+	specCacheMu.Lock()
+	specCache[root] = specCacheEntry{ops, fileCount}
+	specCacheMu.Unlock()
+	return ops, fileCount
 }
 
 func isOpenAPIFilename(name string) bool {

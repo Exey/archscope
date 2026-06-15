@@ -42,7 +42,10 @@ go run ./cmd/archscope ~/code --open
 
    - **⚖️ OOP vs POP** *(Swift)* — protocol-oriented vs. object-oriented signal across five categories (Type System, Abstraction, Composition, Behavior, Architecture), with a spectrum bar and per-category breakdown. Appears in place of Domain Model for Swift platforms.
 
-   - **🛜 Traffic** *(Go · Python · Java)* — detected inbound and outbound connection signals: HTTP/gRPC endpoints, listener ports, external service calls, and data formats (JSON, Protobuf, …). Shown as two tables — 📥 Inbound and 📤 Outbound — with URI/pattern, port, protocol, format, and source file.
+   - **🛜 Traffic** *(Go · Python · Java)* — detected inbound and outbound connection signals: HTTP/gRPC endpoints, listener ports, external service calls, and data formats (JSON, Protobuf, …). Shown as two tables — 📥 Inbound and 📤 Outbound — with protocol, URI/pattern, data format, source file, and module. Each inbound route gets a **Spec** column (✅ / ❓) when spec files are found.
+
+   - **🧱 Spec Coverage** *(Go · Python · Java · Kotlin · TypeScript)* — measures **code→spec coverage**: what percentage of detected code routes have a matching entry in a spec file. Scans the project tree for OpenAPI / Swagger (YAML + JSON), gRPC (`.proto`), and GraphQL (`.graphql` / `.gql`) specs and cross-references them against route handlers extracted from source.
+     - **Main metric bar** — `code→spec` percentage: `(code routes with a spec entry) / (total code routes)`.
 
    - **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
 
@@ -56,7 +59,7 @@ go run ./cmd/archscope ~/code --open
 
    - **🧩 Design Patterns** *(all languages)* — GoF pattern detection from naming conventions: Factory, Singleton, Builder, Observer, Strategy, Decorator, Adapter, Facade, Command, and more — grouped by Creational / Structural / Behavioral category.
 
-5. **🐙 Git Analysis** (repo-wide):
+1. **🐙 Git Analysis** (repo-wide):
 
    - **Branching model classifier** — scores Gitflow / Trunk-Based / GitHub Flow / GitLab Flow / OneFlow with confidence % and detected signals.
    - **Top contributors** — commits and files touched per author.
@@ -64,7 +67,7 @@ go run ./cmd/archscope ~/code --open
    - **Tags & commits** — semver tag list, commit volume, conventional-commit hygiene.
    - **Branch inventory** — all branches with stale detection.
 
-6. **📂 Modules & Microservices** — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
+2. **📂 Modules & Microservices** — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
 
 ---
 
@@ -244,10 +247,12 @@ internal/
   git/         history, blame, branching-model classifier
   fetch/       remote git-URL resolution (clone + cleanup)
   modules/     pluggable report modules
-    arch/        architecture: client pattern detection + backend layered view
-    dddmodel/    DDD vs. Anemic Domain Model analyzer (Go · Python · Kotlin · Java)
+    arch/          architecture: client pattern detection + backend layered view
+    dddmodel/      DDD vs. Anemic Domain Model analyzer (Go · Python · Kotlin · Java)
     designpattern/ universal GoF detector
-    oopvspop/    Swift-only OOP↔POP analyzer
+    oopvspop/      Swift-only OOP↔POP analyzer
+    speccoverage/  API spec coverage: OpenAPI · gRPC · GraphQL vs. code routes (Go · Python · Java · Kotlin · TypeScript)
+    traffic/       HTTP/gRPC/WebSocket route + connection detection
   result/      AnalysisResult aggregate + pipeline (Run / RunWithProgress)
   report/      shared HTML theme
     html/        HTML writer (tabs, panels, SVG dependency graph, git section)

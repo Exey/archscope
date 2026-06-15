@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/exey/archscope/internal/config"
 	"github.com/exey/archscope/internal/git"
@@ -123,7 +124,7 @@ func RunWithProgress(rootPath string, cfg config.Config, progress func(string)) 
 
 	// 6) Report modules, run per platform tab.
 	step("Running report modules…")
-	panels := runModules(scan, files)
+	panels := runModules(scan, files, step)
 
 	projectName := cfg.ProjectName
 	if projectName == "" {
@@ -165,7 +166,7 @@ func RunWithProgress(rootPath string, cfg config.Config, progress func(string)) 
 
 // runModules executes each registered report module against every platform tab
 // whose files include a language the module applies to, rendering its panel.
-func runModules(scan *scanner.ScanResult, files []*parser.ParsedFile) []ModulePanel {
+func runModules(scan *scanner.ScanResult, files []*parser.ParsedFile, step func(string)) []ModulePanel {
 	byPlatform := map[langspec.Platform][]*parser.ParsedFile{}
 	for _, f := range files {
 		byPlatform[langspec.Platform(f.Platform)] = append(byPlatform[langspec.Platform(f.Platform)], f)
@@ -192,8 +193,10 @@ func runModules(scan *scanner.ScanResult, files []*parser.ParsedFile) []ModulePa
 			if !applies {
 				continue
 			}
+			t0 := time.Now()
 			res := m.Analyze(pfs)
 			html := m.RenderHTML(res)
+			step(fmt.Sprintf("  [%s] %s (%dms)", plat, m.ID(), time.Since(t0).Milliseconds()))
 			if strings.TrimSpace(html) == "" {
 				continue
 			}

@@ -165,8 +165,11 @@ var techImportMap = []struct{ needle, label, cat string }{
 }
 
 var langLabels = map[string]string{
-	"swift": "Swift", "objc": "Objective-C", "python": "Python",
-	"typescript": "TypeScript / JS", "go": "Go",
+	"swift": "Swift", "objc": "Objective-C",
+	"kotlin": "Kotlin", "java": "Java",
+	"python": "Python",
+	"typescript": "TypeScript / JS", "javascript": "JavaScript",
+	"go": "Go",
 }
 
 func renderStackAndModules(res *result.AnalysisResult) string {
@@ -1547,10 +1550,11 @@ func renderSpecTrafficTable(b *strings.Builder, heading string, entries []traffi
 		return
 	}
 	b.WriteString(`<table class="as-table"><thead><tr>`)
+	b.WriteString(`<th>Protocol</th><th>URI / Pattern</th><th>Data</th>`)
 	if showSpecCov {
 		b.WriteString(`<th>Spec</th>`)
 	}
-	b.WriteString(`<th>URI / Pattern</th><th>Protocol</th><th>Data</th><th>Module</th><th>File</th>`)
+	b.WriteString(`<th>File</th><th>Module</th>`)
 	b.WriteString(`</tr></thead><tbody>`)
 	for _, e := range entries {
 		uri := e.URI
@@ -1566,19 +1570,18 @@ func renderSpecTrafficTable(b *strings.Builder, heading string, entries []traffi
 			mod = "root"
 		}
 		if showSpecCov {
-			specIcon := "❓"
+			specIcon := `<span title="Spec not located — this route has no matching entry in any spec file">❓</span>`
 			if coveredPaths[normSpecURI(e.URI)] {
-				specIcon = "✅"
+				specIcon = `<span title="Spec covered — this route is documented in a spec file">✅</span>`
 			}
-			fmt.Fprintf(b, `<tr><td style="text-align:center">%s</td>`, specIcon)
 			fmt.Fprintf(b,
-				`<td class="mono">%s</td><td>%s</td><td class="mono">%s</td><td class="mono">%s</td><td class="mono">%s</td></tr>`,
-				esc(uri), trafficProtoTag(e.Protocol), esc(dataCell), esc(mod), trafficFileLink(e.FilePath, e.Line),
+				`<tr><td>%s</td><td class="mono">%s</td><td class="mono">%s</td><td style="text-align:center">%s</td><td class="mono">%s</td><td class="mono">%s</td></tr>`,
+				trafficProtoTag(e.Protocol), esc(uri), esc(dataCell), specIcon, trafficFileLink(e.FilePath, e.Line), esc(mod),
 			)
 		} else {
 			fmt.Fprintf(b,
-				`<tr><td class="mono">%s</td><td>%s</td><td class="mono">%s</td><td class="mono">%s</td><td class="mono">%s</td></tr>`,
-				esc(uri), trafficProtoTag(e.Protocol), esc(dataCell), esc(mod), trafficFileLink(e.FilePath, e.Line),
+				`<tr><td>%s</td><td class="mono">%s</td><td class="mono">%s</td><td class="mono">%s</td><td class="mono">%s</td></tr>`,
+				trafficProtoTag(e.Protocol), esc(uri), esc(dataCell), trafficFileLink(e.FilePath, e.Line), esc(mod),
 			)
 		}
 	}

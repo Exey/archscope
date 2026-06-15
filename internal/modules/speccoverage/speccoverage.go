@@ -15,7 +15,6 @@ package speccoverage
 import (
 	"fmt"
 	"html"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -50,16 +49,18 @@ type SpecOp struct {
 
 // Result is the full output of the spec-coverage analysis.
 type Result struct {
-	SpecOps   []SpecOp // operations defined in spec files
-	ImplOps   []SpecOp // operations found in source code
-	Covered   []SpecOp // SpecOps matched in code
-	Missing   []SpecOp // SpecOps NOT found in code
-	Extra     []SpecOp // code ops not covered by any spec
-	Coverage  int      // 0–100: len(Covered) / len(SpecOps) * 100
-	SpecTypes []string // e.g. ["OpenAPI", "gRPC"]
-	HasSpec   bool
-	HasRoutes bool
-	FileCount int // number of spec files found
+	SpecOps    []SpecOp // operations defined in spec files
+	ImplOps    []SpecOp // operations found in source code
+	Covered    []SpecOp // SpecOps matched in code
+	Missing    []SpecOp // SpecOps NOT found in code
+	Extra      []SpecOp // code ops not covered by any spec ("spec not located")
+	Coverage   int      // 0–100: len(Covered) / len(SpecOps) * 100  (spec → code)
+	SpecReady  int      // 0–100: len(Covered) / len(ImplOps) * 100  (code → spec)
+	SpecTypes  []string // e.g. ["OpenAPI", "gRPC"]
+	Generators []string // e.g. ["swaggo", "oapi-codegen"]
+	HasSpec    bool
+	HasRoutes  bool
+	FileCount  int // number of spec files found
 }
 
 // HasData controls whether the panel is rendered.
@@ -74,7 +75,7 @@ func (Module) Analyze(files []*parser.ParsedFile) any {
 	}
 
 	srcRoot := commonRoot(files)
-	projRoot := findProjectRoot(srcRoot)
+	projRoot := srcRoot // never walk above the analyzed source tree
 
 	// Stage 1 – discover and parse spec files.
 	r.SpecOps, r.FileCount = scanSpecFiles(projRoot)
@@ -128,6 +129,10 @@ func (Module) Analyze(files []*parser.ParsedFile) any {
 	if len(r.SpecOps) > 0 {
 		r.Coverage = int(float64(len(r.Covered))/float64(len(r.SpecOps))*100 + 0.5)
 	}
+	// code→spec: fraction of code routes that appear in at least one spec file.
+	if len(r.ImplOps) > 0 {
+		r.SpecReady = int(float64(len(r.ImplOps)-len(r.Extra))/float64(len(r.ImplOps))*100 + 0.5)
+	}
 
 	typeSet := map[string]bool{}
 	for _, op := range r.SpecOps {
@@ -137,7 +142,60 @@ func (Module) Analyze(files []*parser.ParsedFile) any {
 		r.SpecTypes = append(r.SpecTypes, t)
 	}
 	sort.Strings(r.SpecTypes)
+
+	r.Generators = detectGenerators(files, r.SpecTypes)
 	return r
+}
+
+// ─── Generator detection ──────────────────────────────────────────────────────
+
+var generatorPatterns = []struct{ needle, label string }{
+	// Go
+	{"swaggo/swag", "swaggo"},
+	{"swaggo/gin-swagger", "swaggo"},
+	{"swaggo/echo-swagger", "swaggo"},
+	{"swaggo/fiber-swagger", "swaggo"},
+	{"deepmap/oapi-codegen", "oapi-codegen"},
+	{"ogen-go/ogen", "ogen"},
+	{"99designs/gqlgen", "gqlgen"},
+	{"grpc-ecosystem/grpc-gateway", "grpc-gateway"},
+	// TypeScript / JS
+	{"@nestjs/swagger", "nestjs-swagger"},
+	{"swagger-jsdoc", "swagger-jsdoc"},
+	{"openapi-typescript-codegen", "ts-codegen"},
+	// Java / Kotlin
+	{"springdoc", "springdoc"},
+	{"io.swagger.v3", "swagger3"},
+}
+
+// detectGenerators scans source file imports for known spec generation tools.
+// If gRPC specs are present, "protoc" is always included.
+func detectGenerators(files []*parser.ParsedFile, specTypes []string) []string {
+	found := map[string]bool{}
+	for _, f := range files {
+		for _, imp := range f.Imports {
+			low := strings.ToLower(imp)
+			for _, g := range generatorPatterns {
+				if strings.Contains(low, g.needle) {
+					found[g.label] = true
+				}
+			}
+		}
+	}
+	for _, st := range specTypes {
+		if st == "gRPC" {
+			found["protoc"] = true
+		}
+	}
+	if len(found) == 0 {
+		return nil
+	}
+	var result []string
+	for label := range found {
+		result = append(result, label)
+	}
+	sort.Strings(result)
+	return result
 }
 
 // ─── SummaryCards ─────────────────────────────────────────────────────────────
@@ -147,9 +205,16 @@ func (Module) SummaryCards(res any) []modules.SummaryCard {
 	if !ok || !r.HasSpec {
 		return nil
 	}
-	return []modules.SummaryCard{
-		{Num: fmt.Sprintf("%d%%", r.Coverage), Label: "API coverage"},
+	cards := []modules.SummaryCard{
+		{Num: fmt.Sprintf("%d%%", r.SpecReady), Label: "API coverage"},
 	}
+	if len(r.Generators) > 0 {
+		cards = append(cards, modules.SummaryCard{
+			Num:   strings.Join(r.Generators, " · "),
+			Label: "generators",
+		})
+	}
+	return cards
 }
 
 // ─── RenderHTML ───────────────────────────────────────────────────────────────
@@ -163,87 +228,106 @@ func (Module) RenderHTML(res any) string {
 	var b strings.Builder
 	b.WriteString(`<div class="as-pop">`)
 
-	// Subtitle: spec type badges + operation counts.
+	// Subtitle: spec type badges + generator badges.
 	b.WriteString(`<p class="as-pop__sub">`)
 	for _, st := range r.SpecTypes {
 		fmt.Fprintf(&b, `<span class="as-tag tag-tech" style="margin-right:4px">%s</span>`, esc(st))
 	}
-	fmt.Fprintf(&b, `%d operation(s) across %d file(s) · %d implemented · %d missing`,
-		len(r.SpecOps), r.FileCount, len(r.Covered), len(r.Missing))
-	if len(r.Extra) > 0 {
-		fmt.Fprintf(&b, ` · <span style="color:var(--text-faint)">%d undocumented ↓ Traffic</span>`, len(r.Extra))
+	for _, g := range r.Generators {
+		fmt.Fprintf(&b, `<span class="as-tag" style="background:var(--accent-dim);color:var(--accent);margin-right:4px" title="detected generator">%s</span>`, esc(g))
 	}
 	b.WriteString(`</p>`)
 
-	// Coverage verdict and gradient bar.
-	pct := r.Coverage
-	verdict := coverageVerdict(pct, len(r.Extra))
-	fmt.Fprintf(&b, `<div class="as-pop__verdict">%d%% — %s</div>`, pct, esc(verdict))
-
-	fillCls := "fill-crit"
-	if pct >= 80 {
-		fillCls = "fill-good"
-	} else if pct >= 50 {
-		fillCls = "fill-warn"
-	}
+	// Main metric: API Coverage bar (code → spec).
+	pct := r.SpecReady
+	fmt.Fprintf(&b, `<div class="as-pop__verdict">%d%% — %s</div>`, pct, esc(coverageVerdict(pct, len(r.Extra))))
+	b.WriteString(`<div style="font-size:11px;color:var(--text-faint);margin-bottom:8px">code→spec · what % of code routes have a spec entry</div>`)
 	b.WriteString(`<div class="as-pop__scale"><span class="as-pop__end">0%</span>`)
-	fmt.Fprintf(&b,
-		`<div class="as-pop__track" style="background:var(--bg-card)"><span class="as-bar__fill %s" style="height:100%%;width:%d%%"></span></div>`,
-		fillCls, pct,
-	)
+	fmt.Fprintf(&b, `<div class="as-pop__track" style="background:var(--bg-card)"><span class="as-bar__fill %s" style="height:100%%;width:%d%%"></span></div>`, barFillClass(pct), pct)
 	b.WriteString(`<span class="as-pop__end">100%</span></div>`)
 
-	// Missing — shown prominently (most actionable).
-	if len(r.Missing) > 0 {
-		fmt.Fprintf(&b,
-			`<div class="as-sub" style="margin-top:16px">Missing implementations <span style="color:var(--crit);font-weight:700">(%d)</span></div>`,
-			len(r.Missing),
-		)
-		b.WriteString(`<table class="as-table"><thead><tr>`)
-		b.WriteString(`<th>Method</th><th>Path / Operation</th><th>Spec</th><th>File</th>`)
-		b.WriteString(`</tr></thead><tbody>`)
-		for _, op := range r.Missing {
-			m := op.Method
-			if m == "" {
-				m = "ANY"
-			}
-			fmt.Fprintf(&b,
-				`<tr><td>%s</td><td class="mono">%s</td><td>%s</td><td class="mono">%s</td></tr>`,
-				methodBadge(m), esc(op.Path), esc(op.SpecType), esc(filepath.Base(op.File)),
-			)
-		}
-		b.WriteString(`</tbody></table>`)
-	}
+	// Stats row as card columns: Missing / Implemented / Spec files.
+	missing := len(r.Extra)
+	implemented := len(r.ImplOps) - len(r.Extra)
+	b.WriteString(`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:14px">`)
+	specStatCard(&b, fmt.Sprintf("%d", missing), "Missing spec entries for endpoint", "var(--crit)")
+	specStatCard(&b, fmt.Sprintf("%d", implemented), "Endpoint in spec", "var(--good)")
+	specStatCard(&b, fmt.Sprintf("%d", r.FileCount), "Spec files", "var(--text)")
+	b.WriteString(`</div>`)
 
-	// Implemented — always open (no details toggle).
-	if len(r.Covered) > 0 {
-		fmt.Fprintf(&b,
-			`<div class="as-sub" style="margin-top:12px">Implemented (%d)</div>`,
-			len(r.Covered),
-		)
-		b.WriteString(`<table class="as-table"><thead><tr>`)
-		b.WriteString(`<th>Method</th><th>Path / Operation</th><th>File</th>`)
-		b.WriteString(`</tr></thead><tbody>`)
-		for _, op := range r.Covered {
-			m := op.Method
-			if m == "" {
-				m = "ANY"
-			}
-			fmt.Fprintf(&b,
-				`<tr><td>%s</td><td class="mono">%s</td><td class="mono">%s</td></tr>`,
-				methodBadge(m), esc(op.Path), esc(filepath.Base(op.File)),
-			)
+	// Spec Locations + Generators side by side.
+	if len(r.SpecOps) > 0 || len(r.Generators) > 0 {
+		hasGen := len(r.Generators) > 0
+		if hasGen {
+			b.WriteString(`<div style="display:grid;grid-template-columns:1fr auto;gap:20px;margin-top:14px">`)
+		} else {
+			b.WriteString(`<div style="margin-top:14px">`)
 		}
-		b.WriteString(`</tbody></table>`)
-	}
 
-	// Undocumented routes are shown in the Traffic panel (SPEC COV column).
+		// Spec file locations.
+		if len(r.SpecOps) > 0 {
+			seen := map[string]string{}
+			var specFiles []string
+			for _, op := range r.SpecOps {
+				if _, ok := seen[op.File]; !ok {
+					seen[op.File] = op.SpecType
+					specFiles = append(specFiles, op.File)
+				}
+			}
+			sort.Strings(specFiles)
+			b.WriteString(`<div>`)
+			b.WriteString(`<div class="as-sub">Spec Locations</div>`)
+			b.WriteString(`<div style="display:flex;flex-direction:column;gap:4px;margin-top:4px">`)
+			for _, f := range specFiles {
+				fmt.Fprintf(&b,
+					`<div style="display:flex;align-items:center;gap:8px">`+
+						`<span class="as-tag tag-tech" style="font-size:10px;padding:1px 6px">%s</span>`+
+						`<span class="mono" style="font-size:11px;color:var(--text-dim)">%s</span>`+
+						`</div>`,
+					esc(seen[f]), esc(f))
+			}
+			b.WriteString(`</div></div>`)
+		}
+
+		// Detected generators column.
+		if hasGen {
+			b.WriteString(`<div>`)
+			b.WriteString(`<div class="as-sub">Generators</div>`)
+			b.WriteString(`<div style="display:flex;flex-direction:column;gap:4px;margin-top:4px">`)
+			for _, g := range r.Generators {
+				fmt.Fprintf(&b,
+					`<span class="as-tag" style="background:var(--accent-dim);color:var(--accent);white-space:nowrap">%s</span>`,
+					esc(g))
+			}
+			b.WriteString(`</div></div>`)
+		}
+
+		b.WriteString(`</div>`)
+	}
 
 	b.WriteString(`</div>`)
 	return b.String()
 }
 
+func specStatCard(b *strings.Builder, num, label, color string) {
+	fmt.Fprintf(b,
+		`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:10px 12px;text-align:center">`+
+			`<div style="font-size:22px;font-weight:700;font-family:var(--mono);color:%s;line-height:1.1">%s</div>`+
+			`<div style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em;margin-top:2px">%s</div>`+
+			`</div>`,
+		color, esc(num), esc(label))
+}
+
 // ─── Rendering helpers ────────────────────────────────────────────────────────
+
+func barFillClass(pct int) string {
+	if pct >= 80 {
+		return "fill-good"
+	} else if pct >= 50 {
+		return "fill-warn"
+	}
+	return "fill-crit"
+}
 
 func coverageVerdict(pct, extraCount int) string {
 	switch {
@@ -260,33 +344,5 @@ func coverageVerdict(pct, extraCount int) string {
 	}
 }
 
-func methodBadge(m string) string {
-	bg, fg := methodColors(m)
-	return fmt.Sprintf(
-		`<span class="as-tag" style="background:%s;color:%s;font-size:11px">%s</span>`,
-		bg, fg, esc(m),
-	)
-}
-
-func methodColors(m string) (bg, fg string) {
-	switch strings.ToUpper(m) {
-	case "GET":
-		return "#27ae60", "#fff"
-	case "POST":
-		return "#2980b9", "#fff"
-	case "PUT":
-		return "#f39c12", "#fff"
-	case "DELETE":
-		return "#e74c3c", "#fff"
-	case "PATCH":
-		return "#8e44ad", "#fff"
-	case "RPC":
-		return "#16a085", "#fff"
-	case "FIELD":
-		return "#795548", "#fff"
-	default:
-		return "#7f8c8d", "#fff"
-	}
-}
 
 func esc(s string) string { return html.EscapeString(s) }
