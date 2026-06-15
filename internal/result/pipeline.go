@@ -198,11 +198,12 @@ func runModules(scan *scanner.ScanResult, files []*parser.ParsedFile) []ModulePa
 				continue
 			}
 			panels = append(panels, ModulePanel{
-				Platform: plat,
-				ModuleID: m.ID(),
-				Title:    m.Title(),
-				HTML:     html,
-				Cards:    m.SummaryCards(res),
+				Platform:  plat,
+				ModuleID:  m.ID(),
+				Title:     m.Title(),
+				HTML:      html,
+				Cards:     m.SummaryCards(res),
+				RawResult: res,
 			})
 		}
 	}

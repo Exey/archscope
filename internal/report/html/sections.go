@@ -5,12 +5,15 @@ import (
 	"html"
 	"math"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/exey/archscope/internal/git"
 	"github.com/exey/archscope/internal/langspec"
+	"github.com/exey/archscope/internal/modules/speccoverage"
+	"github.com/exey/archscope/internal/modules/traffic"
 	"github.com/exey/archscope/internal/parser"
 	"github.com/exey/archscope/internal/result"
 	"github.com/exey/archscope/internal/scanner"
@@ -20,84 +23,145 @@ import (
 // ── Tech Stack + Packages & Modules (goscope-style global section) ──────────
 
 // techImportMap maps an import substring (case-insensitive) to a framework /
-// library label surfaced in the tech-stack cloud. Cross-language, like
-// goscope's detectTechFromImport generalized.
-var techImportMap = []struct{ needle, label string }{
-	// Swift / Apple platforms
-	{"swiftui", "SwiftUI"}, {"uikit", "UIKit"}, {"combine", "Combine"},
-	{"coredata", "Core Data"}, {"foundation", "Foundation"}, {"xctest", "XCTest"},
-	{"swiftdata", "SwiftData"}, {"observation", "Observation"}, {"appintents", "AppIntents"},
-	{"widgetkit", "WidgetKit"}, {"mapkit", "MapKit"}, {"arkit", "ARKit"},
-	{"healthkit", "HealthKit"}, {"storekit", "StoreKit"},
-	{"alamofire", "Alamofire"}, {"snapkit", "SnapKit"}, {"kingfisher", "Kingfisher"},
-	{"rxswift", "RxSwift"}, {"realmswift", "Realm"}, {"swiftlint", "SwiftLint"},
-	{"moya", "Moya"}, {"promisekit", "PromiseKit"}, {"sdwebimage", "SDWebImage"},
-	{"swiftgen", "SwiftGen"}, {"cocoalumberjack", "CocoaLumberjack"}, {"swiftprotobuf", "SwiftProtobuf"},
-	{"grdb", "GRDB"}, {"keychainaccess", "KeychainAccess"}, {"lottie", "Lottie"},
-	{"charts", "Charts"},
+// library label and category.
+// Categories: "frontend", "backend", "data", "brokers", "linters"
+var techImportMap = []struct{ needle, label, cat string }{
+	// ── Swift / Apple ──────────────────────────────────────────────────────────
+	// Frontend
+	{"swiftui", "SwiftUI", "frontend"}, {"uikit", "UIKit", "frontend"},
+	{"combine", "Combine", "frontend"}, {"observation", "Observation", "frontend"},
+	{"appintents", "AppIntents", "frontend"}, {"widgetkit", "WidgetKit", "frontend"},
+	{"mapkit", "MapKit", "frontend"}, {"arkit", "ARKit", "frontend"},
+	{"snapkit", "SnapKit", "frontend"}, {"kingfisher", "Kingfisher", "frontend"},
+	{"rxswift", "RxSwift", "frontend"}, {"sdwebimage", "SDWebImage", "frontend"},
+	{"lottie", "Lottie", "frontend"}, {"charts", "Charts", "frontend"},
+	// Backend
+	{"foundation", "Foundation", "backend"}, {"healthkit", "HealthKit", "backend"}, {"storekit", "StoreKit", "backend"},
+	{"alamofire", "Alamofire", "backend"}, {"moya", "Moya", "backend"},
+	{"promisekit", "PromiseKit", "backend"}, {"swiftprotobuf", "SwiftProtobuf", "backend"},
+	{"keychainaccess", "KeychainAccess", "backend"},
+	// Data
+	{"coredata", "Core Data", "data"}, {"swiftdata", "SwiftData", "data"},
+	{"realmswift", "Realm", "data"}, {"grdb", "GRDB", "data"},
+	// Logs & Tests
+	{"xctest", "XCTest", "linters"},
+	{"swiftlint", "SwiftLint", "linters"}, {"swiftgen", "SwiftGen", "linters"},
+	{"cocoalumberjack", "CocoaLumberjack", "linters"},
 
-	// JavaScript / TypeScript
-	{"react-native", "React Native"}, {"expo", "Expo"},
-	{"react", "React"}, {"next/", "Next.js"}, {"vue", "Vue"}, {"nuxt", "Nuxt"}, {"angular", "Angular"},
-	{"svelte", "Svelte"}, {"solid-js", "SolidJS"}, {"astro", "Astro"},
-	{"express", "Express"}, {"@nestjs", "NestJS"},
-	{"redux", "Redux"}, {"rxjs", "RxJS"},
-	{"@apollo/client", "Apollo Client"}, {"relay", "Relay"},
-	{"prisma", "Prisma"}, {"typeorm", "TypeORM"}, {"sequelize", "Sequelize"}, {"mongoose", "Mongoose"},
-	{"tailwindcss", "Tailwind CSS"}, {"bootstrap", "Bootstrap"},
-	{"@mui/", "MUI"}, {"@chakra-ui/", "Chakra UI"}, {"antd", "Ant Design"},
-	{"jquery", "jQuery"}, {"d3-", "D3.js"}, {"three", "Three.js"},
-	{"axios", "Axios"}, {"lodash", "Lodash"},
-	{"moment", "Moment.js"}, {"dayjs", "Day.js"},
-	{"webpack", "Webpack"}, {"vite", "Vite"}, {"eslint", "ESLint"}, {"prettier", "Prettier"},
-	{"graphql", "GraphQL"},
+	// ── JavaScript / TypeScript ────────────────────────────────────────────────
+	// Frontend
+	{"react-native", "React Native", "frontend"}, {"expo", "Expo", "frontend"},
+	{"react", "React", "frontend"}, {"next/", "Next.js", "frontend"},
+	{"vue", "Vue", "frontend"}, {"nuxt", "Nuxt", "frontend"}, {"angular", "Angular", "frontend"},
+	{"svelte", "Svelte", "frontend"}, {"solid-js", "SolidJS", "frontend"}, {"astro", "Astro", "frontend"},
+	{"redux", "Redux", "frontend"}, {"rxjs", "RxJS", "frontend"},
+	{"@apollo/client", "Apollo Client", "frontend"}, {"relay", "Relay", "frontend"},
+	{"tailwindcss", "Tailwind CSS", "frontend"}, {"bootstrap", "Bootstrap", "frontend"},
+	{"@mui/", "MUI", "frontend"}, {"@chakra-ui/", "Chakra UI", "frontend"}, {"antd", "Ant Design", "frontend"},
+	{"jquery", "jQuery", "frontend"}, {"d3-", "D3.js", "frontend"}, {"three", "Three.js", "frontend"},
+	// Backend
+	{"express", "Express", "backend"}, {"@nestjs", "NestJS", "backend"},
+	{"axios", "Axios", "backend"}, {"lodash", "Lodash", "backend"},
+	{"moment", "Moment.js", "backend"}, {"dayjs", "Day.js", "backend"},
+	{"graphql", "GraphQL", "backend"},
+	// Data
+	{"prisma", "Prisma", "data"}, {"typeorm", "TypeORM", "data"},
+	{"sequelize", "Sequelize", "data"}, {"mongoose", "Mongoose", "data"},
+	// Linters
+	{"webpack", "Webpack", "linters"}, {"vite", "Vite", "linters"},
+	{"eslint", "ESLint", "linters"}, {"prettier", "Prettier", "linters"},
 
-	// Python
-	{"djangorestframework", "Django REST Framework"}, {"django", "Django"},
-	{"flask", "Flask"}, {"fastapi", "FastAPI"},
-	{"sqlalchemy", "SQLAlchemy"}, {"sqlmodel", "SQLModel"},
-	{"scikit-learn", "scikit-learn"}, {"scipy", "SciPy"},
-	{"numpy", "NumPy"}, {"pandas", "pandas"},
-	{"matplotlib", "Matplotlib"}, {"seaborn", "Seaborn"}, {"plotly", "Plotly"},
-	{"tensorflow", "TensorFlow"}, {"torch", "PyTorch"},
-	{"beautifulsoup4", "Beautiful Soup"}, {"scrapy", "Scrapy"},
-	{"requests", "Requests"}, {"httpx", "HTTPx"},
-	{"jinja2", "Jinja2"}, {"click", "Click"},
-	{"uvicorn", "Uvicorn"}, {"starlette", "Starlette"}, {"aiohttp", "aiohttp"},
-	{"celery", "Celery"}, {"dramatiq", "Dramatiq"},
-	{"streamlit", "Streamlit"}, {"dash", "Dash"},
-	{"pydantic", "Pydantic"}, {"pytest", "pytest"},
+	// ── Python ─────────────────────────────────────────────────────────────────
+	// Frontend
+	{"streamlit", "Streamlit", "frontend"}, {"dash", "Dash", "frontend"},
+	// Backend
+	{"djangorestframework", "Django REST Framework", "backend"}, {"django", "Django", "backend"},
+	{"flask", "Flask", "backend"}, {"fastapi", "FastAPI", "backend"},
+	{"beautifulsoup4", "Beautiful Soup", "backend"}, {"scrapy", "Scrapy", "backend"},
+	{"requests", "Requests", "backend"}, {"httpx", "HTTPx", "backend"},
+	{"jinja2", "Jinja2", "backend"}, {"click", "Click", "backend"},
+	{"uvicorn", "Uvicorn", "backend"}, {"starlette", "Starlette", "backend"}, {"aiohttp", "aiohttp", "backend"},
+	{"pydantic", "Pydantic", "backend"},
+	// Data
+	{"sqlalchemy", "SQLAlchemy", "data"}, {"sqlmodel", "SQLModel", "data"},
+	{"scikit-learn", "scikit-learn", "data"}, {"scipy", "SciPy", "data"},
+	{"numpy", "NumPy", "data"}, {"pandas", "pandas", "data"},
+	{"matplotlib", "Matplotlib", "data"}, {"seaborn", "Seaborn", "data"}, {"plotly", "Plotly", "data"},
+	{"tensorflow", "TensorFlow", "data"}, {"torch", "PyTorch", "data"},
+	// Message brokers
+	{"celery", "Celery", "brokers"}, {"dramatiq", "Dramatiq", "brokers"},
+	// Linters
+	{"pytest", "pytest", "linters"},
 
-	// Go
-	{"net/http", "net/http"}, {"gin-gonic", "Gin"},
-	{"github.com/labstack/echo", "Echo"}, {"github.com/go-chi/chi", "Chi"},
-	{"github.com/gofiber/fiber", "Fiber"}, {"github.com/gorilla/mux", "Gorilla Mux"},
-	{"gorm.io", "GORM"},
-	{"go.uber.org/zap", "Zap"}, {"github.com/sirupsen/logrus", "Logrus"},
-	{"github.com/spf13/viper", "Viper"},
-	{"github.com/go-sql-driver/mysql", "MySQL driver"}, {"github.com/lib/pq", "PostgreSQL driver"},
-	{"go.mongodb.org/mongo-driver", "MongoDB driver"}, {"github.com/go-redis/redis", "Go Redis"},
-	{"grpc", "gRPC"}, {"google.golang.org/protobuf", "Protobuf"},
-	{"cobra", "Cobra"},
+	// ── Go ─────────────────────────────────────────────────────────────────────
+	// Backend
+	{"net/http", "net/http", "backend"}, {"gin-gonic", "Gin", "backend"},
+	{"github.com/labstack/echo", "Echo", "backend"}, {"github.com/go-chi/chi", "Chi", "backend"},
+	{"github.com/gofiber/fiber", "Fiber", "backend"}, {"github.com/gorilla/mux", "Gorilla Mux", "backend"},
+	{"github.com/spf13/viper", "Viper", "backend"},
+	{"grpc", "gRPC", "backend"}, {"google.golang.org/protobuf", "Protobuf", "backend"},
+	{"cobra", "Cobra", "backend"},
+	// Data
+	{"gorm.io", "GORM", "data"},
+	{"github.com/go-sql-driver/mysql", "MySQL driver", "data"},
+	{"jackc/pgx", "PostgreSQL", "data"}, {"lib/pq", "PostgreSQL", "data"}, {"gorm.io/driver/postgres", "PostgreSQL", "data"},
+	{"go.mongodb.org/mongo-driver", "MongoDB", "data"},
+	{"go-redis/redis", "Redis", "data"}, {"redis/go-redis", "Redis", "data"},
+	{"minio/minio-go", "MinIO", "data"},
+	// Logs & Tests
+	{"go.uber.org/zap", "Zap", "linters"}, {"github.com/sirupsen/logrus", "Logrus", "linters"},
+	{"log/slog", "slog", "linters"},
+	{"testify", "Testify", "linters"},
 
-	// Java
-	{"springframework.boot", "Spring Boot"}, {"org.springframework", "Spring"},
-	{"hibernate", "Hibernate"},
-	{"junit", "JUnit"}, {"mockito", "Mockito"},
-	{"org.slf4j", "SLF4J"}, {"log4j", "Log4j"},
-	{"lombok", "Lombok"},
-	{"retrofit2", "Retrofit"}, {"okhttp3", "OkHttp"},
-	{"javax.servlet", "Java Servlet"}, {"jakarta.servlet", "Jakarta Servlet"},
-	{"java.util", "Java Standard Library"},
-	{"google.guava", "Guava"}, {"apache.commons", "Apache Commons"},
-	{"jackson", "Jackson"},
+	// ── Java ───────────────────────────────────────────────────────────────────
+	// Backend
+	{"springframework.boot", "Spring Boot", "backend"}, {"org.springframework", "Spring", "backend"},
+	{"lombok", "Lombok", "backend"}, {"retrofit2", "Retrofit", "backend"}, {"okhttp3", "OkHttp", "backend"},
+	{"javax.servlet", "Java Servlet", "backend"}, {"jakarta.servlet", "Jakarta Servlet", "backend"},
+	{"java.util", "Java Standard Library", "backend"},
+	{"google.guava", "Guava", "backend"}, {"apache.commons", "Apache Commons", "backend"},
+	{"jackson", "Jackson", "backend"},
+	// Data
+	{"hibernate", "Hibernate", "data"},
+	// Message brokers
+	{"spring.kafka", "Spring Kafka", "brokers"}, {"spring.amqp", "Spring AMQP", "brokers"},
+	// Logs & Tests
+	{"junit", "JUnit", "linters"}, {"mockito", "Mockito", "linters"},
+	{"org.slf4j", "SLF4J", "linters"}, {"log4j", "Log4j", "linters"},
+	{"ch.qos.logback", "Logback", "linters"},
 
-	// Kotlin
-	{"kotlinx.coroutines", "Kotlin Coroutines"}, {"kotlinx.serialization", "Kotlin Serialization"},
-	{"io.ktor", "Ktor"}, {"org.jetbrains.exposed", "Exposed"},
-	{"kotlin.test", "Kotlin Test"}, {"com.google.dagger", "Dagger (Kotlin)"},
-	{"androidx.compose", "Jetpack Compose"},
-	{"kotlinx.datetime", "Kotlinx Datetime"}, {"kotlinx.html", "Kotlinx HTML"},
+	// ── Kotlin ─────────────────────────────────────────────────────────────────
+	// Frontend
+	{"androidx.compose", "Jetpack Compose", "frontend"},
+	// Backend
+	{"kotlinx.coroutines", "Kotlin Coroutines", "backend"}, {"kotlinx.serialization", "Kotlin Serialization", "backend"},
+	{"io.ktor", "Ktor", "backend"}, {"com.google.dagger", "Dagger (Kotlin)", "backend"},
+	{"kotlinx.datetime", "Kotlinx Datetime", "backend"}, {"kotlinx.html", "Kotlinx HTML", "backend"},
+	// Data
+	{"org.jetbrains.exposed", "Exposed", "data"},
+	// Linters
+	{"kotlin.test", "Kotlin Test", "linters"},
+
+	// ── Universal message brokers (detected from scanner / config) ─────────────
+	{"kafka", "Kafka", "brokers"}, {"rabbitmq", "RabbitMQ", "brokers"},
+	{"nats", "NATS", "brokers"}, {"redis.pubsub", "Redis Pub/Sub", "brokers"},
+	{"amqp", "AMQP", "brokers"}, {"apache.pulsar", "Apache Pulsar", "brokers"},
+	{"aws.sqs", "AWS SQS", "brokers"}, {"aws.sns", "AWS SNS", "brokers"},
+	{"google.pubsub", "Google Pub/Sub", "brokers"},
+
+	// ── Universal data stores (scanner: docker-compose / go.mod / Makefile) ────
+	{"postgresql", "PostgreSQL", "data"}, {"mongodb", "MongoDB", "data"},
+	{"redis", "Redis", "data"}, {"minio", "MinIO", "data"},
+	{"elasticsearch", "Elasticsearch", "data"}, {"elastic/go-elasticsearch", "Elasticsearch", "data"},
+	{"olivere/elastic", "Elasticsearch", "data"},
+
+	// ── Universal metrics / observability ─────────────────────────────────────
+	{"opentelemetry", "OpenTelemetry", "linters"}, {"go.opentelemetry.io", "OpenTelemetry", "linters"},
+	{"open-telemetry", "OpenTelemetry", "linters"},
+	{"prometheus", "Prometheus", "linters"}, {"client_golang/prometheus", "Prometheus", "linters"},
+	{"grafana", "Grafana", "linters"}, {"datadog", "Datadog", "linters"},
+	{"jaeger", "Jaeger", "linters"}, {"zipkin", "Zipkin", "linters"},
+	{"newrelic", "New Relic", "linters"},
 }
 
 var langLabels = map[string]string{
@@ -108,43 +172,96 @@ var langLabels = map[string]string{
 func renderStackAndModules(res *result.AnalysisResult) string {
 	// Tech stack: languages present + frameworks detected from imports + scanner.
 	langSet := map[string]bool{}
-	frameworkSet := map[string]bool{}
 	for _, f := range res.Files {
 		if lbl, ok := langLabels[f.LanguageID]; ok {
 			langSet[lbl] = true
 		}
+	}
+	if len(langSet) == 0 && len(res.Technologies) == 0 && len(res.Scan.Modules) == 0 {
+		return ""
+	}
+
+	// Categorize detected frameworks.
+	catSets := map[string]map[string]bool{
+		"frontend": {},
+		"backend":  {},
+		"data":     {},
+		"brokers":  {},
+		"linters":  {},
+	}
+	for _, f := range res.Files {
 		for _, imp := range f.Imports {
 			low := strings.ToLower(imp)
 			for _, t := range techImportMap {
 				if strings.Contains(low, t.needle) {
-					frameworkSet[t.label] = true
+					catSets[t.cat][t.label] = true
 				}
 			}
 		}
 	}
-	// Merge in Technologies from docker-compose / go.mod / Makefile.
-	for _, t := range res.Technologies {
-		frameworkSet[t] = true
+	// Classify scanner-detected technologies (docker-compose, go.mod, Makefile…).
+	labelCat := map[string]string{}
+	for _, t := range techImportMap {
+		labelCat[t.label] = t.cat
 	}
-	if len(langSet)+len(frameworkSet) == 0 && len(res.Scan.Modules) == 0 {
-		return ""
+	for _, t := range res.Technologies {
+		if cat, ok := labelCat[t]; ok {
+			catSets[cat][t] = true
+		} else {
+			catSets["backend"][t] = true // unknown → backend
+		}
 	}
 
 	var b strings.Builder
 	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">🧰</span><h2>Tech Stack &amp; Modules</h2></div>`)
 
-	// Tech stack tag cloud.
-	b.WriteString(`<div class="as-sub">Tech stack</div><div class="as-tagcloud">`)
-	for _, l := range sortedKeys(langSet) {
-		fmt.Fprintf(&b, `<span class="as-tag tag-local">%s</span>`, esc(l))
+	// Languages row.
+	if len(langSet) > 0 {
+		b.WriteString(`<div class="as-sub">Languages</div><div class="as-tagcloud">`)
+		for _, l := range sortedKeys(langSet) {
+			fmt.Fprintf(&b, `<span class="as-tag tag-local">%s</span>`, esc(l))
+		}
+		b.WriteString(`</div>`)
 	}
-	for _, fw := range sortedKeys(frameworkSet) {
-		fmt.Fprintf(&b, `<span class="as-tag tag-tech">%s</span>`, esc(fw))
+
+	// 5-column tech stack with adaptive widths (flex-grow ∝ item count).
+	type col struct {
+		cat, label, icon string
 	}
-	if len(langSet)+len(frameworkSet) == 0 {
-		b.WriteString(`<span class="as-empty">No technologies detected.</span>`)
+	cols := []col{
+		{"frontend", "Frontend", "🖥️"},
+		{"backend", "Backend", "⚙️"},
+		{"data", "Data", "🗄️"},
+		{"brokers", "Message Brokers", "📨"},
+		{"linters", "Metrics", "📊"},
 	}
-	b.WriteString(`</div>`)
+	hasAny := false
+	for _, c := range cols {
+		if len(catSets[c.cat]) > 0 {
+			hasAny = true
+			break
+		}
+	}
+	if hasAny {
+		b.WriteString(`<div style="display:flex;flex-wrap:wrap;gap:12px 20px;margin-top:10px;align-items:flex-start">`)
+		for _, c := range cols {
+			n := len(catSets[c.cat])
+			if n == 0 {
+				continue
+			}
+			// flex-grow proportional to item count (min 1), flex-basis 140px.
+			fmt.Fprintf(&b, `<div style="flex:%d 0 140px;min-width:120px">`, n)
+			fmt.Fprintf(&b, `<div class="as-sub" style="margin-bottom:4px">%s %s</div>`, c.icon, c.label)
+			b.WriteString(`<div class="as-tagcloud" style="margin-top:0">`)
+			for _, fw := range sortedKeys(catSets[c.cat]) {
+				fmt.Fprintf(&b, `<span class="as-tag tag-tech">%s</span>`, esc(fw))
+			}
+			b.WriteString(`</div></div>`)
+		}
+		b.WriteString(`</div>`)
+	} else if len(langSet) == 0 {
+		b.WriteString(`<p class="as-empty">No technologies detected.</p>`)
+	}
 
 	// Packages & modules grid, sized by LOC.
 	// Key by (moduleName, platform) so same-named modules in different languages
@@ -926,8 +1043,19 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 	// 3. 🧱 Spec Coverage
 	b.WriteString(renderModulePanels(specPanels, badge))
 
-	// 4. 🛜 Traffic
-	b.WriteString(renderModulePanels(trafficPanels, badge))
+	// 4. 🛜 Traffic — with SPEC COV column when spec coverage data is available.
+	var specRes *speccoverage.Result
+	for _, p := range specPanels {
+		if r, ok := p.RawResult.(speccoverage.Result); ok {
+			specRes = &r
+			break
+		}
+	}
+	if specRes != nil && len(trafficPanels) > 0 {
+		b.WriteString(renderTrafficWithSpec(trafficPanels, specRes, badge))
+	} else {
+		b.WriteString(renderModulePanels(trafficPanels, badge))
+	}
 
 	// 5. 💡 Module Insights — Hotspots · Modules · Design Patterns · TODOs · Longest Functions
 	b.WriteString(renderModuleInsights(res, pg, files, designPanels, res.RootPath, badge))
@@ -1339,6 +1467,165 @@ func renderModulePanels(panels []result.ModulePanel, headBadge ...string) string
 		b.WriteString(`</div>`)
 	}
 	return b.String()
+}
+
+// reSpecParam matches URL path parameters in {id}, :id, or <id> forms.
+var reSpecParam = regexp.MustCompile(`\{[^}]*\}|:[a-zA-Z_]\w*|<[^>]*>`)
+
+// normSpecURI normalises a traffic URI for comparison against spec op paths.
+func normSpecURI(uri string) string {
+	if i := strings.IndexByte(uri, '?'); i >= 0 {
+		uri = uri[:i]
+	}
+	uri = reSpecParam.ReplaceAllString(uri, "{}")
+	uri = strings.TrimRight(uri, "/")
+	if uri == "" {
+		uri = "/"
+	}
+	return strings.ToLower(uri)
+}
+
+// renderTrafficWithSpec renders the traffic panels with an extra SPEC COV
+// column (✅ in spec · ❓ undocumented) on inbound routes.
+func renderTrafficWithSpec(panels []result.ModulePanel, spec *speccoverage.Result, badge string) string {
+	// Build a set of normalised paths for spec-covered operations.
+	coveredPaths := map[string]bool{}
+	for _, op := range spec.Covered {
+		coveredPaths[normSpecURI(op.Path)] = true
+	}
+
+	var b strings.Builder
+	for _, p := range panels {
+		tr, ok := p.RawResult.(traffic.Result)
+		if !ok {
+			// Fallback: render without SPEC COV column.
+			b.WriteString(`<div class="as-section as-modpanel">`)
+			b.WriteString(`<div class="as-modpanel__head">`)
+			fmt.Fprintf(&b, `%s<span class="ico">🛜</span><h4>%s</h4>`, badge, esc(p.Title))
+			for _, c := range p.Cards {
+				fmt.Fprintf(&b, `<span class="as-rule__id">%s %s</span>`, esc(c.Num), esc(c.Label))
+			}
+			b.WriteString(`</div>`)
+			b.WriteString(p.HTML)
+			b.WriteString(`</div>`)
+			continue
+		}
+
+		b.WriteString(`<div class="as-section as-modpanel">`)
+		b.WriteString(`<div class="as-modpanel__head">`)
+		fmt.Fprintf(&b, `%s<span class="ico">🛜</span><h4>%s</h4>`, badge, esc(p.Title))
+		for _, c := range p.Cards {
+			fmt.Fprintf(&b, `<span class="as-rule__id">%s %s</span>`, esc(c.Num), esc(c.Label))
+		}
+		b.WriteString(`</div>`)
+
+		b.WriteString(`<div class="as-pop">`)
+		fmt.Fprintf(&b,
+			`<p class="as-pop__sub">%d inbound · %d outbound connection signals detected from string literals</p>`,
+			len(tr.Inbound), len(tr.Outbound),
+		)
+
+		// Inbound with SPEC COV column.
+		renderSpecTrafficTable(&b, "📥 Inbound", tr.Inbound, coveredPaths, true)
+		// Outbound has no spec ops to compare (outbound = external calls).
+		renderSpecTrafficTable(&b, "📤 Outbound", tr.Outbound, nil, false)
+
+		b.WriteString(`</div>`)
+		b.WriteString(`</div>`)
+	}
+	return b.String()
+}
+
+func renderSpecTrafficTable(b *strings.Builder, heading string, entries []traffic.Entry, coveredPaths map[string]bool, showSpecCov bool) {
+	fmt.Fprintf(b, `<div class="as-sub" style="margin-top:16px">%s`, heading)
+	if len(entries) > 0 {
+		fmt.Fprintf(b, ` <span style="color:var(--text-faint);font-weight:400">(%d)</span>`, len(entries))
+	}
+	b.WriteString(`</div>`)
+	if len(entries) == 0 {
+		b.WriteString(`<p class="as-empty">— No signals detected</p>`)
+		return
+	}
+	b.WriteString(`<table class="as-table"><thead><tr>`)
+	if showSpecCov {
+		b.WriteString(`<th>Spec</th>`)
+	}
+	b.WriteString(`<th>URI / Pattern</th><th>Protocol</th><th>Data</th><th>Module</th><th>File</th>`)
+	b.WriteString(`</tr></thead><tbody>`)
+	for _, e := range entries {
+		uri := e.URI
+		if e.Port != "" && !strings.Contains(uri, e.Port) {
+			uri = uri + ":" + e.Port
+		}
+		dataCell := "—"
+		if e.DataFmt != "" {
+			dataCell = e.DataFmt
+		}
+		mod := e.Module
+		if mod == "" {
+			mod = "root"
+		}
+		if showSpecCov {
+			specIcon := "❓"
+			if coveredPaths[normSpecURI(e.URI)] {
+				specIcon = "✅"
+			}
+			fmt.Fprintf(b, `<tr><td style="text-align:center">%s</td>`, specIcon)
+			fmt.Fprintf(b,
+				`<td class="mono">%s</td><td>%s</td><td class="mono">%s</td><td class="mono">%s</td><td class="mono">%s</td></tr>`,
+				esc(uri), trafficProtoTag(e.Protocol), esc(dataCell), esc(mod), trafficFileLink(e.FilePath, e.Line),
+			)
+		} else {
+			fmt.Fprintf(b,
+				`<tr><td class="mono">%s</td><td>%s</td><td class="mono">%s</td><td class="mono">%s</td><td class="mono">%s</td></tr>`,
+				esc(uri), trafficProtoTag(e.Protocol), esc(dataCell), esc(mod), trafficFileLink(e.FilePath, e.Line),
+			)
+		}
+	}
+	b.WriteString(`</tbody></table>`)
+}
+
+// trafficProtoTag and trafficFileLink mirror the private helpers in the traffic
+// package so the HTML writer can render traffic entries directly.
+func trafficProtoTag(proto string) string {
+	bg, fg := trafficProtoColors(proto)
+	return fmt.Sprintf(`<span class="as-tag" style="background:%s;color:%s;font-size:11px">%s</span>`, bg, fg, esc(proto))
+}
+
+func trafficProtoColors(proto string) (bg, fg string) {
+	switch proto {
+	case "REST", "REST/H2", "REST/TLS":
+		return "#27ae60", "#fff"
+	case "gRPC":
+		return "#2980b9", "#fff"
+	case "WebSocket":
+		return "#e67e22", "#fff"
+	case "GraphQL":
+		return "#8e44ad", "#fff"
+	case "Redis":
+		return "#e74c3c", "#fff"
+	case "Kafka":
+		return "#d35400", "#fff"
+	case "NATS":
+		return "#16a085", "#fff"
+	case "AMQP":
+		return "#795548", "#fff"
+	default:
+		return "#7f8c8d", "#fff"
+	}
+}
+
+func trafficFileLink(filePath string, line int) string {
+	if filePath == "" {
+		return "—"
+	}
+	name := filepath.Base(filePath)
+	href := "vscode://file" + filePath
+	if line > 0 {
+		href += ":" + strconv.Itoa(line)
+		name += ":" + strconv.Itoa(line)
+	}
+	return fmt.Sprintf(`<a href="%s">%s</a>`, esc(href), esc(name))
 }
 
 func moduleIcon(id string) string {

@@ -40,11 +40,12 @@ type AnalysisResult struct {
 
 // ModulePanel is one report module's rendered output within one platform tab.
 type ModulePanel struct {
-	Platform langspec.Platform
-	ModuleID string
-	Title    string
-	HTML     string
-	Cards    []modules.SummaryCard
+	Platform  langspec.Platform
+	ModuleID  string
+	Title     string
+	HTML      string
+	Cards     []modules.SummaryCard
+	RawResult any // opaque module result; used by the HTML renderer for cross-module joins
 }
 
 // GitBundle is the repository-history surface (DESIGN §9.3), shared across all

@@ -63,6 +63,7 @@ var goMethodPats = [][2]string{
 var reGoGRPCImpl = regexp.MustCompile(`\bfunc\s*\([^)]+\)\s*(\w+)\s*\(\s*\w*\s*context\.Context`)
 
 func goRoutes(lines []string, relFile string) []SpecOp {
+	groups := goGroupPrefixes(lines)
 	var ops []SpecOp
 	for _, raw := range lines {
 		ln := strings.TrimSpace(raw)
@@ -72,9 +73,11 @@ func goRoutes(lines []string, relFile string) []SpecOp {
 		// HTTP routes: .GET("/path", ...), .Post("/path", ...), etc.
 		matched := false
 		for _, pair := range goMethodPats {
-			if sfx, ok := strAfter(ln, pair[0]); ok {
+			if idx := strings.Index(ln, pair[0]); idx >= 0 {
+				sfx := ln[idx+len(pair[0]):]
 				if p := firstQStr(sfx); p != "" && strings.HasPrefix(p, "/") {
-					ops = append(ops, SpecOp{Method: pair[1], Path: p, SpecType: "OpenAPI", File: relFile})
+					full := joinGo(groups[identBefore(ln, idx)], p)
+					ops = append(ops, SpecOp{Method: pair[1], Path: full, SpecType: "OpenAPI", File: relFile})
 					matched = true
 					break
 				}
@@ -82,9 +85,11 @@ func goRoutes(lines []string, relFile string) []SpecOp {
 		}
 		if !matched {
 			for _, pat := range []string{".HandleFunc(", ".Handle(", ".Route(", ".Any("} {
-				if sfx, ok := strAfter(ln, pat); ok {
+				if idx := strings.Index(ln, pat); idx >= 0 {
+					sfx := ln[idx+len(pat):]
 					if p := firstQStr(sfx); p != "" && strings.HasPrefix(p, "/") {
-						ops = append(ops, SpecOp{Method: "", Path: p, SpecType: "OpenAPI", File: relFile})
+						full := joinGo(groups[identBefore(ln, idx)], p)
+						ops = append(ops, SpecOp{Method: "", Path: full, SpecType: "OpenAPI", File: relFile})
 						break
 					}
 				}
@@ -99,6 +104,62 @@ func goRoutes(lines []string, relFile string) []SpecOp {
 		}
 	}
 	return ops
+}
+
+// goGroupPrefixes tracks `v := router.Group("/prefix")` assignments (gin/echo/
+// chi/fiber) so routes registered on a sub-router inherit its path prefix.
+// Handles one level of nesting (v2 := v1.Group("/x")).
+func goGroupPrefixes(lines []string) map[string]string {
+	prefixes := map[string]string{}
+	for _, raw := range lines {
+		ln := strings.TrimSpace(raw)
+		idx := strings.Index(ln, ".Group(")
+		if idx < 0 {
+			continue
+		}
+		eq := strings.Index(ln, ":=")
+		if eq < 0 {
+			eq = strings.Index(ln, "=")
+		}
+		if eq < 0 || eq > idx {
+			continue
+		}
+		lhs := strings.TrimSpace(ln[:eq])
+		if lhs == "" || strings.ContainsAny(lhs, " \t,") {
+			continue
+		}
+		p := firstQStr(ln[idx+len(".Group("):])
+		if p == "" {
+			continue
+		}
+		prefixes[lhs] = joinGo(prefixes[identBefore(ln, idx)], p)
+	}
+	return prefixes
+}
+
+// identBefore returns the identifier ending immediately before position idx.
+func identBefore(s string, idx int) string {
+	i := idx
+	for i > 0 {
+		c := s[i-1]
+		if c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			i--
+			continue
+		}
+		break
+	}
+	return s[i:idx]
+}
+
+// joinGo concatenates a group prefix with a route path.
+func joinGo(prefix, path string) string {
+	if prefix == "" {
+		return path
+	}
+	if path == "" || path == "/" {
+		return prefix
+	}
+	return strings.TrimRight(prefix, "/") + "/" + strings.TrimLeft(path, "/")
 }
 
 // ─── Python ───────────────────────────────────────────────────────────────────
@@ -151,6 +212,7 @@ var springVerb = map[string]string{
 }
 
 func jvmRoutes(lines []string, relFile string) []SpecOp {
+	prefix := jvmClassPrefix(lines)
 	var ops []SpecOp
 	for _, raw := range lines {
 		ln := strings.TrimSpace(raw)
@@ -162,23 +224,111 @@ func jvmRoutes(lines []string, relFile string) []SpecOp {
 			continue
 		}
 		verb := springVerb[m[1]]
+		path := ""
 		if pm := reSpringPath.FindStringSubmatch(ln); pm != nil {
-			if p := pm[1]; strings.HasPrefix(p, "/") {
-				ops = append(ops, SpecOp{Method: verb, Path: p, SpecType: "OpenAPI", File: relFile})
-			}
+			path = pm[1]
 		}
+		full := jvmJoinPath(prefix, path)
+		// The class-level @RequestMapping is consumed as a prefix, not an op.
+		if m[1] == "Request" && verb == "" && path == prefix && prefix != "" {
+			continue
+		}
+		if full == "" || !strings.HasPrefix(full, "/") {
+			continue
+		}
+		ops = append(ops, SpecOp{Method: verb, Path: full, SpecType: "OpenAPI", File: relFile})
 	}
 	return ops
+}
+
+// jvmClassPrefix returns the @RequestMapping path declared at class/interface level.
+func jvmClassPrefix(lines []string) string {
+	for i, raw := range lines {
+		ln := strings.TrimSpace(raw)
+		if !strings.HasPrefix(ln, "@RequestMapping(") {
+			continue
+		}
+		pm := reSpringPath.FindStringSubmatch(ln)
+		if pm == nil {
+			continue
+		}
+		for j := i + 1; j < len(lines) && j <= i+6; j++ {
+			t := strings.TrimSpace(lines[j])
+			if t == "" || strings.HasPrefix(t, "@") || strings.HasPrefix(t, "//") || strings.HasPrefix(t, "*") {
+				continue
+			}
+			if strings.Contains(t, " class ") || strings.Contains(t, " interface ") {
+				return pm[1]
+			}
+			break
+		}
+	}
+	return ""
+}
+
+// jvmJoinPath combines a class-level prefix with a method-level path.
+func jvmJoinPath(prefix, path string) string {
+	if prefix == "" {
+		return path
+	}
+	if path == "" {
+		return prefix
+	}
+	return strings.TrimRight(prefix, "/") + "/" + strings.TrimLeft(path, "/")
 }
 
 // ─── TypeScript / JavaScript ──────────────────────────────────────────────────
 
 var reTSExpress = regexp.MustCompile(`\.(get|post|put|delete|patch|head|options)\s*\(\s*["']([^"']+)["']`)
-var reTSNestHTTP = regexp.MustCompile(`@(Get|Post|Put|Delete|Patch|Head|Options)\s*\(\s*["']([^"']*?)["']\s*\)`)
+
+// path argument is optional: @Get() maps to the controller root.
+var reTSNestHTTP = regexp.MustCompile(`@(Get|Post|Put|Delete|Patch|Head|Options)\s*\(\s*(?:["']([^"']*?)["'])?\s*\)`)
 var reTSNestGQL = regexp.MustCompile(`@(Query|Mutation|Subscription)\s*\(`)
 var reTSMethodName = regexp.MustCompile(`(?:async\s+)?(\w+)\s*\(`)
+var reTSController = regexp.MustCompile(`@Controller\s*\(\s*(?:["']([^"']*?)["'])?\s*\)`)
+
+// tsControllerPrefix returns the path declared on @Controller('prefix').
+// Returns "" for @Controller() / @Controller (root), and "" when no decorator
+// is found (plain Express file).
+func tsControllerPrefix(lines []string) string {
+	for _, raw := range lines {
+		ln := strings.TrimSpace(raw)
+		if strings.HasPrefix(ln, "//") || strings.HasPrefix(ln, "*") {
+			continue
+		}
+		if !strings.HasPrefix(ln, "@Controller") {
+			continue
+		}
+		if m := reTSController.FindStringSubmatch(ln); m != nil {
+			return m[1] // "" for @Controller() or @Controller('')
+		}
+		return "" // @Controller without parens → root prefix
+	}
+	return ""
+}
+
+// tsJoinPath joins a controller-level prefix with a method-level path segment.
+func tsJoinPath(prefix, path string) string {
+	if prefix != "" && !strings.HasPrefix(prefix, "/") {
+		prefix = "/" + prefix
+	}
+	if path == "" {
+		if prefix == "" {
+			return "/"
+		}
+		return prefix
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	if prefix == "" {
+		return path
+	}
+	return strings.TrimRight(prefix, "/") + path
+}
 
 func tsRoutes(lines []string, relFile string) []SpecOp {
+	prefix := tsControllerPrefix(lines)
 	var ops []SpecOp
 	var pendingGQL string
 	for _, raw := range lines {
@@ -193,12 +343,9 @@ func tsRoutes(lines []string, relFile string) []SpecOp {
 			}
 			continue
 		}
-		// NestJS HTTP decorators: @Get('/path'), @Post('/path')
+		// NestJS HTTP decorators: @Get('path'), @Post('path'), or bare @Get()
 		if m := reTSNestHTTP.FindStringSubmatch(ln); m != nil {
-			path := m[2]
-			if !strings.HasPrefix(path, "/") {
-				path = "/" + path
-			}
+			path := tsJoinPath(prefix, m[2])
 			ops = append(ops, SpecOp{Method: strings.ToUpper(m[1]), Path: path, SpecType: "OpenAPI", File: relFile})
 			continue
 		}
@@ -240,13 +387,16 @@ func normKey(op SpecOp) string {
 	return m + " " + path
 }
 
-func strAfter(s string, needles ...string) (string, bool) {
-	for _, n := range needles {
-		if i := strings.Index(s, n); i >= 0 {
-			return s[i+len(n):], true
-		}
+// normPath returns the verb-less normalized path key, used to let a catch-all
+// handler (HandleFunc / @RequestMapping with no verb / .Any) cover a spec op
+// on the same path regardless of HTTP method.
+func normPath(op SpecOp) string {
+	path := reParam.ReplaceAllString(op.Path, "{}")
+	path = strings.TrimRight(path, "/")
+	if path == "" {
+		path = "/"
 	}
-	return "", false
+	return strings.ToLower(path)
 }
 
 func firstQStr(s string) string {

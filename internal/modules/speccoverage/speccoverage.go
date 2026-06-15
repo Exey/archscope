@@ -88,24 +88,42 @@ func (Module) Analyze(files []*parser.ParsedFile) any {
 	r.HasRoutes = len(r.ImplOps) > 0
 
 	// Stage 3 – compare spec ops against code ops.
-	implSet := map[string]bool{}
+	implSet := map[string]bool{}     // "verb path" keys for verb-specific code ops
+	implAnyPath := map[string]bool{} // normalized paths handled by a catch-all op
 	for _, op := range r.ImplOps {
 		implSet[normKey(op)] = true
+		if op.Method == "" { // HandleFunc / .Any / @RequestMapping w/o verb → any method
+			implAnyPath[normPath(op)] = true
+		}
+	}
+	isCovered := func(op SpecOp) bool {
+		if implSet[normKey(op)] {
+			return true
+		}
+		return op.SpecType == "OpenAPI" && implAnyPath[normPath(op)]
 	}
 	specSet := map[string]bool{}
+	specPath := map[string]bool{}
 	for _, op := range r.SpecOps {
 		k := normKey(op)
 		specSet[k] = true
-		if implSet[k] {
+		if op.SpecType == "OpenAPI" {
+			specPath[normPath(op)] = true
+		}
+		if isCovered(op) {
 			r.Covered = append(r.Covered, op)
 		} else {
 			r.Missing = append(r.Missing, op)
 		}
 	}
 	for _, op := range r.ImplOps {
-		if !specSet[normKey(op)] {
-			r.Extra = append(r.Extra, op)
+		if specSet[normKey(op)] {
+			continue
 		}
+		if op.Method == "" && specPath[normPath(op)] {
+			continue // catch-all that documents an existing spec path
+		}
+		r.Extra = append(r.Extra, op)
 	}
 	if len(r.SpecOps) > 0 {
 		r.Coverage = int(float64(len(r.Covered))/float64(len(r.SpecOps))*100 + 0.5)
@@ -145,18 +163,21 @@ func (Module) RenderHTML(res any) string {
 	var b strings.Builder
 	b.WriteString(`<div class="as-pop">`)
 
-	specTypesStr := strings.Join(r.SpecTypes, " + ")
-	if specTypesStr == "" {
-		specTypesStr = "spec"
+	// Subtitle: spec type badges + operation counts.
+	b.WriteString(`<p class="as-pop__sub">`)
+	for _, st := range r.SpecTypes {
+		fmt.Fprintf(&b, `<span class="as-tag tag-tech" style="margin-right:4px">%s</span>`, esc(st))
 	}
-	fmt.Fprintf(&b,
-		`<p class="as-pop__sub">%d %s operation(s) across %d file(s) · %d implemented · %d missing · %d undocumented</p>`,
-		len(r.SpecOps), specTypesStr, r.FileCount, len(r.Covered), len(r.Missing), len(r.Extra),
-	)
+	fmt.Fprintf(&b, `%d operation(s) across %d file(s) · %d implemented · %d missing`,
+		len(r.SpecOps), r.FileCount, len(r.Covered), len(r.Missing))
+	if len(r.Extra) > 0 {
+		fmt.Fprintf(&b, ` · <span style="color:var(--text-faint)">%d undocumented ↓ Traffic</span>`, len(r.Extra))
+	}
+	b.WriteString(`</p>`)
 
 	// Coverage verdict and gradient bar.
 	pct := r.Coverage
-	verdict := coverageVerdict(pct)
+	verdict := coverageVerdict(pct, len(r.Extra))
 	fmt.Fprintf(&b, `<div class="as-pop__verdict">%d%% — %s</div>`, pct, esc(verdict))
 
 	fillCls := "fill-crit"
@@ -194,10 +215,10 @@ func (Module) RenderHTML(res any) string {
 		b.WriteString(`</tbody></table>`)
 	}
 
-	// Implemented — collapsible.
+	// Implemented — always open (no details toggle).
 	if len(r.Covered) > 0 {
 		fmt.Fprintf(&b,
-			`<details style="margin-top:12px"><summary class="as-sub" style="cursor:pointer">Implemented (%d)</summary>`,
+			`<div class="as-sub" style="margin-top:12px">Implemented (%d)</div>`,
 			len(r.Covered),
 		)
 		b.WriteString(`<table class="as-table"><thead><tr>`)
@@ -213,30 +234,10 @@ func (Module) RenderHTML(res any) string {
 				methodBadge(m), esc(op.Path), esc(filepath.Base(op.File)),
 			)
 		}
-		b.WriteString(`</tbody></table></details>`)
+		b.WriteString(`</tbody></table>`)
 	}
 
-	// Undocumented routes — collapsible.
-	if len(r.Extra) > 0 {
-		fmt.Fprintf(&b,
-			`<details style="margin-top:12px"><summary class="as-sub" style="cursor:pointer">Undocumented routes (%d)</summary>`,
-			len(r.Extra),
-		)
-		b.WriteString(`<table class="as-table"><thead><tr>`)
-		b.WriteString(`<th>Method</th><th>Path</th><th>Source</th>`)
-		b.WriteString(`</tr></thead><tbody>`)
-		for _, op := range r.Extra {
-			m := op.Method
-			if m == "" {
-				m = "ANY"
-			}
-			fmt.Fprintf(&b,
-				`<tr><td>%s</td><td class="mono">%s</td><td class="mono">%s</td></tr>`,
-				methodBadge(m), esc(op.Path), esc(filepath.Base(op.File)),
-			)
-		}
-		b.WriteString(`</tbody></table></details>`)
-	}
+	// Undocumented routes are shown in the Traffic panel (SPEC COV column).
 
 	b.WriteString(`</div>`)
 	return b.String()
@@ -244,10 +245,12 @@ func (Module) RenderHTML(res any) string {
 
 // ─── Rendering helpers ────────────────────────────────────────────────────────
 
-func coverageVerdict(pct int) string {
+func coverageVerdict(pct, extraCount int) string {
 	switch {
-	case pct >= 90:
+	case pct >= 90 && extraCount == 0:
 		return "Full API coverage"
+	case pct >= 90:
+		return "Spec covered"
 	case pct >= 70:
 		return "Good coverage"
 	case pct >= 40:
