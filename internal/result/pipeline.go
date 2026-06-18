@@ -182,6 +182,12 @@ func runModules(scan *scanner.ScanResult, files []*parser.ParsedFile, step func(
 		for _, f := range pfs {
 			langIDs[f.LanguageID] = true
 		}
+		type analyzed struct {
+			m       modules.ReportModule
+			res     any
+			elapsed time.Duration
+		}
+		var runs []analyzed
 		for _, m := range modules.Default.All() {
 			applies := false
 			for id := range langIDs {
@@ -195,18 +201,36 @@ func runModules(scan *scanner.ScanResult, files []*parser.ParsedFile, step func(
 			}
 			t0 := time.Now()
 			res := m.Analyze(pfs)
-			html := m.RenderHTML(res)
-			step(fmt.Sprintf("  [%s] %s (%dms)", plat, m.ID(), time.Since(t0).Milliseconds()))
-			if strings.TrimSpace(html) == "" {
-				continue
+			runs = append(runs, analyzed{m, res, time.Since(t0)})
+		}
+		xfm := modules.NewTransformer()
+		for _, a := range runs {
+			xfm.Add(a.m, a.res)
+		}
+		rendered := xfm.HTMLPanels()
+		renderedSet := map[string]bool{}
+		for _, rp := range rendered {
+			renderedSet[rp.ModuleID] = true
+		}
+		// Log in canonical order with ✓ (has content) or — (empty/no data).
+		sort.Slice(runs, func(i, j int) bool {
+			return modules.MetaFor(runs[i].m.ID()).Order < modules.MetaFor(runs[j].m.ID()).Order
+		})
+		for _, a := range runs {
+			status := "—"
+			if renderedSet[a.m.ID()] {
+				status = "✓"
 			}
+			step(fmt.Sprintf("  [%s] %s (%dms) %s", plat, a.m.ID(), a.elapsed.Milliseconds(), status))
+		}
+		for _, rp := range rendered {
 			panels = append(panels, ModulePanel{
 				Platform:  plat,
-				ModuleID:  m.ID(),
-				Title:     m.Title(),
-				HTML:      html,
-				Cards:     m.SummaryCards(res),
-				RawResult: res,
+				ModuleID:  rp.ModuleID,
+				Title:     rp.Title,
+				HTML:      rp.HTML,
+				Cards:     rp.Cards,
+				RawResult: rp.Result,
 			})
 		}
 	}

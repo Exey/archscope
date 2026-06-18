@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/exey/archscope/internal/config"
 	"github.com/exey/archscope/internal/fetch"
 	_ "github.com/exey/archscope/internal/lang"         // register language specs
+	"github.com/exey/archscope/internal/modules"
 	_ "github.com/exey/archscope/internal/modules/arch" // register report modules
 	_ "github.com/exey/archscope/internal/modules/dddmodel"
 	_ "github.com/exey/archscope/internal/modules/designpattern"
@@ -147,6 +149,8 @@ func main() {
 		res.SourceURL = target
 	}
 
+	printCapabilityTable(res)
+
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		fatalf("archscope: cannot create output dir: %v\n", err)
 	}
@@ -249,4 +253,104 @@ func openInBrowser(path string) {
 func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format, args...)
 	os.Exit(1)
+}
+
+// printCapabilityTable prints a compact per-platform × per-module matrix to
+// stdout showing which analysis cards were produced (✓) or absent (—).
+func printCapabilityTable(res *result.AnalysisResult) {
+	platforms := res.Scan.PlatformsOrdered()
+	if len(platforms) == 0 {
+		return
+	}
+
+	// Build column list in canonical order from MetaByID.
+	type col struct{ id, label string }
+	type entry struct {
+		id    string
+		order int
+	}
+	var entries []entry
+	for id, m := range modules.MetaByID {
+		entries = append(entries, entry{id, m.Order})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].order < entries[j].order })
+	cols := make([]col, 0, len(entries))
+	for _, e := range entries {
+		cols = append(cols, col{e.id, moduleShortLabel(e.id)})
+	}
+
+	// Which module IDs rendered for each platform.
+	platHas := map[string]map[string]bool{}
+	for _, panel := range res.ModulePanels {
+		key := string(panel.Platform)
+		if platHas[key] == nil {
+			platHas[key] = map[string]bool{}
+		}
+		platHas[key][panel.ModuleID] = true
+	}
+
+	// Column widths.
+	platW := len("Platform")
+	for _, pg := range platforms {
+		if l := len(pg.TabLabel()); l > platW {
+			platW = l
+		}
+	}
+	colW := make([]int, len(cols))
+	for i, c := range cols {
+		colW[i] = len(c.label)
+		if colW[i] < 2 {
+			colW[i] = 2
+		}
+	}
+
+	// Header.
+	fmt.Printf("\n Modules per platform:\n")
+	fmt.Printf(" %-*s", platW, "Platform")
+	for i, c := range cols {
+		fmt.Printf("  %-*s", colW[i], c.label)
+		_ = i
+	}
+	fmt.Println()
+
+	// Separator.
+	total := platW + 1
+	for _, w := range colW {
+		total += w + 3
+	}
+	fmt.Println(" " + strings.Repeat("─", total))
+
+	// Rows.
+	for _, pg := range platforms {
+		key := string(pg.Platform)
+		fmt.Printf(" %-*s", platW, pg.TabLabel())
+		for i, c := range cols {
+			mark := "—"
+			if platHas[key][c.id] {
+				mark = "✓"
+			}
+			fmt.Printf("  %-*s", colW[i], mark)
+			_ = i
+		}
+		fmt.Println()
+	}
+	fmt.Println()
+}
+
+func moduleShortLabel(id string) string {
+	switch id {
+	case "arch":
+		return "Arch"
+	case "dddmodel":
+		return "DDD"
+	case "oopvspop":
+		return "OOP"
+	case "traffic":
+		return "Traffic"
+	case "speccoverage":
+		return "Spec"
+	case "designpattern":
+		return "Patterns"
+	}
+	return id
 }

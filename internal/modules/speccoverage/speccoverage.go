@@ -217,6 +217,48 @@ func (Module) SummaryCards(res any) []modules.SummaryCard {
 	return cards
 }
 
+// ─── RenderMarkdown ───────────────────────────────────────────────────────────
+
+func (Module) RenderMarkdown(res any) string {
+	r, ok := res.(Result)
+	if !ok || !r.HasData() {
+		return ""
+	}
+	var b strings.Builder
+
+	if len(r.SpecTypes) > 0 {
+		fmt.Fprintf(&b, "**Spec types:** %s\n\n", strings.Join(r.SpecTypes, " · "))
+	}
+	if len(r.Generators) > 0 {
+		fmt.Fprintf(&b, "**Generators:** %s\n\n", strings.Join(r.Generators, " · "))
+	}
+
+	missing := len(r.Extra)
+	implemented := len(r.ImplOps) - len(r.Extra)
+	fmt.Fprintf(&b, "**%d%% code→spec** · %d endpoint in spec · %d missing spec entries · %d spec files\n\n",
+		r.SpecReady, implemented, missing, r.FileCount)
+
+	if len(r.SpecOps) > 0 {
+		seen := map[string]string{}
+		var specFiles []string
+		for _, op := range r.SpecOps {
+			if _, ok := seen[op.File]; !ok {
+				seen[op.File] = op.SpecType
+				specFiles = append(specFiles, op.File)
+			}
+		}
+		sort.Strings(specFiles)
+		b.WriteString("**Spec Locations**\n\n")
+		b.WriteString("| Type | File |\n")
+		b.WriteString("|------|------|\n")
+		for _, f := range specFiles {
+			fmt.Fprintf(&b, "| %s | %s |\n", seen[f], f)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 // ─── RenderHTML ───────────────────────────────────────────────────────────────
 
 func (Module) RenderHTML(res any) string {

@@ -82,48 +82,20 @@ func renderPlatform(b *strings.Builder, res *result.AnalysisResult, pg *scanner.
 		fmtNum(pg.FileCount), fmtNum(lines), fmtNum(decls),
 		len(pg.Modules), plural(len(pg.Modules), "module", "modules"))
 
-	// Run every registered module that implements MarkdownRenderer in display order:
-	// Architecture → DDD/OOPvsPOP → Traffic → rest.
-	langIDs := map[string]bool{}
-	for _, f := range files {
-		langIDs[f.LanguageID] = true
+	// Render module sections using pre-computed results from the pipeline.
+	// This avoids re-running Analyze and guarantees the same order as the HTML report.
+	xfm := modules.NewTransformer()
+	for _, panel := range res.ModulePanels {
+		if panel.Platform != pg.Platform {
+			continue
+		}
+		m := modules.Default.Get(panel.ModuleID)
+		if m == nil {
+			continue
+		}
+		xfm.Add(m, panel.RawResult)
 	}
-	moduleSlot := func(id string) int {
-		switch id {
-		case "arch", "architecture":
-			return 0
-		case "dddmodel", "oopvspop":
-			return 1
-		case "traffic":
-			return 2
-		}
-		return 3
-	}
-	all := modules.Default.All()
-	sort.SliceStable(all, func(i, j int) bool {
-		return moduleSlot(all[i].ID()) < moduleSlot(all[j].ID())
-	})
-	for _, m := range all {
-		applicable := false
-		for id := range langIDs {
-			if m.AppliesTo(id) {
-				applicable = true
-				break
-			}
-		}
-		if !applicable {
-			continue
-		}
-		mr, ok := m.(modules.MarkdownRenderer)
-		if !ok {
-			continue
-		}
-		mres := m.Analyze(files)
-		md := mr.RenderMarkdown(mres)
-		if strings.TrimSpace(md) == "" {
-			continue
-		}
-		fmt.Fprintf(b, "### %s %s\n\n", moduleIcon(m.ID()), m.Title())
+	if md := xfm.Markdown(); md != "" {
 		b.WriteString(md)
 	}
 
@@ -874,21 +846,6 @@ func sortedPlatforms(res *result.AnalysisResult) []*scanner.PlatformGroup {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-func moduleIcon(id string) string {
-	switch id {
-	case "arch", "architecture":
-		return "🏛️"
-	case "dddmodel":
-		return "📐"
-	case "traffic":
-		return "🛜"
-	case "designpattern":
-		return "🔷"
-	case "oopvspop":
-		return "⚖️"
-	}
-	return "📦"
-}
 
 func mdCell(s string) string {
 	return strings.ReplaceAll(s, "|", "\\|")
