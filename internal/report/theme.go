@@ -276,7 +276,8 @@ a.as-mod:hover{border-color:var(--accent)}
 .as-file-table{width:100%; table-layout:fixed}
 .as-file-table th:first-child,.as-file-table td:first-child{width:50%; overflow:hidden}
 .as-file-table th:nth-child(2),.as-file-table td:nth-child(2),
-.as-file-table th:nth-child(3),.as-file-table td:nth-child(3){text-align:right; width:60px; white-space:nowrap}
+.as-file-table th:nth-child(3),.as-file-table td:nth-child(3),
+.as-file-table th:nth-child(4),.as-file-table td:nth-child(4){text-align:right; width:60px; white-space:nowrap}
 .as-file-table td{vertical-align:top}
 .as-file-dir{color:var(--text-faint); font-weight:400}
 .as-file-desc{color:var(--text-faint); font-size:11.5px; font-style:italic; margin-top:2px}
@@ -415,6 +416,23 @@ a.as-chip:hover{opacity:.8}
 .as-plat-python{background:rgba(55,118,171,.18); color:#3776ab}
 .as-plat-ts_js{background:rgba(49,120,198,.18); color:#3178c6}
 
+/* Prompt card */
+.as-prompt{margin-top:18px}
+.as-prompt__bar{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.as-prompt__tab{padding:4px 14px;border-radius:5px;border:1px solid var(--border);background:var(--bg-card);
+  color:var(--text-dim);font-size:12px;font-weight:600;cursor:pointer;transition:background .15s,color .15s;font-family:var(--mono)}
+.as-prompt__tab:hover{background:var(--bg-elev-2);color:var(--text)}
+.as-prompt__tab--active{background:var(--accent-dim);color:var(--accent);border-color:var(--accent)}
+.as-prompt__copy{margin-left:auto;padding:4px 14px;border-radius:5px;border:1px solid var(--border);
+  background:transparent;color:var(--text-faint);font-size:12px;cursor:pointer;transition:color .15s}
+.as-prompt__copy:hover{color:var(--accent)}
+.as-prompt__copy--ok{color:var(--good)!important}
+.as-prompt__body{display:none}
+.as-prompt__body--active{display:block}
+.as-prompt__pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:6px;padding:14px 16px;
+  font-family:var(--mono);font-size:11.5px;color:var(--text-dim);white-space:pre-wrap;word-break:break-word;
+  max-height:420px;overflow-y:auto;line-height:1.55;margin:0}
+
 `
 
 // JS toggles the color theme (persisted only in-memory per session — no
@@ -477,5 +495,41 @@ const JS = `
       if(msg)msg.textContent=links.length+' links updated';
     });
   }
+  // Prompt card: tab switching + clipboard copy
+  document.addEventListener('click',function(e){
+    var tab=e.target.closest('.as-prompt__tab[data-prompt-tab]');
+    if(tab){
+      var card=tab.closest('.as-prompt');
+      if(!card)return;
+      card.querySelectorAll('.as-prompt__tab').forEach(function(t){t.classList.remove('as-prompt__tab--active');});
+      tab.classList.add('as-prompt__tab--active');
+      var id=tab.getAttribute('data-prompt-tab');
+      card.querySelectorAll('.as-prompt__body').forEach(function(b){b.classList.remove('as-prompt__body--active');});
+      var body=card.querySelector('.as-prompt__body[data-prompt-body="'+id+'"]');
+      if(body)body.classList.add('as-prompt__body--active');
+      return;
+    }
+    var copyBtn=e.target.closest('.as-prompt__copy');
+    if(copyBtn){
+      var card=copyBtn.closest('.as-prompt');
+      var active=card&&card.querySelector('.as-prompt__body--active .as-prompt__pre');
+      if(!active)return;
+      var text=active.textContent||'';
+      if(navigator.clipboard){
+        navigator.clipboard.writeText(text).then(function(){
+          copyBtn.classList.add('as-prompt__copy--ok');
+          copyBtn.textContent='Copied!';
+          setTimeout(function(){copyBtn.classList.remove('as-prompt__copy--ok');copyBtn.textContent='Copy';},1800);
+        });
+      } else {
+        var ta=document.createElement('textarea');
+        ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+        document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+        document.body.removeChild(ta);
+        copyBtn.textContent='Copied!';
+        setTimeout(function(){copyBtn.textContent='Copy';},1800);
+      }
+    }
+  });
 })();
 `

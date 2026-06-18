@@ -269,6 +269,8 @@ func platformShortLabel(p langspec.Platform) string {
 		return "Swift"
 	case langspec.PlatformGo:
 		return "Go"
+	case langspec.PlatformRust:
+		return "Rust"
 	default:
 		return string(p)
 	}

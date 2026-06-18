@@ -1,6 +1,6 @@
 # 🏛️🔭 ArchScope
 
-**Universal CLI for multi-language codebase intelligence** — analyze architecture, security, dependencies and git history across Swift/Objective-C, Kotlin, TypeScript/JavaScript, Python, Go and Java, and produce one interactive HTML report, a Markdown document, or a SARIF log.
+**Universal CLI for multi-language codebase intelligence** — analyze architecture, security, dependencies and git history across Swift/Objective-C, Kotlin, TypeScript/JavaScript, Python, Go, Java and Rust, and produce one interactive HTML report, a Markdown document, or a SARIF log.
 
 ---
 
@@ -46,7 +46,12 @@ go run ./cmd/archscope ~/code --open
 
 7. **🛜 Traffic** *(Go · Python · Java)* — detected inbound and outbound connection signals: HTTP/gRPC endpoints, listener ports, external service calls, and data formats (JSON, Protobuf, …). Shown as two tables — 📥 Inbound and 📤 Outbound — with protocol, URI/pattern, data format, source file, and module. Each inbound route gets a **Spec** column (✅ / ❓) when spec files are found.
 
-8. **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
+8. **💬 Prompt** — AI-ready context card, placed right after Traffic. Generates a structured prompt describing the current platform/module at five token budgets (1K / 10K / 50K / 100K / 200K, default 10K). Paste into any LLM for instant code review, refactoring advice, or architecture Q&A. Includes a one-click **Copy** button.
+   - **1K** — essentials: platform name, tech stack, file/line counts, top 5 files, top 3 security findings.
+   - **10K** — full picture: 30 files with declarations, domain model note, API spec coverage with missing endpoints, inbound/outbound traffic, 15 security findings with descriptions, git stats and hot files.
+   - **50K** — deep dive: all files and declarations, all routes, all security findings, full git churn list.
+   - **100K** — graph data: architecture layer breakdown per file, detected components, full module dependency edge list, hotspot table with in/out-degree, all longest functions.
+   - **200K** — exhaustive: all security findings with code snippets and blame, all TODOs & FIXMEs with location, all large functions, per-file git history (change frequency + recent commit messages), commit type distribution.
 
 9. **💡 Module Insights** — four sub-sections in a responsive grid:
      - **🕸️ Dependency Hotspots** — modules ranked by in-degree (how many others depend on them), with Lines & Decl. Backend tabs also include an inline **SVG dependency graph** (node radius ∝ dependents).
@@ -66,7 +71,9 @@ go run ./cmd/archscope ~/code --open
    - **Tags & commits** — semver tag list, commit volume, conventional-commit hygiene.
    - **Branch inventory** — all branches with stale detection.
 
-11. **📂 Modules & Microservices** — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
+11. **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
+
+12. **📂 Modules & Microservices** — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, **estimated tokens**, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
 
 ---
 
@@ -79,6 +86,7 @@ Each language is **one self-registering file** in `internal/lang/`. A `LanguageS
 | Go | ✅ language rules + universal | — | 
 | Python | ✅ language rules + universal | — | 
 | Java | ✅ language rules + universal | — |
+| Rust | ✅ language rules + universal | — |
 | TypeScript / JavaScript | ✅ language rules + universal | ✅ |
 | Kotlin | ✅ language rules + universal | ✅ |
 | Swift / Objective-C | ✅ language rules + universal | ✅ |

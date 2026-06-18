@@ -33,7 +33,7 @@ func (Module) Title() string { return "Spec Coverage" }
 // AppliesTo runs for backend languages that own HTTP/gRPC/GraphQL routes.
 func (Module) AppliesTo(l string) bool {
 	switch l {
-	case "go", "python", "java", "kotlin", "typescript":
+	case "go", "python", "java", "kotlin", "typescript", "rust":
 		return true
 	}
 	return false

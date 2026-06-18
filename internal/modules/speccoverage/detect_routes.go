@@ -38,6 +38,8 @@ func extractCodeOps(files []*parser.ParsedFile, projRoot string) []SpecOp {
 			found = jvmRoutes(lines, rel)
 		case "typescript":
 			found = tsRoutes(lines, rel)
+		case "rust":
+			found = rustRoutes(lines, rel)
 		}
 		for _, op := range found {
 			add(op)
@@ -397,6 +399,67 @@ func normPath(op SpecOp) string {
 		path = "/"
 	}
 	return strings.ToLower(path)
+}
+
+// ─── Rust ─────────────────────────────────────────────────────────────────────
+
+// reRustRocket matches Rocket attribute macros: #[get("/path")], #[post("/path")] etc.
+var reRustRocket = regexp.MustCompile(`#\[(get|post|put|delete|patch|head|options)\s*\(\s*"([^"]+)"`)
+
+// reRustAxum matches Axum Router::route calls: .route("/path", get(handler))
+// Captures path and the leading verb from the second argument.
+var reRustAxumRoute = regexp.MustCompile(`\.route\s*\(\s*"([^"]+)"\s*,\s*(get|post|put|delete|patch|head|options)\s*\(`)
+
+// reRustActixRoute matches Actix-web route macros and web:: calls.
+// #[get("/path")] / web::get().to(...) at route-level, or
+// .route("/path", web::get())
+var reRustActixMacro = regexp.MustCompile(`#\[(get|post|put|delete|patch|head|options)\s*\(\s*"([^"]+)"`)
+var reRustActixRoute = regexp.MustCompile(`\.route\s*\(\s*"([^"]+)"\s*,\s*web::(get|post|put|delete|patch|head|options)\s*\(`)
+
+// reRustWarpPath detects warp path/method filters: warp::get().and(warp::path("seg"))
+var reRustWarpMethod = regexp.MustCompile(`warp::(get|post|put|delete|patch|head|options)\s*\(\s*\)`)
+var reRustWarpPath = regexp.MustCompile(`warp::path\s*\(\s*"([^"]+)"`)
+
+func rustRoutes(lines []string, relFile string) []SpecOp {
+	var ops []SpecOp
+	var pendingWarpMethod string
+
+	for _, raw := range lines {
+		ln := strings.TrimSpace(raw)
+		if strings.HasPrefix(ln, "//") {
+			continue
+		}
+
+		// Rocket: #[get("/users/{id}")] or #[post("/users")]
+		if m := reRustRocket.FindStringSubmatch(ln); m != nil {
+			ops = append(ops, SpecOp{Method: strings.ToUpper(m[1]), Path: m[2], SpecType: "OpenAPI", File: relFile})
+			continue
+		}
+
+		// Axum: .route("/path", get(handler)) or .route("/path", post(handler))
+		if m := reRustAxumRoute.FindStringSubmatch(ln); m != nil {
+			ops = append(ops, SpecOp{Method: strings.ToUpper(m[2]), Path: m[1], SpecType: "OpenAPI", File: relFile})
+			continue
+		}
+
+		// Actix-web: .route("/path", web::get()) or .route("/path", web::post())
+		if m := reRustActixRoute.FindStringSubmatch(ln); m != nil {
+			ops = append(ops, SpecOp{Method: strings.ToUpper(m[2]), Path: m[1], SpecType: "OpenAPI", File: relFile})
+			continue
+		}
+
+		// Warp: detect method then path on nearby lines (simple heuristic)
+		if m := reRustWarpMethod.FindStringSubmatch(ln); m != nil {
+			pendingWarpMethod = strings.ToUpper(m[1])
+		}
+		if pendingWarpMethod != "" {
+			if m := reRustWarpPath.FindStringSubmatch(ln); m != nil {
+				ops = append(ops, SpecOp{Method: pendingWarpMethod, Path: "/" + m[1], SpecType: "OpenAPI", File: relFile})
+				pendingWarpMethod = ""
+			}
+		}
+	}
+	return ops
 }
 
 func firstQStr(s string) string {
