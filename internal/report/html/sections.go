@@ -1129,6 +1129,7 @@ func renderPromptCard(res *result.AnalysisResult, pg *scanner.PlatformGroup, fil
 		fmt.Fprintf(&b, `<button class="as-prompt__tab%s" data-prompt-tab="%d">%s</button>`, active, i, bud.label)
 	}
 	b.WriteString(`<button class="as-prompt__copy">Copy</button>`)
+	fmt.Fprintf(&b, `<button class="as-prompt__save" data-filename="prompt-%s.md">Save .md</button>`, esc(pg.TabLabel()))
 	b.WriteString(`</div>`)
 
 	// Tab bodies

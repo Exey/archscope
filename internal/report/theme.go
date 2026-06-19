@@ -427,6 +427,10 @@ a.as-chip:hover{opacity:.8}
   background:transparent;color:var(--text-faint);font-size:12px;cursor:pointer;transition:color .15s}
 .as-prompt__copy:hover{color:var(--accent)}
 .as-prompt__copy--ok{color:var(--good)!important}
+.as-prompt__save{margin-left:6px;padding:4px 14px;border-radius:5px;border:1px solid var(--border);
+  background:transparent;color:var(--text-faint);font-size:12px;cursor:pointer;transition:color .15s}
+.as-prompt__save:hover{color:var(--accent)}
+.as-prompt__save--ok{color:var(--good)!important}
 .as-prompt__body{display:none}
 .as-prompt__body--active{display:block}
 .as-prompt__pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:6px;padding:14px 16px;
@@ -529,6 +533,24 @@ const JS = `
         copyBtn.textContent='Copied!';
         setTimeout(function(){copyBtn.textContent='Copy';},1800);
       }
+    }
+    var saveBtn=e.target.closest('.as-prompt__save');
+    if(saveBtn){
+      var card=saveBtn.closest('.as-prompt');
+      var active=card&&card.querySelector('.as-prompt__body--active .as-prompt__pre');
+      if(!active)return;
+      var text=active.textContent||'';
+      var filename=saveBtn.getAttribute('data-filename')||'prompt.md';
+      var blob=new Blob([text],{type:'text/markdown'});
+      var url=URL.createObjectURL(blob);
+      var a=document.createElement('a');
+      a.href=url; a.download=filename; a.style.display='none';
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      saveBtn.classList.add('as-prompt__save--ok');
+      saveBtn.textContent='Saved!';
+      setTimeout(function(){saveBtn.classList.remove('as-prompt__save--ok');saveBtn.textContent='Save .md';},1800);
     }
   });
 })();
