@@ -7,7 +7,7 @@
 package report
 
 // Version is the tool version surfaced in the report header and SARIF driver.
-const Version = "1.0.0"
+const Version = "26.6.18"
 
 // CSS is the full stylesheet, including dark (default) and light themes and the
 // class vocabulary emitted by report modules (.as-arch__*, .as-dp__*, etc.).

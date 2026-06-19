@@ -8,9 +8,20 @@ import (
 	"github.com/exey/archscope/internal/langspec"
 )
 
-// maxRootDepth bounds how deep below the repo root we look for module markers,
-// matching goscope's 3-level service discovery.
-const maxRootDepth = 3
+// maxRootDepth bounds how deep below the repo root we look for module markers.
+// 6 levels handles deep monorepo layouts like staging/src/k8s.io/kubectl/go.mod.
+const maxRootDepth = 6
+
+// skipDirs are directories that never contain module roots (build artifacts,
+// dependency caches, generated output). We stop descending into them during
+// module discovery to keep large-monorepo scans fast.
+var skipDirs = map[string]bool{
+	"vendor": true, "node_modules": true, "target": true,
+	"dist": true, "build": true, "out": true, ".gradle": true,
+	"__pycache__": true, ".cache": true, ".next": true,
+	".nuxt": true, ".svelte-kit": true, "coverage": true,
+	"bazel-bin": true, "bazel-out": true, "_build": true,
+}
 
 // discoverModuleRoots finds directories that hold a module for some language,
 // identified by that language's ModuleDetection.MarkerFiles (and ProjectTypes).
@@ -106,7 +117,7 @@ func discoverModuleRoots(rootPath string, reg *langspec.Registry, excl map[strin
 				continue
 			}
 			name := e.Name()
-			if name == ".git" || strings.HasPrefix(name, ".") || excl[name] {
+			if name == ".git" || strings.HasPrefix(name, ".") || excl[name] || skipDirs[name] {
 				continue
 			}
 			visit(filepath.Join(dir, name), depth+1)

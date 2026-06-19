@@ -35,8 +35,9 @@ var techImportMap = []struct{ needle, label, cat string }{
 	{"snapkit", "SnapKit", "frontend"}, {"kingfisher", "Kingfisher", "frontend"},
 	{"rxswift", "RxSwift", "frontend"}, {"sdwebimage", "SDWebImage", "frontend"},
 	{"lottie", "Lottie", "frontend"}, {"charts", "Charts", "frontend"},
+	{"foundation", "Foundation", "frontend"}, {"healthkit", "HealthKit", "frontend"}, {"storekit", "StoreKit", "frontend"},
 	// Backend
-	{"foundation", "Foundation", "backend"}, {"healthkit", "HealthKit", "backend"}, {"storekit", "StoreKit", "backend"},
+
 	{"alamofire", "Alamofire", "backend"}, {"moya", "Moya", "backend"},
 	{"promisekit", "PromiseKit", "backend"}, {"swiftprotobuf", "SwiftProtobuf", "backend"},
 	{"keychainaccess", "KeychainAccess", "backend"},

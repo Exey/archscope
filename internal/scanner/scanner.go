@@ -116,7 +116,7 @@ func Scan(rootPath string, cfg config.Config, reg *langspec.Registry) (*ScanResu
 				res.GitRepos = append(res.GitRepos, filepath.Dir(path))
 				return filepath.SkipDir
 			}
-			if strings.HasPrefix(name, ".") || excl[name] {
+			if strings.HasPrefix(name, ".") || excl[name] || skipDirs[name] {
 				return filepath.SkipDir
 			}
 			return nil
