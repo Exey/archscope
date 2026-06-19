@@ -1745,6 +1745,95 @@ func buildPrompt(budget int, res *result.AnalysisResult, pg *scanner.PlatformGro
 				b.WriteString("\n")
 			}
 		}
+
+		// ── Full Git Analysis ─────────────────────────────────────────────────────
+		if res.Git.Available {
+			b.WriteString("## Git Analysis\n\n")
+
+			// Branching model.
+			bm := res.Git.Branch.Model
+			if bm.Model != "" {
+				fmt.Fprintf(&b, "### Branching Model\n\n**%s**", string(bm.Model))
+				if bm.Confidence > 0 {
+					fmt.Fprintf(&b, " · %d%% confidence · primary branch: `%s`",
+						int(bm.Confidence*100+0.5), res.Git.Branch.PrimaryBranch)
+				}
+				b.WriteString("\n\n")
+				for _, s := range bm.Signals {
+					fmt.Fprintf(&b, "- %s\n", s)
+				}
+				b.WriteString("\n")
+			}
+
+			// All contributors.
+			if len(res.Git.Authors) > 0 {
+				type authorRow struct {
+					name    string
+					commits int
+					files   int
+				}
+				var rows []authorRow
+				for name, a := range res.Git.Authors {
+					rows = append(rows, authorRow{name, a.TotalCommits, a.FilesModified})
+				}
+				sort.Slice(rows, func(i, j int) bool {
+					if rows[i].commits != rows[j].commits {
+						return rows[i].commits > rows[j].commits
+					}
+					return rows[i].name < rows[j].name
+				})
+				b.WriteString("### Contributors\n\n")
+				b.WriteString("| Author | Commits | Files |\n")
+				b.WriteString("|--------|--------:|------:|\n")
+				for _, r := range rows {
+					fmt.Fprintf(&b, "| %s | %d | %d |\n", r.name, r.commits, r.files)
+				}
+				b.WriteString("\n")
+			}
+
+			// Full file churn.
+			if len(res.Git.Churn) > 0 {
+				b.WriteString("### File Churn\n\n")
+				b.WriteString("| File | Changes |\n")
+				b.WriteString("|------|--------:|\n")
+				for _, c := range res.Git.Churn {
+					fmt.Fprintf(&b, "| %s | %d |\n", c.RelPath, c.ChangeCount)
+				}
+				b.WriteString("\n")
+			}
+
+			// Tags & releases.
+			t := res.Git.Tags
+			b.WriteString("### Releases\n\n")
+			fmt.Fprintf(&b, "**%d tags** · %d semver", t.TotalTags, t.SemverTags)
+			if t.LatestSemver != "" {
+				fmt.Fprintf(&b, " · latest `%s`", t.LatestSemver)
+			}
+			b.WriteString("\n\n")
+			if len(t.SemverList) > 0 {
+				fmt.Fprintf(&b, "Tags: %s\n\n", strings.Join(t.SemverList, " · "))
+			}
+
+			// Branch stats.
+			bs := res.Git.Branch
+			b.WriteString("### Branches\n\n")
+			fmt.Fprintf(&b, "**%d total**", bs.TotalBranches)
+			if bs.AvgLifetimeDays > 0 {
+				fmt.Fprintf(&b, " · avg lifetime %.0f days", bs.AvgLifetimeDays)
+			}
+			if bs.PeakCommitDay != "" {
+				fmt.Fprintf(&b, " · peak commit day: %s", bs.PeakCommitDay)
+			}
+			b.WriteString("\n\n")
+			if len(bs.StaleBranches) > 0 {
+				b.WriteString("| Stale branch | Days idle |\n")
+				b.WriteString("|--------------|----------:|\n")
+				for _, br := range bs.StaleBranches {
+					fmt.Fprintf(&b, "| %s | %d |\n", br.Name, br.DaysInactive)
+				}
+				b.WriteString("\n")
+			}
+		}
 	}
 
 	return strings.TrimRight(b.String(), "\n") + "\n"
