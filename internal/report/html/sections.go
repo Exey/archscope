@@ -1198,6 +1198,12 @@ func buildPrompt(budget int, res *result.AnalysisResult, pg *scanner.PlatformGro
 	}
 
 	b.WriteString("## Key Files\n\n")
+	kindOrder := []parser.DeclKind{
+		parser.DeclInterface, parser.DeclStruct, parser.DeclClass,
+		parser.DeclEnum, parser.DeclActor, parser.DeclExtension,
+		parser.DeclType, parser.DeclFunc, parser.DeclConst, parser.DeclVar,
+		parser.DeclMessage, parser.DeclService, parser.DeclRPC,
+	}
 	for _, f := range sorted[:fileLimit] {
 		rel := f.FilePath
 		if res.RootPath != "" {
@@ -1205,26 +1211,47 @@ func buildPrompt(budget int, res *result.AnalysisResult, pg *scanner.PlatformGro
 				rel = r
 			}
 		}
-		declNames := make([]string, 0, len(f.Declarations))
-		declLimit := 6
-		if budget >= 10000 {
-			declLimit = 12
-		}
-		if budget >= 50000 {
-			declLimit = len(f.Declarations)
-		}
-		for i, d := range f.Declarations {
-			if i >= declLimit {
-				declNames = append(declNames, fmt.Sprintf("+%d more", len(f.Declarations)-declLimit))
-				break
+		if budget >= 10000 && len(f.Declarations) > 0 {
+			byKind := map[parser.DeclKind][]string{}
+			for _, d := range f.Declarations {
+				byKind[d.Kind] = append(byKind[d.Kind], d.Name)
 			}
-			declNames = append(declNames, d.Name)
+			fmt.Fprintf(&b, "- `%s` (%d lines)\n", rel, f.LineCount)
+			perKindLimit := 8
+			if budget >= 50000 {
+				perKindLimit = 999
+			}
+			for _, k := range kindOrder {
+				names := byKind[k]
+				if len(names) == 0 {
+					continue
+				}
+				shown, extra := names, 0
+				if len(shown) > perKindLimit {
+					extra = len(shown) - perKindLimit
+					shown = shown[:perKindLimit]
+				}
+				line := "  - " + string(k) + ": " + strings.Join(shown, ", ")
+				if extra > 0 {
+					line += fmt.Sprintf(" (+%d more)", extra)
+				}
+				b.WriteString(line + "\n")
+			}
+		} else {
+			declNames := make([]string, 0, len(f.Declarations))
+			for i, d := range f.Declarations {
+				if i >= 6 {
+					declNames = append(declNames, fmt.Sprintf("+%d more", len(f.Declarations)-6))
+					break
+				}
+				declNames = append(declNames, d.Name)
+			}
+			declStr := ""
+			if len(declNames) > 0 {
+				declStr = " — " + strings.Join(declNames, ", ")
+			}
+			fmt.Fprintf(&b, "- `%s` (%d lines)%s\n", rel, f.LineCount, declStr)
 		}
-		declStr := ""
-		if len(declNames) > 0 {
-			declStr = " — " + strings.Join(declNames, ", ")
-		}
-		fmt.Fprintf(&b, "- `%s` (%d lines)%s\n", rel, f.LineCount, declStr)
 	}
 	if fileLimit < len(sorted) {
 		fmt.Fprintf(&b, "- … and %d more files\n", len(sorted)-fileLimit)
@@ -1372,47 +1399,6 @@ func buildPrompt(budget int, res *result.AnalysisResult, pg *scanner.PlatformGro
 		}
 		if findLimit < len(findings) {
 			fmt.Fprintf(&b, "- … and %d more rules with findings\n", len(findings)-findLimit)
-		}
-		b.WriteString("\n")
-	}
-
-	// ── Git Stats ─────────────────────────────────────────────────────────────
-	if budget >= 10000 && res.Git.Available {
-		b.WriteString("## Git Stats\n\n")
-		cs := res.Git.Commits
-		fmt.Fprintf(&b, "- **Total commits:** %d  |  **Typed:** %d/%d\n", cs.Total, cs.Typed, cs.Total)
-		if res.Git.Tags.LatestSemver != "" {
-			fmt.Fprintf(&b, "- **Latest release:** %s\n", res.Git.Tags.LatestSemver)
-		}
-		authorLimit := 5
-		if budget >= 50000 {
-			authorLimit = len(res.Git.Authors)
-		}
-		authors := make([]string, 0, len(res.Git.Authors))
-		for name := range res.Git.Authors {
-			authors = append(authors, name)
-		}
-		sort.Slice(authors, func(i, j int) bool {
-			return res.Git.Authors[authors[i]].TotalCommits > res.Git.Authors[authors[j]].TotalCommits
-		})
-		if len(authors) > authorLimit {
-			authors = authors[:authorLimit]
-		}
-		if len(authors) > 0 {
-			fmt.Fprintf(&b, "- **Top authors:** %s\n", strings.Join(authors, ", "))
-		}
-		if len(res.Git.Churn) > 0 && budget >= 10000 {
-			churnLimit := 5
-			if budget >= 50000 {
-				churnLimit = 15
-			}
-			b.WriteString("- **Hot files (by change count):**\n")
-			for i, c := range res.Git.Churn {
-				if i >= churnLimit {
-					break
-				}
-				fmt.Fprintf(&b, "  - %s (%d changes)\n", c.RelPath, c.ChangeCount)
-			}
 		}
 		b.WriteString("\n")
 	}
@@ -1724,31 +1710,73 @@ func buildPrompt(budget int, res *result.AnalysisResult, pg *scanner.PlatformGro
 			}
 		}
 
-		// Full commit type distribution.
-		if res.Git.Available && len(res.Git.Commits.TypeCounts) > 0 {
-			b.WriteString("## Commit Type Distribution\n\n")
-			type typeCount struct{ t string; n int }
-			var types []typeCount
-			for t, n := range res.Git.Commits.TypeCounts {
-				types = append(types, typeCount{t, n})
+	}
+
+	// ── Git Stats (single section, always at bottom) ──────────────────────────
+	if budget >= 10000 && res.Git.Available {
+		b.WriteString("## Git Stats\n\n")
+		cs := res.Git.Commits
+		fmt.Fprintf(&b, "- **Total commits:** %d  |  **Typed:** %d/%d\n", cs.Total, cs.Typed, cs.Total)
+		if res.Git.Tags.LatestSemver != "" {
+			fmt.Fprintf(&b, "- **Latest release:** %s\n", res.Git.Tags.LatestSemver)
+		}
+		authorLimit := 5
+		if budget >= 50000 {
+			authorLimit = len(res.Git.Authors)
+		}
+		authors := make([]string, 0, len(res.Git.Authors))
+		for name := range res.Git.Authors {
+			authors = append(authors, name)
+		}
+		sort.Slice(authors, func(i, j int) bool {
+			return res.Git.Authors[authors[i]].TotalCommits > res.Git.Authors[authors[j]].TotalCommits
+		})
+		if len(authors) > authorLimit {
+			authors = authors[:authorLimit]
+		}
+		if len(authors) > 0 {
+			fmt.Fprintf(&b, "- **Top authors:** %s\n", strings.Join(authors, ", "))
+		}
+		if len(res.Git.Churn) > 0 {
+			churnLimit := 5
+			if budget >= 50000 {
+				churnLimit = 15
 			}
-			sort.Slice(types, func(i, j int) bool { return types[i].n > types[j].n })
-			for _, tc := range types {
-				fmt.Fprintf(&b, "- %s: %d\n", tc.t, tc.n)
-			}
-			b.WriteString("\n")
-			if len(res.Git.Commits.Samples) > 0 {
-				b.WriteString("**Recent commit messages:**\n\n")
-				for _, s := range res.Git.Commits.Samples {
-					fmt.Fprintf(&b, "- %s\n", s)
+			b.WriteString("- **Hot files (by change count):**\n")
+			for i, c := range res.Git.Churn {
+				if i >= churnLimit {
+					break
 				}
-				b.WriteString("\n")
+				fmt.Fprintf(&b, "  - %s (%d changes)\n", c.RelPath, c.ChangeCount)
 			}
 		}
+		b.WriteString("\n")
 
-		// ── Full Git Analysis ─────────────────────────────────────────────────────
-		if res.Git.Available {
-			b.WriteString("## Git Analysis\n\n")
+		if budget >= 200000 {
+			// Commit type distribution.
+			if len(cs.TypeCounts) > 0 {
+				b.WriteString("### Commit Types\n\n")
+				type typeCount struct {
+					t string
+					n int
+				}
+				var types []typeCount
+				for t, n := range cs.TypeCounts {
+					types = append(types, typeCount{t, n})
+				}
+				sort.Slice(types, func(i, j int) bool { return types[i].n > types[j].n })
+				for _, tc := range types {
+					fmt.Fprintf(&b, "- %s: %d\n", tc.t, tc.n)
+				}
+				b.WriteString("\n")
+				if len(cs.Samples) > 0 {
+					b.WriteString("**Recent commit messages:**\n\n")
+					for _, s := range cs.Samples {
+						fmt.Fprintf(&b, "- %s\n", s)
+					}
+					b.WriteString("\n")
+				}
+			}
 
 			// Branching model.
 			bm := res.Git.Branch.Model
