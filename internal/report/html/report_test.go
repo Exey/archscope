@@ -38,8 +38,8 @@ func minimalResult() *result.AnalysisResult {
 func TestRenderContainsCoreSections(t *testing.T) {
 	out := Render(minimalResult())
 	for _, want := range []string{
-		"<!doctype html>", "as-tabbar", "Danger Index", "as-gauge__num",
-		"Git Analysis", `id="t0"`, `id="p0"`, "as-theme-toggle", "ArchScope",
+		"<!doctype html>", "Danger Index", "as-gauge__num",
+		"Git Analysis", `id="p0"`, "as-theme-seg", "ArchScope",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("rendered HTML missing %q", want)

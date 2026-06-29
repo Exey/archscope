@@ -57,6 +57,11 @@ code,.mono{font-family:var(--mono)}
 .as-brand{color:var(--accent); font-family:var(--mono); font-size:13px; letter-spacing:.02em}
 .as-head__meta{color:var(--text-faint); font-size:12.5px; font-family:var(--mono)}
 .as-head__actions{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.as-theme-seg{display:flex;border:1px solid var(--border-strong);border-radius:999px;overflow:hidden}
+.as-seg-btn{background:var(--bg-elev);color:var(--text-faint);border:none;padding:6px 11px;cursor:pointer;font-size:13px;line-height:1;transition:background .15s,color .15s}
+.as-seg-btn--active{background:var(--accent-dim);color:var(--text)}
+.as-save-btn{font-size:12px;padding:6px 12px}
+.as-save-btn--ok{border-color:var(--green,#3fb950)!important;color:var(--green,#3fb950)!important}
 .as-toggle{
   border:1px solid var(--border-strong); background:var(--bg-elev); color:var(--text);
   border-radius:999px; padding:7px 12px; cursor:pointer; font-size:13px; line-height:1;
@@ -421,7 +426,8 @@ a.as-chip:hover{opacity:.8}
   text-overflow:ellipsis; white-space:nowrap; min-width:0}
 .as-pkg__meta{display:flex; align-items:center; gap:4px; margin-left:auto; flex-shrink:0}
 .as-pkg__loc{color:var(--text-faint); font-size:9.5px; font-family:var(--mono); font-weight:400}
-.as-plat-badge{font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; letter-spacing:.02em}
+.as-plat-badge{font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; letter-spacing:.02em; border:1px solid rgba(255,255,255,.18)}
+[data-theme="light"] .as-plat-badge{border-color:rgba(0,0,0,.15)}
 .as-plat-go{background:#00acd7,20%; background:rgba(0,172,215,.18); color:#00acd7}
 .as-plat-swift_objc{background:rgba(250,95,30,.18); color:#fa5f1e}
 .as-plat-kotlin{background:rgba(127,82,255,.18); color:#7f52ff}
@@ -449,7 +455,7 @@ a.as-chip:hover{opacity:.8}
   font-family:var(--mono);font-size:11.5px;color:var(--text-dim);white-space:pre-wrap;word-break:break-word;
   max-height:420px;overflow-y:auto;line-height:1.55;margin:0}
 
-/* Contributions calendar */
+/* Contribution calendar */
 .as-contributions{margin-bottom:18px}
 .as-card__head{font-size:13px;font-weight:600;color:var(--text-dim);margin-bottom:6px;display:flex;align-items:center;gap:6px}
 .as-card__icon{font-size:14px}
@@ -515,15 +521,38 @@ a.as-chip:hover{opacity:.8}
 // tabs are pure CSS. It is intentionally tiny.
 const JS = `
 (function(){
-  var btn=document.getElementById('as-theme-toggle');
-  if(btn){
-    btn.addEventListener('click',function(){
+  // Segmented dark/light toggle
+  (function(){
+    var dark=document.getElementById('as-theme-dark');
+    var light=document.getElementById('as-theme-light');
+    function setTheme(isLight){
       var root=document.documentElement;
-      var light=root.getAttribute('data-theme')==='light';
-      if(light){root.removeAttribute('data-theme');btn.textContent='☀ Light';}
-      else{root.setAttribute('data-theme','light');btn.textContent='🌙 Dark';}
-    });
-  }
+      if(isLight){root.setAttribute('data-theme','light');}else{root.removeAttribute('data-theme');}
+      if(dark){dark.classList.toggle('as-seg-btn--active',!isLight);}
+      if(light){light.classList.toggle('as-seg-btn--active',isLight);}
+    }
+    if(dark){dark.addEventListener('click',function(){setTheme(false);});}
+    if(light){light.addEventListener('click',function(){setTheme(true);});}
+  })();
+  // HTML / MD save buttons
+  (function(){
+    function saveBlob(blob,name){var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(function(){URL.revokeObjectURL(a.href);},5000);}
+    function flash(btn){btn.classList.add('as-save-btn--ok');var t=btn.textContent;btn.textContent='Saved ✓';setTimeout(function(){btn.classList.remove('as-save-btn--ok');btn.textContent=t;},1800);}
+    var htmlBtn=document.getElementById('as-save-html');
+    if(htmlBtn){htmlBtn.addEventListener('click',function(){
+      var name=htmlBtn.getAttribute('data-filename')||'archscope.html';
+      saveBlob(new Blob([document.documentElement.outerHTML],{type:'text/html'}),name);
+      flash(htmlBtn);
+    });}
+    var mdBtn=document.getElementById('as-save-md');
+    if(mdBtn){mdBtn.addEventListener('click',function(){
+      var name=mdBtn.getAttribute('data-filename')||'archscope.md';
+      var parts=[];
+      document.querySelectorAll('.as-prompt__content').forEach(function(el){parts.push(el.textContent);});
+      saveBlob(new Blob([parts.join('\n\n---\n\n')],{type:'text/markdown'}),name);
+      flash(mdBtn);
+    });}
+  })();
   // Security platform card → open accordion + scroll to danger section
   document.addEventListener('click',function(e){
     var card=e.target.closest('.as-sec-plat-card[data-tab]');

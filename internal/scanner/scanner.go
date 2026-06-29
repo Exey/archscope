@@ -140,7 +140,7 @@ func Scan(rootPath string, cfg config.Config, reg *langspec.Registry) (*ScanResu
 		if cfg.FolderAsTab {
 			if folder := topFolder(abs, path); folder != "" {
 				tabPlatform = langspec.Platform(string(spec.Platform) + ":" + folder)
-				tabLabel = folder + " " + platformShortLabel(spec.Platform)
+				tabLabel = folder
 			}
 		}
 

@@ -19,7 +19,7 @@ go run ./cmd/archscope ~/code --open
 
 1. **Summary bar** — lines of code, source files, declarations, modules, **Danger rate** (0–100% scaled from the 1000-point index), and platform count. One tab per detected language.
 
-![ArchScope](https://exey.github.io/ArchScopeDocs/as_summary.svg)
+   ![ArchScope](https://exey.github.io/ArchScopeDocs/as_summary.svg)
 
 2. **🧰 Tech Stack & Modules** — repo-wide tag cloud: languages present + frameworks auto-detected from imports (SwiftUI, Combine, React, Next.js, Django, FastAPI, gRPC, GORM, …) and from config files (docker-compose, go.mod, Makefile). Below it: a package grid sized by LOC with per-language badges. DevOps tools (Docker, Kubernetes, GitHub Actions, etc.) appear when detected.
 
@@ -27,7 +27,9 @@ go run ./cmd/archscope ~/code --open
 
 ![ArchScope](https://exey.github.io/ArchScopeDocs/as_danger.svg)
 
-4. **Per-platform tabs** — one tab per language, each containing:
+4. **📅 Contribution Calendar** — GitHub-style 14-month heat-map of commit activity. One row per git repository (sorted most-active first), with month labels and a colour scale from no-activity to high-activity. Anomalous weeks (unusually high or low relative to the author's own baseline) are flagged with a dot overlay. Hover any cell to see the exact date, commit count and anomaly note.
+
+5. **Per-platform tabs** — one tab per language (auto-expands when only 1–2 platforms detected), each containing:
 
    **🏛️ Architecture** — *client* languages (Swift/ObjC, Kotlin, TS/JS) get **app-architecture pattern detection**: MVC, MVVM (and variants), VIPER, VIP, RIBs, Clean, Redux, TCA, MVP, MV — scored by role conventions and weighted signals. *Backend* languages (Go, Python, Java) get a **layered architecture view**: API / Models / Services / Persistence / Auth / Config / CLI / Infra / Tests bars + detected component chips.
 

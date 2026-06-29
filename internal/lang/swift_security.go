@@ -44,6 +44,36 @@ var (
 	reSwiftURLInterp      = regexp.MustCompile(`URL\s*\(\s*string\s*:.*\\\(|URLComponents\b.*\\\(`)
 	// CWE-916: fast hash in password context (CryptoKit SHA256/SHA512)
 	reSwiftFastHashSink  = regexp.MustCompile(`\bSHA256\.(hash|init)|SHA512\.(hash|init)|\bSHA384\.(hash|init)|Insecure\.SHA256|Insecure\.SHA512`)
+
+	// ── New iOS-specific rules ────────────────────────────────────────────────
+
+	// CWE-311: Sensitive value written to UIPasteboard (accessible to all apps + iCloud sync)
+	reSwiftPasteboard = regexp.MustCompile(`\bUIPasteboard\.general\b`)
+
+	// CWE-287: LAContext using deviceOwnerAuthentication (allows passcode, bypasses biometric)
+	reSwiftLADeviceAuth = regexp.MustCompile(`\.deviceOwnerAuthentication\b`)
+	reSwiftLABioOnly    = regexp.MustCompile(`\.deviceOwnerAuthenticationWithBiometrics\b`)
+
+	// CWE-311: @AppStorage wraps UserDefaults — same plaintext-disk risk
+	reSwiftAppStorage = regexp.MustCompile(`@AppStorage\s*\(`)
+
+	// CWE-311: Realm database opened without encryptionKey
+	reSwiftRealmInit   = regexp.MustCompile(`\bRealm\s*\(\s*\)|\bRealm\s*\(\s*configuration\b|\bRealm\.Configuration\s*\(`)
+	reSwiftRealmEncKey = regexp.MustCompile(`\bencryptionKey\s*:`)
+
+	// CWE-312: Push notification body/title contains sensitive keywords (visible on lock screen)
+	reSwiftNotifContent = regexp.MustCompile(`\bUNMutableNotificationContent\b`)
+	reSwiftNotifSensKey = regexp.MustCompile(`(?i)\b(otp|pin\b|cvv|ssn|one.?time|verification.?code)\b`)
+
+	// CWE-532: Push device token written to a log statement
+	reSwiftDeviceTokenLog = regexp.MustCompile(`\bdeviceToken\b`)
+
+	// CWE-913: Runtime method swizzling (binary integrity risk in production)
+	reSwiftSwizzle = regexp.MustCompile(`\bmethod_exchangeImplementations\s*\(`)
+
+	// CWE-319: URLSessionConfiguration with TLS below 1.2 via tlsMinimumSupportedProtocolVersion
+	reSwiftTLSMin     = regexp.MustCompile(`\btlsMinimumSupportedProtocolVersion\s*=`)
+	reSwiftTLSUnsafe  = regexp.MustCompile(`\.TLSv10\b|\.TLSv11\b|tls_protocol_version_t\.TLSv10|tls_protocol_version_t\.TLSv11`)
 )
 
 func init() {
@@ -188,6 +218,64 @@ func init() {
 			"(CommonCrypto PBKDF2, CryptoKit HKDF, or a third-party argon2/bcrypt wrapper) "+
 			"for credential storage. (CWE-916)",
 	).WithCWE("916"))
+
+	// ── New iOS-specific rules ────────────────────────────────────────────────
+
+	security.Default.RegisterRule(twoReRule(
+		"swift.pasteboard_sensitive", "Sensitive Data Written to Pasteboard",
+		"data_exposure", security.SevMedium, swiftLangs,
+		reSwiftPasteboard, reSwiftSensitiveKey,
+		"UIPasteboard.general is used on a line that references a sensitive keyword (password, token, "+
+			"secret, etc.). Pasteboard content is accessible to every app on the device and syncs "+
+			"across devices via Universal Clipboard over iCloud. Never place credential or key material "+
+			"in the pasteboard; if unavoidable, set an expirationDate and localOnly:true. (CWE-311)",
+	).WithCWE("311"))
+
+	security.Default.RegisterRule(swiftBiometricPasscodeFallbackRule())
+
+	security.Default.RegisterRule(twoReRule(
+		"swift.appstorage_sensitive", "Sensitive Data in @AppStorage (UserDefaults)",
+		"data_exposure", security.SevHigh, swiftLangs,
+		reSwiftAppStorage, reSwiftSensitiveKey,
+		"@AppStorage stores values in UserDefaults — an unencrypted plist file included in "+
+			"iCloud and iTunes backups by default. Using it with a sensitive key (password, token, "+
+			"secret) persists that value in plaintext. Store credentials in the iOS Keychain with "+
+			"kSecAttrAccessibleAfterFirstUnlock instead. (CWE-311)",
+	).WithCWE("311"))
+
+	security.Default.RegisterRule(swiftRealmNoEncryptionRule())
+
+	security.Default.RegisterRule(twoReRule(
+		"swift.notification_sensitive_content", "Sensitive Data in Push Notification Content",
+		"data_exposure", security.SevMedium, swiftLangs,
+		reSwiftNotifContent, reSwiftNotifSensKey,
+		"UNMutableNotificationContent is configured in a context that references a sensitive value "+
+			"(OTP, PIN, CVV, SSN, verification code). Notification titles and bodies appear on the "+
+			"lock screen and in Notification Center, visible to bystanders. Keep notification payloads "+
+			"generic and load sensitive detail only after the user authenticates. (CWE-312)",
+	).WithCWE("312"))
+
+	security.Default.RegisterRule(twoReRule(
+		"swift.device_token_logged", "Push Device Token Written to Log",
+		"data_exposure", security.SevLow, swiftLangs,
+		reSwiftDeviceTokenLog, reSwiftPrintLog,
+		"A push notification device token is passed to print() / NSLog(). Device tokens are "+
+			"persistent device identifiers; leaking them in logs (stored on-device, in crash "+
+			"reporters, and sometimes forwarded to external log aggregators) enables tracking "+
+			"and targeted push abuse. Remove token logging before shipping. (CWE-532)",
+	).WithCWE("532"))
+
+	security.Default.RegisterRule(reRule(
+		"swift.method_swizzling", "Runtime Method Swizzling",
+		"binary_protections", security.SevMedium, swiftLangs,
+		reSwiftSwizzle,
+		"method_exchangeImplementations modifies the Objective-C runtime dispatch table at runtime. "+
+			"In production code this can silently alter system or third-party behaviour, making the "+
+			"app unpredictable and easier for an attacker with a jailbroken device to hook or bypass "+
+			"security checks. Restrict swizzling to test and debug builds with #if DEBUG guards. (CWE-913)",
+	).WithCWE("913"))
+
+	security.Default.RegisterRule(swiftTLSMinVersionRule())
 }
 
 // swiftSSRFRule fires when a file creates a URL from string interpolation and
@@ -370,6 +458,105 @@ func swiftSensitiveUserDefaultsRule() security.Rule {
 				}
 				stripped := security.StripStringsAndComments(line)
 				if reSwiftUserDefaults.MatchString(stripped) && reSwiftSensitiveKey.MatchString(stripped) {
+					out = append(out, security.NewFinding(filePath, i, lines))
+				}
+			}
+			return out
+		},
+	}
+}
+
+// swiftBiometricPasscodeFallbackRule fires when a file uses .deviceOwnerAuthentication
+// (passcode fallback allowed) without also using .deviceOwnerAuthenticationWithBiometrics.
+func swiftBiometricPasscodeFallbackRule() security.Rule {
+	return security.Rule{
+		ID:        "swift.biometric_passcode_fallback",
+		Name:      "Biometric Auth Allows Passcode Fallback",
+		Severity:  security.SevMedium,
+		Category:  "authentication",
+		CWE:       "287",
+		Languages: swiftLangs,
+		Description: "LAContext evaluatePolicy uses .deviceOwnerAuthentication which accepts a " +
+			"device passcode as fallback, allowing bypass of Face ID / Touch ID. " +
+			"Use .deviceOwnerAuthenticationWithBiometrics and handle LAError.biometryNotAvailable " +
+			"to enforce biometric-only authentication. (CWE-287)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			authLine := -1
+			hasBioOnly := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reSwiftLADeviceAuth.MatchString(line) && authLine == -1 {
+					authLine = i
+				}
+				if reSwiftLABioOnly.MatchString(line) {
+					hasBioOnly = true
+				}
+			}
+			if authLine >= 0 && !hasBioOnly {
+				return []security.Finding{security.NewFinding(filePath, authLine, lines)}
+			}
+			return nil
+		},
+	}
+}
+
+// swiftRealmNoEncryptionRule fires when a file opens or configures a Realm
+// database without setting encryptionKey.
+func swiftRealmNoEncryptionRule() security.Rule {
+	return security.Rule{
+		ID:        "swift.realm_no_encryption",
+		Name:      "Realm Database Without Encryption",
+		Severity:  security.SevHigh,
+		Category:  "insecure_data_storage",
+		CWE:       "311",
+		Languages: swiftLangs,
+		Description: "A Realm database is opened or configured without an encryptionKey. " +
+			"Unencrypted Realm files are readable by anyone with physical device access or " +
+			"via an unencrypted iTunes / iCloud backup. Set Realm.Configuration(encryptionKey:) " +
+			"with a 64-byte key stored securely in the Keychain. (CWE-311)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			realmLine := -1
+			hasEncKey := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reSwiftRealmInit.MatchString(line) && realmLine == -1 {
+					realmLine = i
+				}
+				if reSwiftRealmEncKey.MatchString(line) {
+					hasEncKey = true
+				}
+			}
+			if realmLine >= 0 && !hasEncKey {
+				return []security.Finding{security.NewFinding(filePath, realmLine, lines)}
+			}
+			return nil
+		},
+	}
+}
+
+// swiftTLSMinVersionRule fires when tlsMinimumSupportedProtocolVersion is set to TLS 1.0 or 1.1.
+func swiftTLSMinVersionRule() security.Rule {
+	return security.Rule{
+		ID:        "swift.tls_minimum_version",
+		Name:      "TLS Minimum Version Below 1.2",
+		Severity:  security.SevHigh,
+		Category:  "network_security",
+		CWE:       "319",
+		Languages: swiftLangs,
+		Description: "URLSessionConfiguration.tlsMinimumSupportedProtocolVersion is set to " +
+			"TLSv10 or TLSv11. Both are deprecated (RFC 8996) and vulnerable to BEAST / POODLE. " +
+			"Set the minimum to .TLSv12 or .TLSv13. (CWE-319)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			var out []security.Finding
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reSwiftTLSMin.MatchString(line) && reSwiftTLSUnsafe.MatchString(line) {
 					out = append(out, security.NewFinding(filePath, i, lines))
 				}
 			}

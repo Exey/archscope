@@ -62,7 +62,15 @@ func Render(res *result.AnalysisResult) string {
 	b.WriteString(`<span class="as-brand">🏛️🔭 ArchScope </span>`)
 	fmt.Fprintf(&b, `<h1>%s</h1>`, esc(res.ProjectName))
 	b.WriteString(`</div>`)
-	b.WriteString(`<button id="as-theme-toggle" class="as-toggle">☀ Light</button>`)
+	b.WriteString(`<div class="as-head__actions">`)
+	b.WriteString(`<div class="as-theme-seg">` +
+		`<button id="as-theme-dark" class="as-seg-btn as-seg-btn--active">🌙</button>` +
+		`<button id="as-theme-light" class="as-seg-btn">☀</button>` +
+		`</div>`)
+	fn := sanitizeFilename(res.ProjectName)
+	fmt.Fprintf(&b, `<button id="as-save-html" class="as-toggle as-save-btn" data-filename="archscope-%s.html">HTML ↓</button>`, esc(fn))
+	fmt.Fprintf(&b, `<button id="as-save-md" class="as-toggle as-save-btn" data-filename="archscope-%s.md">MD ↓</button>`, esc(fn))
+	b.WriteString(`</div>`)
 	b.WriteString(`</div>`)
 
 	// Source line
@@ -89,7 +97,7 @@ func Render(res *result.AnalysisResult) string {
 	// VS Code path editor (global, shown once before the platform tabs)
 	b.WriteString(renderVSCodePathCard(res.RootPath))
 
-	// Contributions calendar — one row per platform, 52-week heat map
+	// Contribution calendar — one row per platform, 52-week heat map
 	b.WriteString(renderContributionsCard(res))
 
 	// Platform tabs (Git Analysis + Modules & Microservices are per-platform inside)
@@ -103,6 +111,12 @@ func Render(res *result.AnalysisResult) string {
 	b.WriteString(report.JS)
 	b.WriteString(`</script></body></html>`)
 	return b.String()
+}
+
+func sanitizeFilename(s string) string {
+	r := strings.NewReplacer("/", "-", "\\", "-", ":", "-", "*", "-",
+		"?", "-", "\"", "-", "<", "-", ">", "-", "|", "-", " ", "_")
+	return r.Replace(s)
 }
 
 func projectTypeSuffix(langs string) string {

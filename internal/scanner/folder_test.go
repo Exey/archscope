@@ -36,10 +36,10 @@ func TestTabLabel_FolderAsTab(t *testing.T) {
 	pg := &PlatformGroup{
 		Platform:         langspec.PlatformGo + ":pharmen",
 		LanguagePlatform: langspec.PlatformGo,
-		Label:            "pharmen Go",
+		Label:            "pharmen",
 	}
-	if got := pg.TabLabel(); got != "pharmen Go" {
-		t.Errorf("want 'pharmen Go', got %q", got)
+	if got := pg.TabLabel(); got != "pharmen" {
+		t.Errorf("want 'pharmen', got %q", got)
 	}
 }
 

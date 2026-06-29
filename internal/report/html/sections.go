@@ -14,6 +14,8 @@ import (
 	"github.com/exey/archscope/internal/git"
 	"github.com/exey/archscope/internal/langspec"
 	"github.com/exey/archscope/internal/modules"
+	"github.com/exey/archscope/internal/modules/arch"
+	"github.com/exey/archscope/internal/modules/dddmodel"
 	"github.com/exey/archscope/internal/modules/speccoverage"
 	"github.com/exey/archscope/internal/modules/traffic"
 	"github.com/exey/archscope/internal/parser"
@@ -188,11 +190,12 @@ var techImportMap = []struct{ needle, label, cat string }{
 var langLabels = map[string]string{
 	"swift": "Swift", "objc": "Objective-C",
 	"kotlin": "Kotlin", "java": "Java",
-	"python": "Python",
+	"python":     "Python",
 	"typescript": "TypeScript / JS", "javascript": "JavaScript",
-	"go": "Go",
+	"go":   "Go",
 	"rust": "Rust",
 }
+
 // renderContributionsCard renders a GitHub-style contribution calendar.
 // Shows ~15 months of history (65 past weeks) plus enough future weeks to complete
 // the next calendar month. One row per git repo, sorted most-active first.
@@ -206,15 +209,15 @@ func renderContributionsCard(res *result.AnalysisResult) string {
 		"kt": "Kt", "kts": "Kt",
 		"py": "Py", "pyi": "Py",
 		"ts": "TS", "tsx": "TS", "js": "TS", "jsx": "TS", "mjs": "TS", "cjs": "TS",
-		"go":    "Go",
-		"java":  "Ja", "groovy": "Ja",
-		"rs":    "Rs",
-		"rb":    "Rb",
-		"php":   "PHP",
-		"cs":    "C#",
-		"cpp":   "C++", "cc": "C++", "cxx": "C++", "c": "C",
-		"dart":  "Dt",
-		"ex":    "Ex", "exs": "Ex",
+		"go":   "Go",
+		"java": "Ja", "groovy": "Ja",
+		"rs":  "Rs",
+		"rb":  "Rb",
+		"php": "PHP",
+		"cs":  "C#",
+		"cpp": "C++", "cc": "C++", "cxx": "C++", "c": "C",
+		"dart": "Dt",
+		"ex":   "Ex", "exs": "Ex",
 		"scala": "Sc",
 	}
 	abbrOrder := []string{"Sw", "Kt", "Py", "TS", "Go", "Ja", "Rs", "Rb", "PHP", "C#", "C++", "C", "Dt", "Ex", "Sc"}
@@ -405,7 +408,7 @@ func renderContributionsCard(res *result.AnalysisResult) string {
 
 	var b strings.Builder
 	b.WriteString(`<div class="as-card as-contributions">`)
-	b.WriteString(`<div class="as-card__head"><span class="as-card__icon">📅</span> Contributions (git) <span class="as-head-badge">last 14 months</span></div>`)
+	b.WriteString(`<div class="as-card__head"><span class="as-card__icon">📅</span> Contribution Calendar <span class="as-head-badge">last 14 months</span></div>`)
 	b.WriteString(`<div class="as-contributions__wrap">`)
 	b.WriteString(monthRowHTML())
 	b.WriteString(`<div class="as-contributions__grid">`)
@@ -603,15 +606,15 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 				name = "(root)"
 			}
 			badge := ""
-			if multiLang || namePlatCount[a.name] > 1 {
+			if !res.Scan.FolderAsTab && (multiLang || namePlatCount[a.name] > 1) {
 				badge = shortLangBadge(a.plat)
 			}
 			fmt.Fprintf(&b,
 				`<div class="as-pkg as-pkg--link" data-mod="%s" style="cursor:pointer" title="Open in Modules &amp; Microservices">`+
-					`<span class="as-pkg__name">📦 %s</span>`+
-					`<span class="as-pkg__meta">%s<span class="as-pkg__loc">%s loc</span></span>`+
+					`<span class="as-pkg__name">%s📦 %s</span>`+
+					`<span class="as-pkg__meta"><span class="as-pkg__loc">%s loc</span></span>`+
 					`</div>`,
-				esc(anchorID(a.name)), esc(name), badge, fmtNum(a.loc))
+				esc(anchorID(a.name)), badge, esc(name), fmtNum(a.loc))
 		}
 		b.WriteString(`</div>`)
 	}
@@ -1256,6 +1259,39 @@ func renderTabs(res *result.AnalysisResult) string {
 		platCards[panel.Platform] = append(platCards[panel.Platform], panel.Cards...)
 	}
 
+	// Pre-compute per-platform stats shown in card headers: API count and
+	// the dominant architecture signal (DDD score or top client pattern).
+	type platHeaderStat struct {
+		apiTotal  int    // -1 = no traffic data
+		archLabel string // e.g. "78% DDD" or "90% VIPER"
+	}
+	headerStats := map[langspec.Platform]platHeaderStat{}
+	for _, panel := range res.ModulePanels {
+		hs := headerStats[panel.Platform]
+		switch panel.ModuleID {
+		case "traffic":
+			if tr, ok := panel.RawResult.(traffic.Result); ok {
+				n := len(tr.Inbound) + len(tr.Outbound)
+				if n > hs.apiTotal {
+					hs.apiTotal = n
+				}
+			}
+		case "dddmodel":
+			if r, ok := panel.RawResult.(dddmodel.Result); ok && r.HasData() && hs.archLabel == "" {
+				hs.archLabel = fmt.Sprintf("%d%% DDD", r.DDDScore)
+			}
+		case "architecture":
+			if r, ok := panel.RawResult.(arch.Result); ok && r.HasDetection() && hs.archLabel == "" {
+				if r.Mode == "client" && len(r.Patterns) > 0 {
+					hs.archLabel = fmt.Sprintf("%d%% %s", int(r.Patterns[0].Confidence*100+0.5), r.Patterns[0].Name)
+				}
+			}
+		}
+		headerStats[panel.Platform] = hs
+	}
+
+	autoOpen := len(platforms) <= 2
+
 	var b strings.Builder
 	b.WriteString(`<div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;margin-bottom:8px">`)
 	b.WriteString(`<span class="as-sub">Platforms</span>`)
@@ -1270,8 +1306,13 @@ func renderTabs(res *result.AnalysisResult) string {
 		}
 		platLOC := loc[pg.Platform]
 		abbr := platAbbr(lp)
+		hs := headerStats[pg.Platform]
 
-		fmt.Fprintf(&b, `<div class="as-plat-card" data-platcard="%d">`, i)
+		openCls := ""
+		if autoOpen {
+			openCls = " as-plat-card--open"
+		}
+		fmt.Fprintf(&b, `<div class="as-plat-card%s" data-platcard="%d">`, openCls, i)
 
 		// ── Card header (clickable summary row) ────────────────────────────
 		b.WriteString(`<div class="as-plat-card__head">`)
@@ -1280,6 +1321,12 @@ func renderTabs(res *result.AnalysisResult) string {
 		fmt.Fprintf(&b, `<span class="as-plat-card__name">%s</span>`, esc(pg.TabLabel()))
 		fmt.Fprintf(&b, `<span class="as-plat-card__loc">%s loc</span>`, fmtLOC(platLOC))
 		fmt.Fprintf(&b, `<span class="as-plat-card__files">%d files</span>`, pg.FileCount)
+		if hs.apiTotal > 0 {
+			fmt.Fprintf(&b, `<span class="as-plat-card__stat">%d APIs</span>`, hs.apiTotal)
+		}
+		if hs.archLabel != "" {
+			fmt.Fprintf(&b, `<span class="as-plat-card__stat">%s</span>`, esc(hs.archLabel))
+		}
 		b.WriteString(`</div>`) // .as-plat-card__summary
 		b.WriteString(`<span class="as-plat-card__chevron">›</span>`)
 		b.WriteString(`</div>`) // .as-plat-card__head
