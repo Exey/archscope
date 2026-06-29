@@ -19,7 +19,7 @@ go run ./cmd/archscope ~/code --open
 
 1. **Summary bar** — lines of code, source files, declarations, modules, **Danger rate** (0–100% scaled from the 1000-point index), and platform count. One tab per detected language.
 
-   ![ArchScope](https://exey.github.io/ArchScopeDocs/as_summary.svg)
+![ArchScope](https://exey.github.io/ArchScopeDocs/as_summary.svg)
 
 2. **🧰 Tech Stack & Modules** — repo-wide tag cloud: languages present + frameworks auto-detected from imports (SwiftUI, Combine, React, Next.js, Django, FastAPI, gRPC, GORM, …) and from config files (docker-compose, go.mod, Makefile). Below it: a package grid sized by LOC with per-language badges. DevOps tools (Docker, Kubernetes, GitHub Actions, etc.) appear when detected.
 
