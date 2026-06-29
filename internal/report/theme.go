@@ -23,6 +23,8 @@ const CSS = `
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   --radius:10px; --radius-sm:7px;
+  --contrib-0:#2d333b; --contrib-1:#0e4429; --contrib-2:#006d32; --contrib-3:#26a641; --contrib-4:#39d353;
+  --contrib-sep:rgba(255,255,255,.10);
 }
 [data-theme="light"]{
   --bg:#f4f6fa; --bg-elev:#ffffff; --bg-elev-2:#f7f9fc; --bg-inset:#eef1f6;
@@ -32,6 +34,8 @@ const CSS = `
   --good:#1a7f37; --warn:#9a6700; --bad:#bc4c00; --crit:#cf222e;
   --good-bg:rgba(26,127,55,.10); --warn-bg:rgba(154,103,0,.10);
   --bad-bg:rgba(188,76,0,.10); --crit-bg:rgba(207,34,46,.10);
+  --contrib-0:#e8ecf0; --contrib-1:#9be9a8; --contrib-2:#40c463; --contrib-3:#30a14e; --contrib-4:#216e39;
+  --contrib-sep:rgba(0,0,0,.15);
 }
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
@@ -47,17 +51,25 @@ h1,h2,h3,h4,h5{margin:0; font-weight:650; letter-spacing:-.01em}
 code,.mono{font-family:var(--mono)}
 
 /* Header */
-.as-head{display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:8px}
+.as-head{display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:8px; flex-wrap:wrap}
 .as-head__title{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap}
 .as-head__title h1{font-size:21px}
 .as-brand{color:var(--accent); font-family:var(--mono); font-size:13px; letter-spacing:.02em}
 .as-head__meta{color:var(--text-faint); font-size:12.5px; font-family:var(--mono)}
+.as-head__actions{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
 .as-toggle{
   border:1px solid var(--border-strong); background:var(--bg-elev); color:var(--text);
   border-radius:999px; padding:7px 12px; cursor:pointer; font-size:13px; line-height:1;
 }
 .as-toggle:hover{border-color:var(--accent); color:var(--accent)}
+.as-toggle--active{border-color:var(--accent); color:var(--accent); background:var(--accent-dim)}
 .as-sourceline{color:var(--text-faint); font-family:var(--mono); font-size:12px; margin:2px 0 22px}
+/* MD budget buttons in header */
+.as-md-budgets{display:flex; align-items:center; gap:4px}
+.as-md-bud{padding:4px 10px; border-radius:5px; border:1px solid var(--border); background:var(--bg-card);
+  color:var(--text-dim); font-size:12px; font-weight:600; cursor:pointer; font-family:var(--mono)}
+.as-md-bud--active{background:var(--accent-dim); color:var(--accent); border-color:var(--accent)}
+.as-md-bud:hover{color:var(--accent)}
 
 /* Cards */
 .as-cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:18px 0}
@@ -437,6 +449,65 @@ a.as-chip:hover{opacity:.8}
   font-family:var(--mono);font-size:11.5px;color:var(--text-dim);white-space:pre-wrap;word-break:break-word;
   max-height:420px;overflow-y:auto;line-height:1.55;margin:0}
 
+/* Contributions calendar */
+.as-contributions{margin-bottom:18px}
+.as-card__head{font-size:13px;font-weight:600;color:var(--text-dim);margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.as-card__icon{font-size:14px}
+.as-head-badge{font-size:10px;font-family:var(--mono);color:var(--text-faint);background:var(--bg-inset);
+  border:1px solid var(--border);border-radius:4px;padding:1px 6px;margin-left:4px}
+/* Month row: gap:2px makes label k left-edge align with cell[cumWeeks] left-edge */
+.as-contributions__month-row{display:flex;align-items:center;gap:2px;margin:2px 0}
+.as-contributions__mon-pad{width:186px;min-width:186px;flex-shrink:0}
+.as-contributions__mon{font-family:var(--mono);font-size:9px;color:var(--text-faint);
+  flex-shrink:0;white-space:nowrap;display:inline-block;text-align:left}
+/* Wrap: position:relative so absolute lines span both month rows and the grid */
+.as-contributions__wrap{position:relative}
+.as-contributions__grid{display:flex;flex-direction:column;gap:4px;margin:2px 0}
+.as-contributions__row{display:flex;align-items:center;gap:8px}
+.as-contributions__abbr{font-family:var(--mono);font-size:10px;font-weight:700;width:80px;min-width:80px;
+  color:var(--accent);flex-shrink:0;white-space:nowrap;overflow:hidden;cursor:default;text-overflow:ellipsis}
+.as-contributions__name{font-size:11px;width:90px;flex-shrink:0;color:var(--text-dim);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.as-contributions__weeks{display:flex;gap:2px}
+.as-contributions__cell{display:inline-block;width:11px;height:11px;border-radius:2px;
+  background:var(--contrib-0);flex-shrink:0;cursor:default;transition:opacity .1s}
+.as-contributions__cell:hover{opacity:.75}
+.as-contributions__cell[data-level="1"]{background:var(--contrib-1)}
+.as-contributions__cell[data-level="2"]{background:var(--contrib-2)}
+.as-contributions__cell[data-level="3"]{background:var(--contrib-3)}
+.as-contributions__cell[data-level="4"]{background:var(--contrib-4)}
+/* Anomaly cell: exclamation mark overlay; color scale treats it as level-4 */
+.as-contributions__cell[data-anomaly]{position:relative;cursor:help}
+.as-contributions__cell[data-anomaly]::after{content:"!";position:absolute;inset:0;
+  display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:900;
+  color:rgba(255,255,255,.9);pointer-events:none}
+[data-theme="light"] .as-contributions__cell[data-anomaly]::after{color:rgba(0,0,0,.65)}
+/* Continuous vertical line at month boundary, spans full grid height */
+.as-contrib-line{position:absolute;top:0;bottom:0;width:1px;
+  background:var(--contrib-sep);pointer-events:none;z-index:1}
+/* Custom floating tooltip for contribution cells */
+.as-contrib-tip{display:none;position:fixed;background:#1e2a3a;color:#e6edf6;
+  padding:4px 10px;border-radius:5px;font-size:11px;font-family:var(--mono);
+  pointer-events:none;z-index:9999;white-space:nowrap;border:1px solid #324056;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+
+/* Platform accordion cards */
+.as-plat-cards{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.as-plat-card{background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;transition:border-color .15s}
+.as-plat-card--open{border-color:var(--accent-dim)}
+.as-plat-card__head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;cursor:pointer;user-select:none;transition:background .12s}
+.as-plat-card__head:hover{background:var(--bg-elev-2)}
+.as-plat-card__summary{display:flex;align-items:center;gap:14px;flex-wrap:wrap;min-width:0}
+.as-plat-card__abbr{font-family:var(--mono);font-size:13px;font-weight:700;padding:2px 8px;border-radius:5px;flex-shrink:0}
+.as-plat-card__name{font-weight:600;font-size:14px;white-space:nowrap}
+.as-plat-card__loc{font-family:var(--mono);font-size:12px;color:var(--text-dim);background:var(--bg-inset);padding:2px 8px;border-radius:4px;white-space:nowrap}
+.as-plat-card__files{font-size:12px;color:var(--text-faint);white-space:nowrap}
+.as-plat-card__stat{font-size:12px;color:var(--text-dim);font-weight:500;white-space:nowrap}
+.as-plat-card__actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.as-plat-card__chevron{color:var(--text-faint);font-size:20px;font-weight:300;transition:transform .2s;display:inline-block;line-height:1;margin-left:2px}
+.as-plat-card--open .as-plat-card__chevron{transform:rotate(90deg)}
+.as-plat-card__body{display:none;padding:4px 16px 16px;border-top:1px solid var(--border)}
+.as-plat-card--open .as-plat-card__body{display:block}
+
 `
 
 // JS toggles the color theme (persisted only in-memory per session — no
@@ -453,30 +524,33 @@ const JS = `
       else{root.setAttribute('data-theme','light');btn.textContent='🌙 Dark';}
     });
   }
+  // Security platform card → open accordion + scroll to danger section
   document.addEventListener('click',function(e){
     var card=e.target.closest('.as-sec-plat-card[data-tab]');
     if(!card)return;
     var idx=card.getAttribute('data-tab');
-    var radio=document.getElementById('t'+idx);
-    if(radio)radio.checked=true;
-    setTimeout(function(){
-      var panel=document.getElementById('p'+idx);
-      var sec=panel&&panel.querySelector('.as-danger-section');
-      if(sec)sec.scrollIntoView({behavior:'smooth',block:'start'});
-    },50);
+    var platCard=document.querySelector('.as-plat-card[data-platcard="'+idx+'"]');
+    if(platCard){
+      document.querySelectorAll('.as-plat-card--open').forEach(function(c){c.classList.remove('as-plat-card--open');});
+      platCard.classList.add('as-plat-card--open');
+      setTimeout(function(){
+        var sec=platCard.querySelector('.as-danger-section');
+        if(sec)sec.scrollIntoView({behavior:'smooth',block:'start'});
+      },50);
+    }
   });
-  // Module card → jump to platform tab + scroll to module
+  // Module chip → open accordion card + scroll to module
   document.addEventListener('click',function(e){
-    var card=e.target.closest('.as-pkg--link[data-mod]');
-    if(!card)return;
-    var modId='mod-'+card.getAttribute('data-mod');
+    var chip=e.target.closest('.as-pkg--link[data-mod]');
+    if(!chip)return;
+    var modId='mod-'+chip.getAttribute('data-mod');
     var el=document.getElementById(modId);
     if(!el)return;
-    var panel=el.closest('[id^="p"]');
-    if(!panel)return;
-    var idx=panel.id.slice(1);
-    var radio=document.getElementById('t'+idx);
-    if(radio)radio.checked=true;
+    var platCard=el.closest('.as-plat-card');
+    if(platCard){
+      document.querySelectorAll('.as-plat-card--open').forEach(function(c){c.classList.remove('as-plat-card--open');});
+      platCard.classList.add('as-plat-card--open');
+    }
     setTimeout(function(){el.scrollIntoView({behavior:'smooth',block:'start'});},50);
   });
   // VS Code path updater
@@ -553,5 +627,92 @@ const JS = `
       setTimeout(function(){saveBtn.classList.remove('as-prompt__save--ok');saveBtn.textContent='Save .md';},1800);
     }
   });
+
+  // ── Accordion: click header to expand/collapse platform card ─────────────
+  document.addEventListener('click',function(e){
+    if(e.target.closest('.as-plat-card__actions'))return;
+    var head=e.target.closest('.as-plat-card__head');
+    if(!head)return;
+    var card=head.closest('.as-plat-card');
+    if(!card)return;
+    var wasOpen=card.classList.contains('as-plat-card--open');
+    document.querySelectorAll('.as-plat-card--open').forEach(function(c){c.classList.remove('as-plat-card--open');});
+    if(!wasOpen)card.classList.add('as-plat-card--open');
+  });
+
+
+  // ── Unfold / Fold All platforms ──────────────────────────────────────────
+  var unfoldBtn=document.getElementById('as-plat-unfold');
+  if(unfoldBtn){
+    var allOpen=false;
+    unfoldBtn.addEventListener('click',function(){
+      allOpen=!allOpen;
+      document.querySelectorAll('.as-plat-card').forEach(function(c){
+        c.classList.toggle('as-plat-card--open',allOpen);
+      });
+      unfoldBtn.textContent=allOpen?'Fold All':'Unfold All';
+    });
+  }
+
+  // ── Contributions tooltip ─────────────────────────────────────────────────
+  var ctip=document.createElement('div');
+  ctip.className='as-contrib-tip';
+  document.body.appendChild(ctip);
+  document.addEventListener('mouseover',function(e){
+    var cell=e.target.closest('.as-contributions__cell');
+    if(!cell)return;
+    var tip=cell.getAttribute('data-tip');
+    if(!tip)return;
+    ctip.textContent=tip;
+    ctip.style.display='block';
+  });
+  document.addEventListener('mousemove',function(e){
+    if(ctip.style.display==='block'){
+      ctip.style.left=(e.clientX+14)+'px';
+      ctip.style.top=(e.clientY-34)+'px';
+    }
+  });
+  document.addEventListener('mouseout',function(e){
+    if(!e.target.closest('.as-contributions__cell'))ctip.style.display='none';
+  });
+
+  // ── VS Code ↔ Git link toggle ──────────────────────────────────────────────
+  var linkToggle=document.getElementById('as-link-toggle');
+  if(linkToggle){
+    var remoteURL=(document.body.getAttribute('data-remote')||'').replace(/\/+$/,'');
+    var rootPath=(document.body.getAttribute('data-root')||'').replace(/\/+$/,'');
+    var branch=document.body.getAttribute('data-branch')||'main';
+    var gitMode=false;
+    var vsPrefix='vscode://file'+rootPath;
+    var vsPathRow=document.getElementById('as-vs-path-row');
+    var vsGitRow=document.getElementById('as-vs-git-row');
+    var vsGitUrl=document.getElementById('as-vs-git-url');
+
+    linkToggle.addEventListener('click',function(){
+      gitMode=!gitMode;
+      linkToggle.textContent=gitMode?'🔗 Git':'🔗 VS Code';
+      linkToggle.classList.toggle('as-toggle--active',gitMode);
+      // Swap path input / git URL display in the card
+      if(vsPathRow)vsPathRow.style.display=gitMode?'none':'flex';
+      if(vsGitRow)vsGitRow.style.display=gitMode?'block':'none';
+      if(vsGitUrl&&remoteURL){vsGitUrl.textContent=remoteURL;vsGitUrl.href=remoteURL;}
+      // Rewrite all vscode links
+      var links=document.querySelectorAll('a[href^="vscode://file"], a[data-vsurl]');
+      links.forEach(function(a){
+        if(!a.dataset.vsurl){a.dataset.vsurl=a.getAttribute('href');}
+        if(gitMode){
+          var vsUrl=a.dataset.vsurl;
+          if(vsUrl&&vsUrl.startsWith(vsPrefix)&&remoteURL){
+            var rel=vsUrl.slice(vsPrefix.length).split(':')[0];
+            a.setAttribute('href',remoteURL+'/blob/'+branch+rel);
+            a.setAttribute('target','_blank');
+          }
+        } else {
+          a.setAttribute('href',a.dataset.vsurl);
+          a.removeAttribute('target');
+        }
+      });
+    });
+  }
 })();
 `

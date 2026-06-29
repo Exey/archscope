@@ -258,13 +258,16 @@ func buildGitBundle(repos []string, cfg config.Config) GitBundle {
 		limit = 1000
 	}
 	return GitBundle{
-		Available: true,
-		Authors:   git.GetAuthorStatsMultiRepo(repos, limit),
-		Churn:     git.GetChurnStats(repos, limit, hotspotCount(cfg)),
-		Tags:      git.GetTagStats(repos),
-		Commits:   git.GetCommitMessageStats(repos, limit),
-		Branch:    git.GetBranchStats(repos, 90),
-		Repos:     repos,
+		Available:   true,
+		Authors:     git.GetAuthorStatsMultiRepo(repos, limit),
+		Churn:       git.GetChurnStats(repos, limit, hotspotCount(cfg)),
+		Tags:        git.GetTagStats(repos),
+		Commits:     git.GetCommitMessageStats(repos, limit),
+		Branch:      git.GetBranchStats(repos, 90),
+		Repos:       repos,
+		WeeklyByExt:  git.GetWeeklyActivity(repos),
+		WeeklyByRepo: git.GetWeeklyActivityPerRepo(repos),
+		RemoteURL:   git.GetRemoteURL(repos),
 	}
 }
 

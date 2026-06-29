@@ -872,3 +872,97 @@ func plural(n int, one, many string) string {
 }
 
 func pct(f float64) string { return strconv.Itoa(int(f*100+0.5)) + "%" }
+
+// NCalWeeks is the maximum calendar width exported for use by result and report packages.
+// Large enough to hold 65 past weeks + worst-case ~11 future weeks.
+const NCalWeeks = 76
+
+// nCalWeeks is the internal alias.
+const nCalWeeks = NCalWeeks
+
+// calPastWeeks is how many weeks of history the calendar fetches from git (~14 months).
+const calPastWeeks = 61
+
+// GetWeeklyActivity aggregates GetWeeklyActivityPerRepo across all repos.
+func GetWeeklyActivity(repos []string) map[string][nCalWeeks]int {
+	perRepo := GetWeeklyActivityPerRepo(repos)
+	combined := map[string][nCalWeeks]int{}
+	for _, extMap := range perRepo {
+		for ext, arr := range extMap {
+			cur := combined[ext]
+			for i := 0; i < nCalWeeks; i++ {
+				cur[i] += arr[i]
+			}
+			combined[ext] = cur
+		}
+	}
+	return combined
+}
+
+// GetWeeklyActivityPerRepo returns calPastWeeks weeks of commit counts per repo,
+// keyed by repo root → extension → [nCalWeeks]int (index 0 = oldest, calPastWeeks-1 = now).
+// Slots calPastWeeks..nCalWeeks-1 are always zero (future weeks, no commits yet).
+func GetWeeklyActivityPerRepo(repos []string) map[string]map[string][nCalWeeks]int {
+	now := time.Now().Unix()
+	startOf := now - calPastWeeks*7*24*3600
+	result := map[string]map[string][nCalWeeks]int{}
+	for _, repo := range repos {
+		raw, ok := runGit(repo, "log", "--no-merges", "--name-only",
+			"--format=__C__%at",
+			"--after="+strconv.FormatInt(startOf, 10))
+		if !ok {
+			continue
+		}
+		repoData := map[string][nCalWeeks]int{}
+		var commitTs int64
+		for _, line := range strings.Split(raw, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "__C__") {
+				ts, _ := strconv.ParseInt(strings.TrimPrefix(line, "__C__"), 10, 64)
+				commitTs = ts
+				continue
+			}
+			if commitTs == 0 || line == "" {
+				continue
+			}
+			weekIdx := int((commitTs - startOf) / (7 * 24 * 3600))
+			if weekIdx < 0 {
+				weekIdx = 0
+			}
+			if weekIdx >= nCalWeeks {
+				weekIdx = nCalWeeks - 1
+			}
+			ext := strings.ToLower(filepath.Ext(line))
+			if ext == "" {
+				continue
+			}
+			ext = strings.TrimPrefix(ext, ".")
+			arr := repoData[ext]
+			arr[weekIdx]++
+			repoData[ext] = arr
+		}
+		result[repo] = repoData // always include repo, even if empty
+	}
+	return result
+}
+
+// GetRemoteURL returns the fetch URL of the "origin" remote for the first
+// usable repo, or "" when git is unavailable or no remote is configured.
+func GetRemoteURL(repos []string) string {
+	for _, repo := range repos {
+		if url, ok := runGit(repo, "remote", "get-url", "origin"); ok {
+			url = strings.TrimSpace(url)
+			// normalise SSH to HTTPS: git@github.com:user/repo.git → https://github.com/user/repo
+			if strings.HasPrefix(url, "git@") {
+				url = strings.TrimPrefix(url, "git@")
+				url = strings.Replace(url, ":", "/", 1)
+				url = "https://" + url
+			}
+			url = strings.TrimSuffix(url, ".git")
+			if url != "" {
+				return url
+			}
+		}
+	}
+	return ""
+}

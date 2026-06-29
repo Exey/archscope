@@ -174,8 +174,150 @@ func ExtractGoTraffic(filePath string, lines []string, imports []string) (inboun
 			!strings.HasPrefix(ln, "//") {
 			addOut(Entry{URI: s, Port: portFromURL(s), Protocol: "WebSocket", Line: no})
 		}
+
+		// ── Inbound: TCP listener ─────────────────────────────────────────────
+		if sfx, ok := substringAfter(ln, "net.Listen("); ok {
+			proto := firstStrLit(sfx)
+			addr := nthStrLit(sfx, 2)
+			if strings.HasPrefix(proto, "tcp") {
+				port := portFromAddr(addr)
+				addIn(Entry{URI: "TCP Server", Port: port, Protocol: "TCP", Line: no})
+			}
+		}
+		if sfx, ok := substringAfter(ln, "net.ListenTCP("); ok {
+			addr := firstStrLit(sfx)
+			addIn(Entry{URI: "TCP Server", Port: portFromAddr(addr), Protocol: "TCP", Line: no})
+		}
+
+		// ── Inbound: Telegram bot long-polling ───────────────────────────────
+		if strings.Contains(ln, "tgbotapi.NewBotAPI(") || strings.Contains(ln, "telebot.NewBot(") ||
+			strings.Contains(ln, "bot.StartPolling(") || strings.Contains(ln, "bot.Start(") &&
+				containsAny(imports, "tgbotapi", "telebot") {
+			addIn(Entry{URI: "Telegram API", Protocol: "Long Polling (HTTPS)", DataFmt: "JSON", Line: no})
+		}
+
+		// ── Outbound: TCP dial ────────────────────────────────────────────────
+		if sfx, ok := substringAfter(ln, "net.Dial("); ok {
+			proto := firstStrLit(sfx)
+			addr := nthStrLit(sfx, 2)
+			if strings.HasPrefix(proto, "tcp") && addr != "" {
+				addOut(Entry{URI: addr, Port: portFromAddr(addr), Protocol: "TCP", Line: no})
+			}
+		}
+		if sfx, ok := substringAfter(ln, "net.DialTCP(", "net.DialContext("); ok {
+			addr := nthStrLit(sfx, 2)
+			if addr == "" {
+				addr = firstStrLit(sfx)
+			}
+			if addr != "" && !strings.HasPrefix(addr, "/") {
+				addOut(Entry{URI: addr, Port: portFromAddr(addr), Protocol: "TCP", Line: no})
+			}
+		}
+
+		// ── Outbound: PostgreSQL ──────────────────────────────────────────────
+		if sfx, ok := substringAfter(ln, `sql.Open(`); ok {
+			driver := firstStrLit(sfx)
+			if driver == "postgres" || driver == "pgx" || driver == "pgx/v4" || driver == "pgx/v5" {
+				dsn := nthStrLit(sfx, 2)
+				uri := hostFromDSN(dsn, "PostgreSQL")
+				addOut(Entry{URI: uri, Port: portFromDSN(dsn, "5432"), Protocol: "PostgreSQL", Line: no})
+			} else if driver == "mysql" {
+				dsn := nthStrLit(sfx, 2)
+				uri := hostFromDSN(dsn, "MySQL")
+				addOut(Entry{URI: uri, Port: portFromDSN(dsn, "3306"), Protocol: "MySQL", Line: no})
+			}
+		}
+		if sfx, ok := substringAfter(ln, "pgx.Connect(", "pgx.ParseConfig(", "pgxpool.Connect(", "pgxpool.New("); ok {
+			dsn := firstStrLit(sfx)
+			uri := hostFromDSN(dsn, "PostgreSQL")
+			addOut(Entry{URI: uri, Port: portFromDSN(dsn, "5432"), Protocol: "PostgreSQL", Line: no})
+		}
+		// GORM postgres.Open("dsn") / mysql.Open("dsn")
+		if sfx, ok := substringAfter(ln, "postgres.Open("); ok {
+			dsn := firstStrLit(sfx)
+			uri := hostFromDSN(dsn, "PostgreSQL")
+			addOut(Entry{URI: uri, Port: portFromDSN(dsn, "5432"), Protocol: "PostgreSQL", Line: no})
+		}
+		if sfx, ok := substringAfter(ln, "mysql.Open("); ok {
+			dsn := firstStrLit(sfx)
+			uri := hostFromDSN(dsn, "MySQL")
+			addOut(Entry{URI: uri, Port: portFromDSN(dsn, "3306"), Protocol: "MySQL", Line: no})
+		}
+		// Raw postgres:// / postgresql:// connection strings anywhere in line
+		if s := firstStrLit(ln); (strings.HasPrefix(s, "postgres://") || strings.HasPrefix(s, "postgresql://")) &&
+			!strings.HasPrefix(ln, "//") {
+			addOut(Entry{URI: hostFromURL(s), Port: portFromURL(s), Protocol: "PostgreSQL", Line: no})
+		}
+
+		// ── Outbound: SMTP ────────────────────────────────────────────────────
+		if sfx, ok := substringAfter(ln, "smtp.Dial(", "smtp.SendMail("); ok {
+			addr := firstStrLit(sfx)
+			addOut(Entry{URI: addr, Port: portFromAddr(addr), Protocol: "SMTP", Line: no})
+		}
+		if sfx, ok := substringAfter(ln, "gomail.NewDialer(", "mail.NewDialer("); ok {
+			host := firstStrLit(sfx)
+			port := nthStrLit(sfx, 2)
+			addr := host
+			if port != "" && allDigits(port) {
+				addr = host + ":" + port
+			}
+			addOut(Entry{URI: addr, Port: portFromAddr(addr), Protocol: "SMTP", Line: no})
+		}
 	}
 	return inbound, outbound
+}
+
+// hostFromDSN extracts host (and port) from a postgres DSN or URL.
+// Returns fallback when the DSN is empty or a variable reference.
+func hostFromDSN(dsn, fallback string) string {
+	if dsn == "" || strings.Contains(dsn, "Getenv") || strings.Contains(dsn, "${") {
+		return fallback
+	}
+	if strings.Contains(dsn, "://") {
+		return hostFromURL(dsn)
+	}
+	// key=value DSN: host=…
+	for _, part := range strings.Fields(dsn) {
+		if strings.HasPrefix(part, "host=") {
+			return strings.TrimPrefix(part, "host=")
+		}
+	}
+	return fallback
+}
+
+func portFromDSN(dsn, defaultPort string) string {
+	if dsn == "" {
+		return defaultPort
+	}
+	if strings.Contains(dsn, "://") {
+		p := portFromURL(dsn)
+		if p != "" {
+			return p
+		}
+		return defaultPort
+	}
+	for _, part := range strings.Fields(dsn) {
+		if strings.HasPrefix(part, "port=") {
+			return strings.TrimPrefix(part, "port=")
+		}
+	}
+	return defaultPort
+}
+
+func hostFromURL(u string) string {
+	// strip scheme
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+	}
+	// strip user:pass@
+	if i := strings.LastIndex(u, "@"); i >= 0 {
+		u = u[i+1:]
+	}
+	// strip /path and ?query
+	if i := strings.IndexAny(u, "/?"); i >= 0 {
+		u = u[:i]
+	}
+	return u
 }
 
 // extractGoRoute detects HTTP route registration patterns (gorilla, gin, echo,

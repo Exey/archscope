@@ -9,9 +9,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/exey/archscope/internal/git"
 	"github.com/exey/archscope/internal/langspec"
+	"github.com/exey/archscope/internal/modules"
 	"github.com/exey/archscope/internal/modules/speccoverage"
 	"github.com/exey/archscope/internal/modules/traffic"
 	"github.com/exey/archscope/internal/parser"
@@ -190,6 +192,267 @@ var langLabels = map[string]string{
 	"typescript": "TypeScript / JS", "javascript": "JavaScript",
 	"go": "Go",
 	"rust": "Rust",
+}
+// renderContributionsCard renders a GitHub-style contribution calendar.
+// Shows ~15 months of history (65 past weeks) plus enough future weeks to complete
+// the next calendar month. One row per git repo, sorted most-active first.
+func renderContributionsCard(res *result.AnalysisResult) string {
+	if !res.Git.Available || len(res.Git.Repos) == 0 {
+		return ""
+	}
+
+	extAbbr := map[string]string{
+		"swift": "Sw", "m": "Sw", "mm": "Sw",
+		"kt": "Kt", "kts": "Kt",
+		"py": "Py", "pyi": "Py",
+		"ts": "TS", "tsx": "TS", "js": "TS", "jsx": "TS", "mjs": "TS", "cjs": "TS",
+		"go":    "Go",
+		"java":  "Ja", "groovy": "Ja",
+		"rs":    "Rs",
+		"rb":    "Rb",
+		"php":   "PHP",
+		"cs":    "C#",
+		"cpp":   "C++", "cc": "C++", "cxx": "C++", "c": "C",
+		"dart":  "Dt",
+		"ex":    "Ex", "exs": "Ex",
+		"scala": "Sc",
+	}
+	abbrOrder := []string{"Sw", "Kt", "Py", "TS", "Go", "Ja", "Rs", "Rb", "PHP", "C#", "C++", "C", "Dt", "Ex", "Sc"}
+
+	const pastWeeks = 61 // ~14 months of history fetched from git
+	const cellPx = 11
+	const gapPx = 2
+	const padPx = 186 // abbr(80)+gap(8)+name(90)+gap(8)
+
+	now := time.Now()
+
+	// Compute future weeks dynamically: extend to the last day of the NEXT calendar
+	// month so that month is always shown completely, never cut off mid-month.
+	nextMonthLastDay := time.Date(now.Year(), now.Month()+2, 0, 0, 0, 0, 0, now.Location())
+	daysToEnd := int(nextMonthLastDay.Sub(now).Hours()/24) + 1
+	futureWeeks := (daysToEnd + 6) / 7
+	if futureWeeks < 1 {
+		futureWeeks = 1
+	}
+	maxFuture := git.NCalWeeks - pastWeeks
+	if futureWeeks > maxFuture {
+		futureWeeks = maxFuture
+	}
+	nWeeks := pastWeeks + futureWeeks
+
+	// Week i date: now + (i - (pastWeeks-1)) * 7 days.
+	// i=0           → oldest (about 15 months ago)
+	// i=pastWeeks-1 → current week
+	// i=nWeeks-1    → last week of next calendar month
+	weekDate := func(i int) time.Time {
+		return now.AddDate(0, 0, (i-(pastWeeks-1))*7)
+	}
+
+	// Build month spans; monthOf[i] tells which month slot week i belongs to.
+	type monthSpan struct {
+		label string
+		weeks int
+	}
+	var months []monthSpan
+	monthOf := make([]int, git.NCalWeeks)
+	for i := 0; i < nWeeks; i++ {
+		label := weekDate(i).Format("Jan'06")
+		if len(months) == 0 || months[len(months)-1].label != label {
+			months = append(months, monthSpan{label: label, weeks: 1})
+		} else {
+			months[len(months)-1].weeks++
+		}
+		monthOf[i] = len(months) - 1
+	}
+
+	// Month label row: gap:2px between labels, each label width = N*13-2 px.
+	monthRowHTML := func() string {
+		var mb strings.Builder
+		mb.WriteString(`<div class="as-contributions__month-row">`)
+		mb.WriteString(`<span class="as-contributions__mon-pad"></span>`)
+		for _, ms := range months {
+			w := ms.weeks*(cellPx+gapPx) - gapPx
+			fmt.Fprintf(&mb, `<span class="as-contributions__mon" style="width:%dpx">%s</span>`, w, ms.label)
+		}
+		mb.WriteString(`</div>`)
+		return mb.String()
+	}
+
+	weeklyByRepo := res.Git.WeeklyByRepo
+	if weeklyByRepo == nil {
+		weeklyByRepo = map[string]map[string][git.NCalWeeks]int{}
+	}
+
+	type repoRow struct {
+		name    string
+		abbrs   string
+		weekly  [git.NCalWeeks]int
+		anomaly [git.NCalWeeks]bool
+		total   int
+	}
+
+	var rows []repoRow
+	for _, repoRoot := range res.Git.Repos {
+		extMap := weeklyByRepo[repoRoot]
+		var weekly [git.NCalWeeks]int
+		seenAbbr := map[string]bool{}
+		total := 0
+		for ext, arr := range extMap {
+			for i := 0; i < nWeeks; i++ {
+				weekly[i] += arr[i]
+				total += arr[i]
+			}
+			if a := extAbbr[ext]; a != "" {
+				seenAbbr[a] = true
+			}
+		}
+
+		// Anomaly detection: Tukey extreme fence (Q3 + 3×IQR).
+		var anomaly [git.NCalWeeks]bool
+		{
+			var vals []int
+			for i := 0; i < nWeeks; i++ {
+				if weekly[i] > 0 {
+					vals = append(vals, weekly[i])
+				}
+			}
+			sort.Ints(vals)
+			if len(vals) >= 4 {
+				q1 := vals[len(vals)/4]
+				q3 := vals[3*len(vals)/4]
+				iqr := q3 - q1
+				if iqr > 0 {
+					thr := q3 + 3*iqr
+					for i := 0; i < nWeeks; i++ {
+						if weekly[i] > thr {
+							anomaly[i] = true
+						}
+					}
+				}
+			}
+		}
+
+		var abbrParts []string
+		for _, a := range abbrOrder {
+			if seenAbbr[a] {
+				abbrParts = append(abbrParts, a)
+			}
+		}
+		for a := range seenAbbr {
+			found := false
+			for _, o := range abbrOrder {
+				if o == a {
+					found = true
+					break
+				}
+			}
+			if !found {
+				abbrParts = append(abbrParts, a)
+			}
+		}
+		abbrStr := strings.Join(abbrParts, " ")
+		if abbrStr == "" {
+			abbrStr = "?"
+		}
+
+		name := filepath.Base(repoRoot)
+		runes := []rune(name)
+		if len(runes) > 20 {
+			name = string(runes[:17]) + "…"
+		}
+
+		rows = append(rows, repoRow{
+			name:    name,
+			abbrs:   abbrStr,
+			weekly:  weekly,
+			anomaly: anomaly,
+			total:   total,
+		})
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+
+	sort.Slice(rows, func(i, j int) bool { return rows[i].total > rows[j].total })
+
+	maxNorm := 1
+	for _, r := range rows {
+		for i := 0; i < nWeeks; i++ {
+			if !r.anomaly[i] && r.weekly[i] > maxNorm {
+				maxNorm = r.weekly[i]
+			}
+		}
+	}
+	level := func(v int, isAnomaly bool) int {
+		if isAnomaly {
+			return 4
+		}
+		if v == 0 {
+			return 0
+		}
+		p := float64(v) / float64(maxNorm)
+		switch {
+		case p < 0.15:
+			return 1
+		case p < 0.40:
+			return 2
+		case p < 0.70:
+			return 3
+		default:
+			return 4
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(`<div class="as-card as-contributions">`)
+	b.WriteString(`<div class="as-card__head"><span class="as-card__icon">📅</span> Contributions (git) <span class="as-head-badge">last 14 months</span></div>`)
+	b.WriteString(`<div class="as-contributions__wrap">`)
+	b.WriteString(monthRowHTML())
+	b.WriteString(`<div class="as-contributions__grid">`)
+	for _, row := range rows {
+		b.WriteString(`<div class="as-contributions__row">`)
+		fmt.Fprintf(&b, `<span class="as-contributions__abbr" title="%s">%s</span>`, esc(row.name), esc(row.abbrs))
+		fmt.Fprintf(&b, `<span class="as-contributions__name">%s</span>`, esc(row.name))
+		b.WriteString(`<div class="as-contributions__weeks">`)
+		for i := 0; i < nWeeks; i++ {
+			lv := level(row.weekly[i], row.anomaly[i])
+			wkStart := weekDate(i)
+			wkEnd := weekDate(i).AddDate(0, 0, 6)
+			cnt := row.weekly[i]
+			dateRange := wkStart.Format("2 Jan") + "–" + wkEnd.Format("2 Jan 2006")
+			tip := fmt.Sprintf("%s · %d commit", dateRange, cnt)
+			if cnt != 1 {
+				tip += "s"
+			}
+			if row.anomaly[i] {
+				tip += " (!)"
+			}
+			anomalyAttr := ""
+			if row.anomaly[i] {
+				anomalyAttr = ` data-anomaly="1"`
+			}
+			fmt.Fprintf(&b, `<span class="as-contributions__cell" data-level="%d" data-tip="%s"%s></span>`,
+				lv, esc(tip), anomalyAttr)
+		}
+		b.WriteString(`</div></div>`)
+	}
+	b.WriteString(`</div>`) // end grid
+	b.WriteString(monthRowHTML())
+
+	// Vertical separator lines at month boundaries, anchored to .as-contributions__wrap.
+	cumWeeks := 0
+	for k, ms := range months {
+		cumWeeks += ms.weeks
+		if k == len(months)-1 {
+			break
+		}
+		lineX := padPx + cumWeeks*(cellPx+gapPx)
+		fmt.Fprintf(&b, `<div class="as-contrib-line" style="left:%dpx"></div>`, lineX)
+	}
+
+	b.WriteString(`</div>`) // end wrap
+	b.WriteString(`</div>`) // end card
+	return b.String()
 }
 
 func renderStackAndModules(res *result.AnalysisResult) string {
@@ -906,15 +1169,55 @@ func secRiskColor(pct int) string {
 	}
 }
 
-// ── Tabs ─────────────────────────────────────────────────────────────────────
+// ── Platform accordion cards ─────────────────────────────────────────────────
 
+// fmtLOC formats a line count as "1.2K", "74K", "1.2M" etc.
+func fmtLOC(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1000:
+		return fmt.Sprintf("%.0fK", float64(n)/1000)
+	default:
+		return strconv.Itoa(n)
+	}
+}
+
+// platAbbr returns a 2-letter abbreviation for a language platform.
+func platAbbr(p langspec.Platform) string {
+	switch p {
+	case langspec.PlatformSwiftObjC:
+		return "Sw"
+	case langspec.PlatformKotlin:
+		return "Kt"
+	case langspec.PlatformPython:
+		return "Py"
+	case langspec.PlatformTSJS:
+		return "TS"
+	case langspec.PlatformGo:
+		return "Go"
+	case langspec.PlatformJava:
+		return "Ja"
+	case langspec.PlatformRust:
+		return "Rs"
+	default:
+		s := string(p)
+		if len(s) >= 2 {
+			return strings.ToUpper(s[:2])
+		}
+		return strings.ToUpper(s)
+	}
+}
+
+// renderTabs renders platforms as a vertical accordion of switchable cards.
+// Each card header shows language, name, LOC, file count, and module summary
+// stats. Clicking a header expands that card and collapses others.
 func renderTabs(res *result.AnalysisResult) string {
 	platforms := res.Scan.PlatformsOrdered()
 	if len(platforms) == 0 {
 		return `<p class="as-empty">No source files matched any registered language.</p>`
 	}
 
-	// Compute per-tab LOC from parsed files.
 	loc := map[langspec.Platform]int{}
 	for _, f := range res.Files {
 		loc[langspec.Platform(f.Platform)] += f.LineCount
@@ -922,8 +1225,6 @@ func renderTabs(res *result.AnalysisResult) string {
 	platforms = append([]*scanner.PlatformGroup(nil), platforms...)
 
 	if res.Scan.FolderAsTab {
-		// Folder-as-tab: group by folder, sort folder groups by total LOC desc,
-		// within each folder sort alphabetically by language label.
 		folderLOC := map[string]int{}
 		for _, pg := range platforms {
 			folderLOC[tabFolder(pg.Platform)] += loc[pg.Platform]
@@ -949,47 +1250,49 @@ func renderTabs(res *result.AnalysisResult) string {
 		})
 	}
 
-	outerClass := "as-tabs"
-	if res.Scan.FolderAsTab {
-		outerClass = "as-tabs as-tabs--folders"
+	// Collect summary cards from module panels for each platform.
+	platCards := map[langspec.Platform][]modules.SummaryCard{}
+	for _, panel := range res.ModulePanels {
+		platCards[panel.Platform] = append(platCards[panel.Platform], panel.Cards...)
 	}
 
 	var b strings.Builder
-	b.WriteString(`<div class="as-sub" style="margin-top:16px;margin-bottom:4px">Platforms</div>`)
-	fmt.Fprintf(&b, `<div class="%s">`, outerClass)
-	// radios
-	for i := range platforms {
-		checked := ""
-		if i == 0 {
-			checked = " checked"
-		}
-		fmt.Fprintf(&b, `<input class="as-tabs__radios" type="radio" name="astab" id="t%d"%s>`, i, checked)
-	}
-	// tab bar
-	b.WriteString(`<div class="as-tabbar">`)
-	prevFolder := ""
-	for i, pg := range platforms {
-		folder := tabFolder(pg.Platform)
-		if res.Scan.FolderAsTab && i > 0 && folder != prevFolder {
-			b.WriteString(`<span class="as-tab-sep"></span>`)
-		}
-		prevFolder = folder
-		if pg.Label != "" {
-			fmt.Fprintf(&b, `<label class="as-tab" for="t%d">%s</label>`, i, esc(pg.TabLabel()))
-		} else {
-			fmt.Fprintf(&b, `<label class="as-tab" for="t%d">%s<span class="as-tab__count">%d</span></label>`,
-				i, esc(pg.TabLabel()), pg.FileCount)
-		}
-	}
+	b.WriteString(`<div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;margin-bottom:8px">`)
+	b.WriteString(`<span class="as-sub">Platforms</span>`)
+	b.WriteString(`<button class="as-toggle" id="as-plat-unfold" style="font-size:12px;padding:4px 12px">Unfold All</button>`)
 	b.WriteString(`</div>`)
-	// panels
-	b.WriteString(`<div class="as-panels">`)
+	b.WriteString(`<div class="as-plat-cards">`)
+
 	for i, pg := range platforms {
-		fmt.Fprintf(&b, `<div class="as-tabpanel" id="p%d">`, i)
+		lp := pg.LanguagePlatform
+		if lp == "" {
+			lp = pg.Platform
+		}
+		platLOC := loc[pg.Platform]
+		abbr := platAbbr(lp)
+
+		fmt.Fprintf(&b, `<div class="as-plat-card" data-platcard="%d">`, i)
+
+		// ── Card header (clickable summary row) ────────────────────────────
+		b.WriteString(`<div class="as-plat-card__head">`)
+		b.WriteString(`<div class="as-plat-card__summary">`)
+		fmt.Fprintf(&b, `<span class="as-plat-card__abbr as-plat-%s">%s</span>`, esc(string(lp)), abbr)
+		fmt.Fprintf(&b, `<span class="as-plat-card__name">%s</span>`, esc(pg.TabLabel()))
+		fmt.Fprintf(&b, `<span class="as-plat-card__loc">%s loc</span>`, fmtLOC(platLOC))
+		fmt.Fprintf(&b, `<span class="as-plat-card__files">%d files</span>`, pg.FileCount)
+		b.WriteString(`</div>`) // .as-plat-card__summary
+		b.WriteString(`<span class="as-plat-card__chevron">›</span>`)
+		b.WriteString(`</div>`) // .as-plat-card__head
+
+		// ── Card body (full platform panel) ───────────────────────────────
+		// id="p{i}" keeps compatibility with existing JS that uses [id^="p"]
+		fmt.Fprintf(&b, `<div class="as-plat-card__body" id="p%d">`, i)
 		b.WriteString(renderPlatformPanel(res, pg))
-		b.WriteString(`</div>`)
+		b.WriteString(`</div>`) // .as-plat-card__body
+		b.WriteString(`</div>`) // .as-plat-card
 	}
-	b.WriteString(`</div></div>`)
+
+	b.WriteString(`</div>`) // .as-plat-cards
 	return b.String()
 }
 
@@ -1084,10 +1387,7 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 		b.WriteString(renderModulePanels(trafficPanels, badge))
 	}
 
-	// 5. 💬 Prompt — AI-ready context card
-	b.WriteString(renderPromptCard(res, pg, files, dddPanels, trafficPanels, specPanels, badge))
-
-	// 6. 💡 Module Insights — Hotspots · Modules · Design Patterns · TODOs · Longest Functions
+	// 5. 💡 Module Insights — Hotspots · Modules · Design Patterns · TODOs · Longest Functions
 	b.WriteString(renderModuleInsights(res, pg, files, designPanels, res.RootPath, badge))
 
 	// 7. 🐙 Git Analysis — per-platform churn + contributors
@@ -1102,769 +1402,6 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 	// Remaining panels
 	b.WriteString(renderModulePanels(otherPanels))
 	return b.String()
-}
-
-// ── Prompt card ───────────────────────────────────────────────────────────────
-
-func renderPromptCard(res *result.AnalysisResult, pg *scanner.PlatformGroup, files []*parser.ParsedFile,
-	dddPanels, trafficPanels, specPanels []result.ModulePanel, badge string) string {
-
-	var b strings.Builder
-	fmt.Fprintf(&b, `<div class="as-section"><div class="as-section__head">%s<span class="ico">💬</span><h3>Prompt</h3></div>`, badge)
-	b.WriteString(`<div class="as-pop"><div class="as-sub" style="margin-bottom:6px">AI-ready context for this platform — paste into any LLM</div>`)
-	b.WriteString(`<div class="as-prompt">`)
-
-	budgets := []struct {
-		label  string
-		tokens int
-	}{{"1K", 1000}, {"10K", 10000}, {"50K", 50000}, {"100K", 100000}, {"200K", 200000}}
-
-	// Tab bar
-	b.WriteString(`<div class="as-prompt__bar">`)
-	for i, bud := range budgets {
-		active := ""
-		if i == 1 {
-			active = ` as-prompt__tab--active`
-		}
-		fmt.Fprintf(&b, `<button class="as-prompt__tab%s" data-prompt-tab="%d">%s</button>`, active, i, bud.label)
-	}
-	b.WriteString(`<button class="as-prompt__copy">Copy</button>`)
-	fmt.Fprintf(&b, `<button class="as-prompt__save" data-filename="prompt-%s.md">Save .md</button>`, esc(pg.TabLabel()))
-	b.WriteString(`</div>`)
-
-	// Tab bodies
-	for i, bud := range budgets {
-		active := ""
-		if i == 1 {
-			active = ` as-prompt__body--active`
-		}
-		text := buildPrompt(bud.tokens, res, pg, files, dddPanels, trafficPanels, specPanels)
-		fmt.Fprintf(&b, `<div class="as-prompt__body%s" data-prompt-body="%d"><pre class="as-prompt__pre">%s</pre></div>`,
-			active, i, esc(text))
-	}
-
-	b.WriteString(`</div></div></div>`)
-	return b.String()
-}
-
-func buildPrompt(budget int, res *result.AnalysisResult, pg *scanner.PlatformGroup, files []*parser.ParsedFile,
-	dddPanels, trafficPanels, specPanels []result.ModulePanel) string {
-
-	var b strings.Builder
-	platform := pg.TabLabel()
-
-	// ── Header ────────────────────────────────────────────────────────────────
-	fmt.Fprintf(&b, "# %s — Architecture Context\n\n", platform)
-	b.WriteString("This document was generated by archscope. Use it as context when asking an AI assistant questions about this codebase.\n\n")
-
-	// ── Platform overview ─────────────────────────────────────────────────────
-	lines, decls := 0, 0
-	for _, f := range files {
-		lines += f.LineCount
-		decls += len(f.Declarations)
-	}
-	b.WriteString("## Overview\n\n")
-	fmt.Fprintf(&b, "- **Platform:** %s\n", platform)
-	fmt.Fprintf(&b, "- **Files:** %d  |  **Lines:** %d  |  **Declarations:** %d\n", len(files), lines, decls)
-	fmt.Fprintf(&b, "- **Modules:** %s\n\n", strings.Join(pg.Modules, ", "))
-
-	// ── Tech Stack ────────────────────────────────────────────────────────────
-	techSet := buildTechSet(res, files)
-	if len(techSet) > 0 {
-		var techs []string
-		for t := range techSet {
-			techs = append(techs, t)
-		}
-		sort.Strings(techs)
-		b.WriteString("## Tech Stack\n\n")
-		fmt.Fprintf(&b, "%s\n\n", strings.Join(techs, ", "))
-	}
-
-	// ── File inventory ────────────────────────────────────────────────────────
-	// Sort by line count descending.
-	sorted := make([]*parser.ParsedFile, len(files))
-	copy(sorted, files)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].LineCount > sorted[j].LineCount })
-
-	fileLimit := 5
-	if budget >= 10000 {
-		fileLimit = 30
-	}
-	if budget >= 50000 {
-		fileLimit = len(sorted)
-	}
-	if fileLimit > len(sorted) {
-		fileLimit = len(sorted)
-	}
-
-	b.WriteString("## Key Files\n\n")
-	kindOrder := []parser.DeclKind{
-		parser.DeclInterface, parser.DeclStruct, parser.DeclClass,
-		parser.DeclEnum, parser.DeclActor, parser.DeclExtension,
-		parser.DeclType, parser.DeclFunc, parser.DeclConst, parser.DeclVar,
-		parser.DeclMessage, parser.DeclService, parser.DeclRPC,
-	}
-	for _, f := range sorted[:fileLimit] {
-		rel := f.FilePath
-		if res.RootPath != "" {
-			if r, err := filepath.Rel(res.RootPath, f.FilePath); err == nil {
-				rel = r
-			}
-		}
-		if budget >= 10000 && len(f.Declarations) > 0 {
-			byKind := map[parser.DeclKind][]string{}
-			for _, d := range f.Declarations {
-				byKind[d.Kind] = append(byKind[d.Kind], d.Name)
-			}
-			fmt.Fprintf(&b, "- `%s` (%d lines)\n", rel, f.LineCount)
-			perKindLimit := 8
-			if budget >= 50000 {
-				perKindLimit = 999
-			}
-			for _, k := range kindOrder {
-				names := byKind[k]
-				if len(names) == 0 {
-					continue
-				}
-				shown, extra := names, 0
-				if len(shown) > perKindLimit {
-					extra = len(shown) - perKindLimit
-					shown = shown[:perKindLimit]
-				}
-				line := "  - " + string(k) + ": " + strings.Join(shown, ", ")
-				if extra > 0 {
-					line += fmt.Sprintf(" (+%d more)", extra)
-				}
-				b.WriteString(line + "\n")
-			}
-		} else {
-			declNames := make([]string, 0, len(f.Declarations))
-			for i, d := range f.Declarations {
-				if i >= 6 {
-					declNames = append(declNames, fmt.Sprintf("+%d more", len(f.Declarations)-6))
-					break
-				}
-				declNames = append(declNames, d.Name)
-			}
-			declStr := ""
-			if len(declNames) > 0 {
-				declStr = " — " + strings.Join(declNames, ", ")
-			}
-			fmt.Fprintf(&b, "- `%s` (%d lines)%s\n", rel, f.LineCount, declStr)
-		}
-	}
-	if fileLimit < len(sorted) {
-		fmt.Fprintf(&b, "- … and %d more files\n", len(sorted)-fileLimit)
-	}
-	b.WriteString("\n")
-
-	// ── Domain Model (DDD) ────────────────────────────────────────────────────
-	if budget >= 10000 {
-		for _, p := range dddPanels {
-			if md := p.RawResult; md != nil {
-				// Render a brief markdown summary using the module's RenderMarkdown if available.
-				b.WriteString("## Domain Model\n\n")
-				fmt.Fprintf(&b, "Module: %s\n\n", p.Title)
-				break
-			}
-		}
-	}
-
-	// ── Spec Coverage ─────────────────────────────────────────────────────────
-	for _, p := range specPanels {
-		if r, ok := p.RawResult.(speccoverage.Result); ok && r.HasSpec {
-			b.WriteString("## API Spec Coverage\n\n")
-			fmt.Fprintf(&b, "- **Coverage (code→spec):** %d%%\n", r.SpecReady)
-			fmt.Fprintf(&b, "- **Spec types:** %s\n", strings.Join(r.SpecTypes, ", "))
-			if len(r.Generators) > 0 {
-				fmt.Fprintf(&b, "- **Generators:** %s\n", strings.Join(r.Generators, ", "))
-			}
-			fmt.Fprintf(&b, "- **Spec ops:** %d  |  **Implemented:** %d  |  **Missing spec:** %d\n",
-				len(r.SpecOps), len(r.ImplOps)-len(r.Extra), len(r.Extra))
-			if budget >= 10000 && len(r.Missing) > 0 {
-				missing := r.Missing
-				if budget < 50000 && len(missing) > 10 {
-					missing = missing[:10]
-				}
-				b.WriteString("- **Spec ops not implemented:**\n")
-				for _, op := range missing {
-					fmt.Fprintf(&b, "  - %s %s\n", op.Method, op.Path)
-				}
-			}
-			b.WriteString("\n")
-			break
-		}
-	}
-
-	// ── Traffic / Routes ──────────────────────────────────────────────────────
-	if budget >= 10000 {
-		for _, p := range trafficPanels {
-			if r, ok := p.RawResult.(traffic.Result); ok && r.HasData() {
-				if len(r.Inbound) > 0 {
-					b.WriteString("## Inbound Traffic\n\n")
-					routeLimit := 20
-					if budget >= 50000 {
-						routeLimit = len(r.Inbound)
-					}
-					shown := r.Inbound
-					if len(shown) > routeLimit {
-						shown = shown[:routeLimit]
-					}
-					for _, e := range shown {
-						fmt.Fprintf(&b, "- [%s] %s\n", e.Protocol, e.URI)
-					}
-					if routeLimit < len(r.Inbound) {
-						fmt.Fprintf(&b, "- … and %d more\n", len(r.Inbound)-routeLimit)
-					}
-					b.WriteString("\n")
-				}
-				if len(r.Outbound) > 0 && budget >= 10000 {
-					b.WriteString("## Outbound Dependencies\n\n")
-					outLimit := 10
-					if budget >= 50000 {
-						outLimit = len(r.Outbound)
-					}
-					shown := r.Outbound
-					if len(shown) > outLimit {
-						shown = shown[:outLimit]
-					}
-					for _, e := range shown {
-						fmt.Fprintf(&b, "- [%s] %s\n", e.Protocol, e.URI)
-					}
-					if outLimit < len(r.Outbound) {
-						fmt.Fprintf(&b, "- … and %d more\n", len(r.Outbound)-outLimit)
-					}
-					b.WriteString("\n")
-				}
-				break
-			}
-		}
-	}
-
-	// ── Security ──────────────────────────────────────────────────────────────
-	var findings []security.RuleResult
-	for _, rr := range res.Security {
-		if rr.Passed() {
-			continue
-		}
-		// Only include findings that touch files in this platform.
-		inPlatform := false
-		for _, f := range files {
-			for _, finding := range rr.Findings {
-				if finding.File == f.FilePath {
-					inPlatform = true
-					break
-				}
-			}
-			if inPlatform {
-				break
-			}
-		}
-		if inPlatform {
-			findings = append(findings, rr)
-		}
-	}
-	// Sort by severity then count.
-	sort.Slice(findings, func(i, j int) bool {
-		ri, rj := findings[i].Rule.Severity.Rank(), findings[j].Rule.Severity.Rank()
-		if ri != rj {
-			return ri > rj
-		}
-		return findings[i].TotalCount > findings[j].TotalCount
-	})
-
-	if len(findings) > 0 {
-		b.WriteString("## Security Findings\n\n")
-		findLimit := 3
-		if budget >= 10000 {
-			findLimit = 15
-		}
-		if budget >= 50000 {
-			findLimit = len(findings)
-		}
-		shown := findings
-		if len(shown) > findLimit {
-			shown = shown[:findLimit]
-		}
-		for _, rr := range shown {
-			cwe := ""
-			if rr.Rule.CWE != "" {
-				cwe = " (CWE-" + rr.Rule.CWE + ")"
-			}
-			fmt.Fprintf(&b, "- **[%s] %s**%s — %d occurrence(s)\n",
-				rr.Rule.Severity, rr.Rule.Name, cwe, rr.TotalCount)
-			if budget >= 10000 {
-				fmt.Fprintf(&b, "  %s\n", rr.Rule.Description)
-			}
-		}
-		if findLimit < len(findings) {
-			fmt.Fprintf(&b, "- … and %d more rules with findings\n", len(findings)-findLimit)
-		}
-		b.WriteString("\n")
-	}
-
-	// ── 100K: full graph data ─────────────────────────────────────────────────
-	if budget >= 100000 {
-		// Architecture layers with per-file breakdown.
-		type layerBucket struct {
-			files []string
-			lines int
-		}
-		buckets := map[string]*layerBucket{}
-		for _, f := range files {
-			layer := classifyFile(f)
-			if buckets[layer] == nil {
-				buckets[layer] = &layerBucket{}
-			}
-			rel := f.FilePath
-			if res.RootPath != "" {
-				if r, err := filepath.Rel(res.RootPath, f.FilePath); err == nil {
-					rel = r
-				}
-			}
-			buckets[layer].files = append(buckets[layer].files, rel)
-			buckets[layer].lines += f.LineCount
-		}
-		if len(buckets) > 0 {
-			b.WriteString("## Architecture Layers (full)\n\n")
-			for _, layer := range layerOrder {
-				bkt := buckets[layer]
-				if bkt == nil {
-					continue
-				}
-				fmt.Fprintf(&b, "### %s (%d files, %d lines)\n\n", layer, len(bkt.files), bkt.lines)
-				sort.Strings(bkt.files)
-				for _, fn := range bkt.files {
-					fmt.Fprintf(&b, "- %s\n", fn)
-				}
-				b.WriteString("\n")
-			}
-		}
-
-		// Arch components.
-		techSet := buildTechSet(res, files)
-		components := detectComponents(files, techSet)
-		if len(components) > 0 {
-			b.WriteString("## Detected Components\n\n")
-			for _, c := range components {
-				fmt.Fprintf(&b, "- %s\n", c.summary)
-			}
-			b.WriteString("\n")
-		}
-
-		// Full module dependency graph as edge list.
-		if res.Graph != nil {
-			inPlatform := map[string]bool{}
-			for _, m := range pg.Modules {
-				inPlatform[m] = true
-			}
-			inPlatform["root"] = inPlatform[""]
-			var edges [][2]string
-			for _, e := range res.Graph.Edges() {
-				if inPlatform[e[0]] && inPlatform[e[1]] {
-					edges = append(edges, e)
-				}
-			}
-			sort.Slice(edges, func(i, j int) bool {
-				if edges[i][0] != edges[j][0] {
-					return edges[i][0] < edges[j][0]
-				}
-				return edges[i][1] < edges[j][1]
-			})
-			if len(edges) > 0 {
-				b.WriteString("## Module Dependency Graph\n\n")
-				b.WriteString("Format: `A → B` means module A imports / depends on module B.\n\n")
-				for _, e := range edges {
-					fmt.Fprintf(&b, "- %s → %s\n", e[0], e[1])
-				}
-				b.WriteString("\n")
-			}
-
-			// Hotspots with full PageRank data.
-			type hotRow struct {
-				name   string
-				inDeg  int
-				outDeg int
-				rank   float64
-				lines  int
-				decl   int
-			}
-			mloc := map[string]int{}
-			mdecl := map[string]int{}
-			for _, f := range files {
-				name := f.ModuleName
-				if name == "" {
-					name = "root"
-				}
-				mloc[name] += f.LineCount
-				mdecl[name] += len(f.Declarations)
-			}
-			var hotRows []hotRow
-			for _, h := range res.Hotspots {
-				if !inPlatform[h.Name] {
-					continue
-				}
-				hotRows = append(hotRows, hotRow{h.Name, h.InDeg, h.OutDeg, h.PageRank, mloc[h.Name], mdecl[h.Name]})
-			}
-			sort.Slice(hotRows, func(i, j int) bool {
-				if hotRows[i].inDeg != hotRows[j].inDeg {
-					return hotRows[i].inDeg > hotRows[j].inDeg
-				}
-				return hotRows[i].lines > hotRows[j].lines
-			})
-			if len(hotRows) > 0 {
-				b.WriteString("## Dependency Hotspots\n\n")
-				b.WriteString("| Module | Uses (in-degree) | Deps (out-degree) | Lines | Decl |\n")
-				b.WriteString("|--------|-----------------|-------------------|-------|------|\n")
-				for _, r := range hotRows {
-					fmt.Fprintf(&b, "| %s | %d | %d | %d | %d |\n", r.name, r.inDeg, r.outDeg, r.lines, r.decl)
-				}
-				b.WriteString("\n")
-			}
-		}
-
-		// Longest functions.
-		type fnEntry struct {
-			fn  *parser.FunctionInfo
-			mod string
-		}
-		var fns []fnEntry
-		for _, f := range files {
-			if f.LongestFunc != nil && !isTestFile(f.FilePath) {
-				fns = append(fns, fnEntry{f.LongestFunc, f.ModuleName})
-			}
-		}
-		sort.Slice(fns, func(i, j int) bool { return fns[i].fn.LineCount > fns[j].fn.LineCount })
-		if len(fns) > 0 {
-			b.WriteString("## Longest Functions\n\n")
-			b.WriteString("| Function | Lines | Module |\n")
-			b.WriteString("|----------|-------|--------|\n")
-			for _, e := range fns {
-				rel := e.fn.FilePath
-				if res.RootPath != "" {
-					if r, err := filepath.Rel(res.RootPath, e.fn.FilePath); err == nil {
-						rel = r
-					}
-				}
-				fmt.Fprintf(&b, "| %s | %d | %s (%s) |\n", e.fn.Name, e.fn.LineCount, e.mod, rel)
-			}
-			b.WriteString("\n")
-		}
-	}
-
-	// ── 200K: full security findings, all TODOs, git file metadata, all big funcs ──
-	if budget >= 200000 {
-		// Full security findings with snippets.
-		var allFindings []security.RuleResult
-		for _, rr := range res.Security {
-			if rr.Passed() {
-				continue
-			}
-			var fs []security.Finding
-			for _, finding := range rr.Findings {
-				for _, f := range files {
-					if finding.FullPath == f.FilePath || finding.File == f.FilePath {
-						fs = append(fs, finding)
-						break
-					}
-				}
-			}
-			if len(fs) > 0 {
-				allFindings = append(allFindings, security.RuleResult{Rule: rr.Rule, Findings: fs, TotalCount: len(fs)})
-			}
-		}
-		sort.Slice(allFindings, func(i, j int) bool {
-			ri, rj := allFindings[i].Rule.Severity.Rank(), allFindings[j].Rule.Severity.Rank()
-			if ri != rj {
-				return ri > rj
-			}
-			return allFindings[i].TotalCount > allFindings[j].TotalCount
-		})
-		if len(allFindings) > 0 {
-			b.WriteString("## Security Findings — Full Detail\n\n")
-			for _, rr := range allFindings {
-				cwe := ""
-				if rr.Rule.CWE != "" {
-					cwe = " · CWE-" + rr.Rule.CWE
-				}
-				fmt.Fprintf(&b, "### [%s] %s%s\n\n", rr.Rule.Severity, rr.Rule.Name, cwe)
-				fmt.Fprintf(&b, "%s\n\n", rr.Rule.Description)
-				for _, f := range rr.Findings {
-					author := ""
-					if f.Author != "" {
-						author = " (" + f.Author + ")"
-					}
-					rel := f.File
-					if res.RootPath != "" {
-						if r, err := filepath.Rel(res.RootPath, f.FullPath); err == nil {
-							rel = r
-						}
-					}
-					fmt.Fprintf(&b, "- `%s` line %d%s\n", rel, f.Line, author)
-					if f.Snippet != "" {
-						fmt.Fprintf(&b, "  ```\n  %s\n  ```\n", strings.TrimSpace(f.Snippet))
-					}
-				}
-				b.WriteString("\n")
-			}
-		}
-
-		// All TODOs and FIXMEs.
-		type todoEntry struct {
-			item parser.TodoItem
-			rel  string
-		}
-		var todos []todoEntry
-		for _, f := range files {
-			for _, t := range f.Todos {
-				rel := t.FilePath
-				if res.RootPath != "" {
-					if r, err := filepath.Rel(res.RootPath, t.FilePath); err == nil {
-						rel = r
-					}
-				}
-				todos = append(todos, todoEntry{t, rel})
-			}
-		}
-		if len(todos) > 0 {
-			b.WriteString("## TODOs & FIXMEs\n\n")
-			sort.Slice(todos, func(i, j int) bool {
-				if todos[i].rel != todos[j].rel {
-					return todos[i].rel < todos[j].rel
-				}
-				return todos[i].item.Line < todos[j].item.Line
-			})
-			for _, t := range todos {
-				fmt.Fprintf(&b, "- [%s] `%s:%d` — %s\n", t.item.Kind, t.rel, t.item.Line, t.item.Text)
-			}
-			b.WriteString("\n")
-		}
-
-		// All big functions (beyond the longest-per-file already in 100K).
-		type bigFnEntry struct {
-			fn  parser.FunctionInfo
-			rel string
-			mod string
-		}
-		var bigFns []bigFnEntry
-		for _, f := range files {
-			if isTestFile(f.FilePath) {
-				continue
-			}
-			rel := f.FilePath
-			if res.RootPath != "" {
-				if r, err := filepath.Rel(res.RootPath, f.FilePath); err == nil {
-					rel = r
-				}
-			}
-			for _, fn := range f.BigFunctions {
-				bigFns = append(bigFns, bigFnEntry{fn, rel, f.ModuleName})
-			}
-		}
-		sort.Slice(bigFns, func(i, j int) bool { return bigFns[i].fn.LineCount > bigFns[j].fn.LineCount })
-		if len(bigFns) > 0 {
-			b.WriteString("## All Large Functions\n\n")
-			b.WriteString("| Function | Lines | File | Module |\n")
-			b.WriteString("|----------|-------|------|--------|\n")
-			for _, e := range bigFns {
-				fmt.Fprintf(&b, "| %s | %d | %s | %s |\n", e.fn.Name, e.fn.LineCount, e.rel, e.mod)
-			}
-			b.WriteString("\n")
-		}
-
-		// Per-file git metadata.
-		type gitFileEntry struct {
-			rel     string
-			meta    parser.GitMetadata
-			mod     string
-		}
-		var gitFiles []gitFileEntry
-		for _, f := range files {
-			if f.GitMeta.ChangeFrequency == 0 && len(f.GitMeta.TopAuthors) == 0 {
-				continue
-			}
-			rel := f.FilePath
-			if res.RootPath != "" {
-				if r, err := filepath.Rel(res.RootPath, f.FilePath); err == nil {
-					rel = r
-				}
-			}
-			gitFiles = append(gitFiles, gitFileEntry{rel, f.GitMeta, f.ModuleName})
-		}
-		sort.Slice(gitFiles, func(i, j int) bool {
-			return gitFiles[i].meta.ChangeFrequency > gitFiles[j].meta.ChangeFrequency
-		})
-		if len(gitFiles) > 0 {
-			b.WriteString("## Per-File Git History\n\n")
-			for _, e := range gitFiles {
-				authors := strings.Join(e.meta.TopAuthors, ", ")
-				fmt.Fprintf(&b, "### %s\n\n", e.rel)
-				fmt.Fprintf(&b, "- Module: %s · Changes: %d · Authors: %s\n", e.mod, e.meta.ChangeFrequency, authors)
-				if len(e.meta.RecentMessages) > 0 {
-					b.WriteString("- Recent commits:\n")
-					for _, msg := range e.meta.RecentMessages {
-						fmt.Fprintf(&b, "  - %s\n", msg)
-					}
-				}
-				b.WriteString("\n")
-			}
-		}
-
-	}
-
-	// ── Git Stats (single section, always at bottom) ──────────────────────────
-	if budget >= 10000 && res.Git.Available {
-		b.WriteString("## Git Stats\n\n")
-		cs := res.Git.Commits
-		fmt.Fprintf(&b, "- **Total commits:** %d  |  **Typed:** %d/%d\n", cs.Total, cs.Typed, cs.Total)
-		if res.Git.Tags.LatestSemver != "" {
-			fmt.Fprintf(&b, "- **Latest release:** %s\n", res.Git.Tags.LatestSemver)
-		}
-		authorLimit := 5
-		if budget >= 50000 {
-			authorLimit = len(res.Git.Authors)
-		}
-		authors := make([]string, 0, len(res.Git.Authors))
-		for name := range res.Git.Authors {
-			authors = append(authors, name)
-		}
-		sort.Slice(authors, func(i, j int) bool {
-			return res.Git.Authors[authors[i]].TotalCommits > res.Git.Authors[authors[j]].TotalCommits
-		})
-		if len(authors) > authorLimit {
-			authors = authors[:authorLimit]
-		}
-		if len(authors) > 0 {
-			fmt.Fprintf(&b, "- **Top authors:** %s\n", strings.Join(authors, ", "))
-		}
-		if len(res.Git.Churn) > 0 {
-			churnLimit := 5
-			if budget >= 50000 {
-				churnLimit = 15
-			}
-			b.WriteString("- **Hot files (by change count):**\n")
-			for i, c := range res.Git.Churn {
-				if i >= churnLimit {
-					break
-				}
-				fmt.Fprintf(&b, "  - %s (%d changes)\n", c.RelPath, c.ChangeCount)
-			}
-		}
-		b.WriteString("\n")
-
-		if budget >= 200000 {
-			// Commit type distribution.
-			if len(cs.TypeCounts) > 0 {
-				b.WriteString("### Commit Types\n\n")
-				type typeCount struct {
-					t string
-					n int
-				}
-				var types []typeCount
-				for t, n := range cs.TypeCounts {
-					types = append(types, typeCount{t, n})
-				}
-				sort.Slice(types, func(i, j int) bool { return types[i].n > types[j].n })
-				for _, tc := range types {
-					fmt.Fprintf(&b, "- %s: %d\n", tc.t, tc.n)
-				}
-				b.WriteString("\n")
-				if len(cs.Samples) > 0 {
-					b.WriteString("**Recent commit messages:**\n\n")
-					for _, s := range cs.Samples {
-						fmt.Fprintf(&b, "- %s\n", s)
-					}
-					b.WriteString("\n")
-				}
-			}
-
-			// Branching model.
-			bm := res.Git.Branch.Model
-			if bm.Model != "" {
-				fmt.Fprintf(&b, "### Branching Model\n\n**%s**", string(bm.Model))
-				if bm.Confidence > 0 {
-					fmt.Fprintf(&b, " · %d%% confidence · primary branch: `%s`",
-						int(bm.Confidence*100+0.5), res.Git.Branch.PrimaryBranch)
-				}
-				b.WriteString("\n\n")
-				for _, s := range bm.Signals {
-					fmt.Fprintf(&b, "- %s\n", s)
-				}
-				b.WriteString("\n")
-			}
-
-			// All contributors.
-			if len(res.Git.Authors) > 0 {
-				type authorRow struct {
-					name    string
-					commits int
-					files   int
-				}
-				var rows []authorRow
-				for name, a := range res.Git.Authors {
-					rows = append(rows, authorRow{name, a.TotalCommits, a.FilesModified})
-				}
-				sort.Slice(rows, func(i, j int) bool {
-					if rows[i].commits != rows[j].commits {
-						return rows[i].commits > rows[j].commits
-					}
-					return rows[i].name < rows[j].name
-				})
-				b.WriteString("### Contributors\n\n")
-				b.WriteString("| Author | Commits | Files |\n")
-				b.WriteString("|--------|--------:|------:|\n")
-				for _, r := range rows {
-					fmt.Fprintf(&b, "| %s | %d | %d |\n", r.name, r.commits, r.files)
-				}
-				b.WriteString("\n")
-			}
-
-			// Full file churn.
-			if len(res.Git.Churn) > 0 {
-				b.WriteString("### File Churn\n\n")
-				b.WriteString("| File | Changes |\n")
-				b.WriteString("|------|--------:|\n")
-				for _, c := range res.Git.Churn {
-					fmt.Fprintf(&b, "| %s | %d |\n", c.RelPath, c.ChangeCount)
-				}
-				b.WriteString("\n")
-			}
-
-			// Tags & releases.
-			t := res.Git.Tags
-			b.WriteString("### Releases\n\n")
-			fmt.Fprintf(&b, "**%d tags** · %d semver", t.TotalTags, t.SemverTags)
-			if t.LatestSemver != "" {
-				fmt.Fprintf(&b, " · latest `%s`", t.LatestSemver)
-			}
-			b.WriteString("\n\n")
-			if len(t.SemverList) > 0 {
-				fmt.Fprintf(&b, "Tags: %s\n\n", strings.Join(t.SemverList, " · "))
-			}
-
-			// Branch stats.
-			bs := res.Git.Branch
-			b.WriteString("### Branches\n\n")
-			fmt.Fprintf(&b, "**%d total**", bs.TotalBranches)
-			if bs.AvgLifetimeDays > 0 {
-				fmt.Fprintf(&b, " · avg lifetime %.0f days", bs.AvgLifetimeDays)
-			}
-			if bs.PeakCommitDay != "" {
-				fmt.Fprintf(&b, " · peak commit day: %s", bs.PeakCommitDay)
-			}
-			b.WriteString("\n\n")
-			if len(bs.StaleBranches) > 0 {
-				b.WriteString("| Stale branch | Days idle |\n")
-				b.WriteString("|--------------|----------:|\n")
-				for _, br := range bs.StaleBranches {
-					fmt.Fprintf(&b, "| %s | %d |\n", br.Name, br.DaysInactive)
-				}
-				b.WriteString("\n")
-			}
-		}
-	}
-
-	return strings.TrimRight(b.String(), "\n") + "\n"
 }
 
 // buildTechSet builds a technology set from the result and a file list.
@@ -2893,15 +2430,23 @@ func renderVSCodePathCard(rootPath string) string {
 	p := strings.ReplaceAll(rootPath, "\\", "/")
 	return fmt.Sprintf(
 		`<div class="as-section" id="as-vs-card" style="margin-bottom:14px">`+
-			`<div class="as-section__head"><span class="ico">🔗</span><h3>VS Code Links</h3></div>`+
-			`<p class="as-section__sub">Edit the path prefix for <code>vscode://</code> links — useful when sharing this report with someone whose project is at a different location.</p>`+
-			`<div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">`+
+			`<div class="as-section__head"><span class="ico">🔗</span><h3>VS Code Links</h3>`+
+			`<button id="as-link-toggle" class="as-toggle" style="margin-left:auto;font-size:12px" title="Switch VS Code ↔ Git links">🔗 VS Code</button></div>`+
+			`<p class="as-section__sub" id="as-vs-desc">Edit the path prefix for <code>vscode://</code> links — useful when sharing this report.</p>`+
+			// VS Code path row (visible in VS Code mode)
+			`<div id="as-vs-path-row" style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">`+
 			`<input id="as-vs-path" type="text" value="%s" data-orig="%s"`+
-			` style="flex:1;min-width:200px;padding:6px 10px;background:var(--bg-ele);border:1px solid var(--border);`+
+			` style="flex:1;min-width:200px;padding:6px 10px;background:var(--bg-inset);border:1px solid var(--border);`+
 			`border-radius:6px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none">`+
 			`<button id="as-vs-btn" class="as-toggle" style="white-space:nowrap">Change Path</button>`+
 			`<span id="as-vs-msg" style="font-size:12px;color:var(--text-faint)"></span>`+
-			`</div></div>`,
+			`</div>`+
+			// Git URL row (visible in Git mode)
+			`<div id="as-vs-git-row" style="display:none;margin-top:10px">`+
+			`<span style="font-size:12px;color:var(--text-faint)">Remote URL: </span>`+
+			`<a id="as-vs-git-url" href="#" target="_blank" style="font-family:var(--mono);font-size:12px"></a>`+
+			`</div>`+
+			`</div>`,
 		esc(p), esc(p))
 }
 

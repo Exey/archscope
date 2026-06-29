@@ -196,8 +196,134 @@ func ExtractPythonTraffic(filePath string, lines []string) (inbound, outbound []
 			!strings.HasPrefix(ln, "#") {
 			addOut(Entry{URI: s, Port: portFromURL(s), Protocol: "WebSocket", Line: no})
 		}
+
+		// ── Inbound: Telegram bot long-polling ───────────────────────────────
+		if strings.Contains(ln, "Bot(") &&
+			(strings.Contains(strings.Join(win, " "), "polling") ||
+				strings.Contains(ln, "aiogram") || strings.Contains(ln, "Dispatcher")) {
+			addIn(Entry{URI: "Telegram API", Protocol: "Long Polling (HTTPS)", DataFmt: "JSON", Line: no})
+		}
+		if strings.Contains(ln, "application.run_polling(") || strings.Contains(ln, "executor.start_polling(") ||
+			strings.Contains(ln, "dp.run_polling(") || strings.Contains(ln, "bot.polling(") ||
+			strings.Contains(ln, "bot.infinity_polling(") {
+			addIn(Entry{URI: "Telegram API", Protocol: "Long Polling (HTTPS)", DataFmt: "JSON", Line: no})
+		}
+
+		// ── Outbound: PostgreSQL ──────────────────────────────────────────────
+		if sfx, ok := substringAfter(ln, "psycopg2.connect(", "asyncpg.connect(", "asyncpg.create_pool("); ok {
+			addr := pyDSNHost(append([]string{sfx}, win...), "PostgreSQL")
+			port := pyDSNPort(append([]string{sfx}, win...), "5432")
+			addOut(Entry{URI: addr, Port: port, Protocol: "PostgreSQL", Line: no})
+		}
+		if sfx, ok := substringAfter(ln, "create_engine("); ok {
+			url := pyFirstStrLit(sfx)
+			if strings.HasPrefix(url, "postgresql") || strings.HasPrefix(url, "postgres") {
+				addOut(Entry{URI: hostFromURL(url), Port: portFromURL(url), Protocol: "PostgreSQL", Line: no})
+			} else if strings.HasPrefix(url, "mysql") {
+				addOut(Entry{URI: hostFromURL(url), Port: portFromURL(url), Protocol: "MySQL", Line: no})
+			} else if strings.HasPrefix(url, "sqlite") {
+				addOut(Entry{URI: url, Protocol: "SQLite", Line: no})
+			} else if url != "" {
+				addOut(Entry{URI: url, Protocol: "Database", Line: no})
+			}
+		}
+		// Raw postgresql:// URLs anywhere in line
+		if s := pyFirstStrLit(ln); (strings.HasPrefix(s, "postgres://") || strings.HasPrefix(s, "postgresql://")) &&
+			!strings.HasPrefix(ln, "#") {
+			addOut(Entry{URI: hostFromURL(s), Port: portFromURL(s), Protocol: "PostgreSQL", Line: no})
+		}
+
+		// ── Outbound: MySQL ───────────────────────────────────────────────────
+		if sfx, ok := substringAfter(ln, "pymysql.connect(", "aiomysql.connect(", "MySQLdb.connect("); ok {
+			host := findKVInWindow(append([]string{sfx}, win...), "host=", "host:")
+			if host == "" {
+				host = "MySQL"
+			}
+			port := findKVInWindow(append([]string{sfx}, win...), "port=", "port:")
+			if port == "" {
+				port = "3306"
+			}
+			addOut(Entry{URI: host, Port: port, Protocol: "MySQL", Line: no})
+		}
+
+		// ── Outbound: SMTP ────────────────────────────────────────────────────
+		if sfx, ok := substringAfter(ln, "smtplib.SMTP(", "smtplib.SMTP_SSL(", "smtplib.LMTP("); ok {
+			host := pyFirstStrLit(sfx)
+			port := ""
+			// port is usually the second positional argument
+			if i := strings.Index(sfx, ","); i >= 0 {
+				rest := strings.TrimSpace(sfx[i+1:])
+				port = pyFirstStrLit(rest)
+				if port == "" {
+					// might be a bare number
+					for _, tok := range strings.Fields(rest) {
+						tok = strings.TrimRight(tok, ",)")
+						if allDigits(tok) {
+							port = tok
+							break
+						}
+					}
+				}
+			}
+			addr := host
+			if port != "" {
+				addr = host + ":" + port
+			}
+			addOut(Entry{URI: addr, Port: port, Protocol: "SMTP", Line: no})
+		}
+
+		// ── Outbound: TCP socket ──────────────────────────────────────────────
+		if sfx, ok := substringAfter(ln, "asyncio.open_connection("); ok {
+			host := pyFirstStrLit(sfx)
+			port := ""
+			if i := strings.Index(sfx, ","); i >= 0 {
+				rest := strings.TrimSpace(sfx[i+1:])
+				for _, tok := range strings.Fields(rest) {
+					tok = strings.TrimRight(tok, ",)")
+					if allDigits(tok) {
+						port = tok
+						break
+					}
+				}
+			}
+			if host != "" {
+				addr := host
+				if port != "" {
+					addr = host + ":" + port
+				}
+				addOut(Entry{URI: addr, Port: port, Protocol: "TCP", Line: no})
+			}
+		}
+		if strings.Contains(ln, ".connect((") || strings.Contains(ln, ".connect((") {
+			// socket.connect(("host", port))
+			ctx := append([]string{ln}, win...)
+			host := pyFirstStrLit(ctx...)
+			if host != "" && !strings.HasPrefix(host, "/") {
+				addOut(Entry{URI: host, Protocol: "TCP", Line: no})
+			}
+		}
 	}
 	return inbound, outbound
+}
+
+// pyDSNHost extracts host from psycopg2-style connect() kwargs.
+func pyDSNHost(lines []string, fallback string) string {
+	for _, ln := range lines {
+		if h := findKVInWindow([]string{ln}, "host=", "host:"); h != "" {
+			return h
+		}
+	}
+	return fallback
+}
+
+// pyDSNPort extracts port from psycopg2-style connect() kwargs.
+func pyDSNPort(lines []string, defaultPort string) string {
+	for _, ln := range lines {
+		if p := findKVInWindow([]string{ln}, "port=", "port:"); p != "" {
+			return p
+		}
+	}
+	return defaultPort
 }
 
 // pyExtractRoute parses a single-line Python decorator and returns (path, METHOD).

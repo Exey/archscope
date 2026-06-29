@@ -51,13 +51,16 @@ type ModulePanel struct {
 // GitBundle is the repository-history surface (DESIGN §9.3), shared across all
 // platforms (git history is repo-wide, not per-language).
 type GitBundle struct {
-	Available bool
-	Authors   map[string]*git.AuthorStats
-	Churn     []git.FileChurnStat
-	Tags      git.TagStats
-	Commits   git.CommitStats
-	Branch    git.BranchStats
-	Repos     []string
+	Available   bool
+	Authors     map[string]*git.AuthorStats
+	Churn       []git.FileChurnStat
+	Tags        git.TagStats
+	Commits     git.CommitStats
+	Branch      git.BranchStats
+	Repos        []string
+	WeeklyByExt  map[string][git.NCalWeeks]int            // lowercase extension → weekly commit counts (index 0=oldest)
+	WeeklyByRepo map[string]map[string][git.NCalWeeks]int // repo root → extension → weekly counts
+	RemoteURL    string                        // git origin URL (HTTPS, .git suffix stripped)
 }
 
 // PanelsForPlatform returns the module panels belonging to one platform tab.

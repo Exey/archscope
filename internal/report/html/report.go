@@ -48,7 +48,14 @@ func Render(res *result.AnalysisResult) string {
 		`function(){clearTimeout(t);run(false);}` +
 		`);})()` +
 		`</script>`)
-	b.WriteString("</head><body><div class=\"as-wrap\">")
+	// Embed git remote URL and root path as data attributes for JS link rewriting.
+	remoteURL := res.Git.RemoteURL
+	branch := res.Git.Branch.PrimaryBranch
+	if branch == "" {
+		branch = "main"
+	}
+	fmt.Fprintf(&b, `</head><body data-root="%s" data-remote="%s" data-branch="%s"><div class="as-wrap">`,
+		esc(res.RootPath), esc(remoteURL), esc(branch))
 
 	// Header
 	b.WriteString(`<div class="as-head"><div class="as-head__title">`)
@@ -81,6 +88,9 @@ func Render(res *result.AnalysisResult) string {
 
 	// VS Code path editor (global, shown once before the platform tabs)
 	b.WriteString(renderVSCodePathCard(res.RootPath))
+
+	// Contributions calendar — one row per platform, 52-week heat map
+	b.WriteString(renderContributionsCard(res))
 
 	// Platform tabs (Git Analysis + Modules & Microservices are per-platform inside)
 	b.WriteString(renderTabs(res))
