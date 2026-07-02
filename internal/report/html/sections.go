@@ -1237,7 +1237,7 @@ var radarRings = map[string]int{
 	"NumPy": 1, "pandas": 1, "SciPy": 1,
 	"Zap": 1, "slog": 1, "Logrus": 1,
 	"Spring Boot": 1, "Spring": 1, "Ktor": 1,
-	"Actix-web": 1, "Axum": 1, "Tokio": 1,
+	"Actix-web": 1, "Axum": 1, "Tokio": 1, "PyTorch": 1,
 	// Assess — research before committing
 	"Ant Design": 2, "Dash": 2, "MUI": 2, "Chakra UI": 2, "Streamlit": 2,
 	"Django": 2, "Flask": 2, "Express": 2, "NestJS": 2,
@@ -1247,8 +1247,8 @@ var radarRings = map[string]int{
 	"Matplotlib": 2, "Plotly": 2, "Seaborn": 2,
 	"Day.js": 2, "Lodash": 2,
 	"MySQL driver": 2, "Prisma": 2, "TypeORM": 2,
-	"TensorFlow": 2, "PyTorch": 2,
-	"Datadog": 2, "New Relic": 2, "Zipkin": 2,
+	"TensorFlow": 2,
+	"Datadog":    2, "New Relic": 2, "Zipkin": 2,
 	// Hold — avoid, plan to replace
 	"Moment.js": 3, "jQuery": 3, "Bootstrap": 3,
 	"log": 3, "Log4j": 3,
