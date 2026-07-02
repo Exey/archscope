@@ -67,9 +67,6 @@ func Render(res *result.AnalysisResult) string {
 		`<button id="as-theme-dark" class="as-seg-btn as-seg-btn--active">🌙</button>` +
 		`<button id="as-theme-light" class="as-seg-btn">☀</button>` +
 		`</div>`)
-	fn := sanitizeFilename(res.ProjectName)
-	fmt.Fprintf(&b, `<button id="as-save-html" class="as-toggle as-save-btn" data-filename="archscope-%s.html">HTML ↓</button>`, esc(fn))
-	fmt.Fprintf(&b, `<button id="as-save-md" class="as-toggle as-save-btn" data-filename="archscope-%s.md">MD ↓</button>`, esc(fn))
 	b.WriteString(`</div>`)
 	b.WriteString(`</div>`)
 
@@ -87,6 +84,12 @@ func Render(res *result.AnalysisResult) string {
 
 	// Tech stack + packages & modules (repo-wide)
 	b.WriteString(renderStackAndModules(res))
+
+	// Technical Radar: mermaid radar-beta of the detected stack
+	b.WriteString(renderTechRadarSection(res))
+
+	// DevOps: detected tools + Dockerfile/Helm/Compose static-analysis matrix
+	b.WriteString(renderDevOpsSection(res))
 
 	// Global architecture graph (modules + tech nodes)
 	b.WriteString(renderGlobalArchGraph(res))
@@ -111,12 +114,6 @@ func Render(res *result.AnalysisResult) string {
 	b.WriteString(report.JS)
 	b.WriteString(`</script></body></html>`)
 	return b.String()
-}
-
-func sanitizeFilename(s string) string {
-	r := strings.NewReplacer("/", "-", "\\", "-", ":", "-", "*", "-",
-		"?", "-", "\"", "-", "<", "-", ">", "-", "|", "-", " ", "_")
-	return r.Replace(s)
 }
 
 func projectTypeSuffix(langs string) string {

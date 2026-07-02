@@ -161,6 +161,7 @@ func RunWithProgress(rootPath string, cfg config.Config, progress func(string)) 
 		Technologies:   technologies,
 		DockerServices: scan.DockerServices,
 		DevOpsTools:    scan.DevOpsTools,
+		DevOpsLint:     scan.DevOpsLint,
 	}, nil
 }
 

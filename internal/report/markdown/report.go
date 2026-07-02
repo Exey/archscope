@@ -64,6 +64,15 @@ func Render(res *result.AnalysisResult) string {
 	return b.String()
 }
 
+// RenderPlatform returns the Markdown for one platform section (equivalent to
+// one HTML tab) — used by the HTML report to offer an inline "MD" raw-source
+// view alongside each platform's rendered accordion panel.
+func RenderPlatform(res *result.AnalysisResult, pg *scanner.PlatformGroup) string {
+	var b strings.Builder
+	renderPlatform(&b, res, pg)
+	return b.String()
+}
+
 // renderPlatform writes one platform section (equivalent to one HTML tab).
 func renderPlatform(b *strings.Builder, res *result.AnalysisResult, pg *scanner.PlatformGroup) {
 	files := res.FilesForPlatform(pg.Platform)
@@ -649,7 +658,10 @@ func renderGitMD(g result.GitBundle) string {
 		pct := c.Typed * 100 / c.Total
 		fmt.Fprintf(&b, "**%d%%** conventional commits (%d/%d typed)\n\n", pct, c.Typed, c.Total)
 		if len(c.TypeCounts) > 0 {
-			type kv struct{ k string; v int }
+			type kv struct {
+				k string
+				v int
+			}
 			var kvs []kv
 			for k, v := range c.TypeCounts {
 				kvs = append(kvs, kv{k, v})
@@ -845,7 +857,6 @@ func sortedPlatforms(res *result.AnalysisResult) []*scanner.PlatformGroup {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
 
 func mdCell(s string) string {
 	return strings.ReplaceAll(s, "|", "\\|")

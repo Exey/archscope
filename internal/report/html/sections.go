@@ -16,9 +16,11 @@ import (
 	"github.com/exey/archscope/internal/modules"
 	"github.com/exey/archscope/internal/modules/arch"
 	"github.com/exey/archscope/internal/modules/dddmodel"
+	"github.com/exey/archscope/internal/modules/designpattern"
 	"github.com/exey/archscope/internal/modules/speccoverage"
 	"github.com/exey/archscope/internal/modules/traffic"
 	"github.com/exey/archscope/internal/parser"
+	"github.com/exey/archscope/internal/report/markdown"
 	"github.com/exey/archscope/internal/result"
 	"github.com/exey/archscope/internal/scanner"
 	"github.com/exey/archscope/internal/security"
@@ -229,6 +231,14 @@ func renderContributionsCard(res *result.AnalysisResult) string {
 
 	now := time.Now()
 
+	// Week i date: now + (i - (pastWeeks-1)) * 7 days.
+	// i=0           → oldest (about 15 months ago)
+	// i=pastWeeks-1 → current week
+	// i=nWeeks-1    → last week of next calendar month
+	weekDate := func(i int) time.Time {
+		return now.AddDate(0, 0, (i-(pastWeeks-1))*7)
+	}
+
 	// Compute future weeks dynamically: extend to the last day of the NEXT calendar
 	// month so that month is always shown completely, never cut off mid-month.
 	nextMonthLastDay := time.Date(now.Year(), now.Month()+2, 0, 0, 0, 0, 0, now.Location())
@@ -243,12 +253,12 @@ func renderContributionsCard(res *result.AnalysisResult) string {
 	}
 	nWeeks := pastWeeks + futureWeeks
 
-	// Week i date: now + (i - (pastWeeks-1)) * 7 days.
-	// i=0           → oldest (about 15 months ago)
-	// i=pastWeeks-1 → current week
-	// i=nWeeks-1    → last week of next calendar month
-	weekDate := func(i int) time.Time {
-		return now.AddDate(0, 0, (i-(pastWeeks-1))*7)
+	// Rounding up to whole 7-day weeks above can overshoot a few days past
+	// nextMonthLastDay into the month after next (e.g. today in July stepping
+	// into September instead of stopping in August); trim any such trailing
+	// weeks so the calendar never shows more than one month of future dates.
+	for nWeeks > pastWeeks && weekDate(nWeeks-1).After(nextMonthLastDay) {
+		nWeeks--
 	}
 
 	// Build month spans; monthOf[i] tells which month slot week i belongs to.
@@ -471,35 +481,7 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 	}
 
 	// Categorize detected frameworks.
-	catSets := map[string]map[string]bool{
-		"frontend": {},
-		"backend":  {},
-		"data":     {},
-		"brokers":  {},
-		"linters":  {},
-	}
-	for _, f := range res.Files {
-		for _, imp := range f.Imports {
-			low := strings.ToLower(imp)
-			for _, t := range techImportMap {
-				if strings.Contains(low, t.needle) {
-					catSets[t.cat][t.label] = true
-				}
-			}
-		}
-	}
-	// Classify scanner-detected technologies (docker-compose, go.mod, Makefile…).
-	labelCat := map[string]string{}
-	for _, t := range techImportMap {
-		labelCat[t.label] = t.cat
-	}
-	for _, t := range res.Technologies {
-		if cat, ok := labelCat[t]; ok {
-			catSets[cat][t] = true
-		} else {
-			catSets["backend"][t] = true // unknown → backend
-		}
-	}
+	catSets := techCategorySets(res)
 
 	var b strings.Builder
 	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">🧰</span><h2>Tech Stack &amp; Modules</h2></div>`)
@@ -619,25 +601,996 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 		b.WriteString(`</div>`)
 	}
 
-	// DevOps card
-	if devops := renderDevOpsCard(res); devops != "" {
-		b.WriteString(devops)
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// techCategorySets classifies detected frameworks / technologies into the
+// five stack categories. Shared by the Tech Stack card and the Technical
+// Radar section.
+func techCategorySets(res *result.AnalysisResult) map[string]map[string]bool {
+	catSets := map[string]map[string]bool{
+		"frontend": {},
+		"backend":  {},
+		"data":     {},
+		"brokers":  {},
+		"linters":  {},
+	}
+	for _, f := range res.Files {
+		for _, imp := range f.Imports {
+			low := strings.ToLower(imp)
+			for _, t := range techImportMap {
+				if strings.Contains(low, t.needle) {
+					catSets[t.cat][t.label] = true
+				}
+			}
+		}
+	}
+	// Classify scanner-detected technologies (docker-compose, go.mod, Makefile…).
+	labelCat := map[string]string{}
+	for _, t := range techImportMap {
+		labelCat[t.label] = t.cat
+	}
+	for _, t := range res.Technologies {
+		if cat, ok := labelCat[t]; ok {
+			catSets[cat][t] = true
+		} else {
+			catSets["backend"][t] = true // unknown → backend
+		}
+	}
+	return catSets
+}
+
+// ── ☁️ DevOps (own top-level card) ──────────────────────────────────────────
+
+// renderDevOpsSection renders the standalone DevOps card: detected tool chips
+// plus a compact static-analysis matrix (Hadolint/Dockle/KubeLinter-style
+// metrics) for Dockerfiles, Helm charts, and docker-compose files.
+func renderDevOpsSection(res *result.AnalysisResult) string {
+	lint := res.DevOpsLint
+	if len(res.DevOpsTools) == 0 && lint.Empty() {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">☁️</span><h2>DevOps</h2>`)
+	if score, ok := lint.Score(); ok {
+		cls := "good"
+		if score < 75 {
+			cls = "warn"
+		}
+		if score < 50 {
+			cls = "crit"
+		}
+		fmt.Fprintf(&b, `<span class="as-dvo-score as-dvo-score--%s" title="Static-analysis hygiene score (pass=1, warn=½, fail=0)">%d%%</span>`, cls, score)
+	}
+	b.WriteString(`</div>`)
+
+	// Detected tools chips.
+	if len(res.DevOpsTools) > 0 {
+		b.WriteString(`<div class="arch-components">`)
+		for _, t := range res.DevOpsTools {
+			fmt.Fprintf(&b, `<span class="arch-component"><span class="comp-icon">%s</span><span>%s</span></span>`, t.Icon, esc(t.Name))
+		}
+		b.WriteString(`</div>`)
+	}
+
+	// Compliance radar, defect-density, and health-score charts.
+	if !lint.Empty() {
+		b.WriteString(renderDevOpsCharts(lint))
+	}
+
+	// Compact static-analysis matrix.
+	if !lint.Empty() {
+		b.WriteString(`<div class="as-sub" style="margin-top:14px">Static Analysis <span style="color:var(--text-faint);font-weight:400;text-transform:none;letter-spacing:0">(Hadolint · Dockle · KubeLinter · Checkov-style checks)</span></div>`)
+		b.WriteString(`<div class="as-dvo-grid">`)
+		for _, a := range []*scanner.DevOpsArtifactLint{lint.Dockerfiles, lint.Helm, lint.Compose} {
+			if a == nil {
+				continue
+			}
+			b.WriteString(renderDevOpsColumn(a))
+		}
+		b.WriteString(`</div>`)
 	}
 
 	b.WriteString(`</div>`)
 	return b.String()
 }
 
-func renderDevOpsCard(res *result.AnalysisResult) string {
-	if len(res.DevOpsTools) == 0 {
-		return ""
-	}
+func renderDevOpsColumn(a *scanner.DevOpsArtifactLint) string {
 	var b strings.Builder
-	b.WriteString(`<div class="as-sub" style="margin-top:16px">DevOps</div><div class="arch-components">`)
-	for _, t := range res.DevOpsTools {
-		fmt.Fprintf(&b, `<span class="arch-component"><span class="comp-icon">%s</span><span>%s</span></span>`, t.Icon, esc(t.Name))
+	b.WriteString(`<div class="as-dvo-col">`)
+	fmt.Fprintf(&b, `<div class="as-dvo-col__head">%s %s <span class="as-dvo-col__files" title="%s">%d file%s</span></div>`,
+		a.Icon, esc(a.Kind), esc(strings.Join(a.Files, "\n")), len(a.Files), plural(len(a.Files), "", "s"))
+	lastCat := ""
+	for _, c := range a.Checks {
+		if c.Category != lastCat {
+			fmt.Fprintf(&b, `<div class="as-dvo-cat">%s</div>`, esc(c.Category))
+			lastCat = c.Category
+		}
+		fmt.Fprintf(&b,
+			`<div class="as-dvo-row"><span class="as-dvo-dot as-dvo-dot--%s"></span><span class="as-dvo-m">%s</span><span class="as-dvo-v">%s</span></div>`,
+			esc(c.Status), esc(c.Metric), esc(c.Value))
 	}
 	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// ── ☁️ DevOps compliance charts (radar · defect density · health gauge) ─────
+
+// devopsDomains are the six compliance domains scored by the radar chart.
+var devopsDomains = [6]string{
+	"Base Image Hygiene", "Build Best Practices", "Privilege & Isolation",
+	"Runtime Security", "Resource Protection", "Network Exposure",
+}
+
+// devopsDomainAxisLines are the shortened, two-line-wrapped vertex labels
+// drawn directly on the radar chart (SVG text has no auto-wrap, and the full
+// devopsDomains names are too wide to sit on one line at the chart's scale).
+var devopsDomainAxisLines = [6][2]string{
+	{"Image", "Hygiene"},
+	{"Best", "Practices"},
+	{"Privilege &", "Isolation"},
+	{"Runtime", "Security"},
+	{"Resource", "Protection"},
+	{"Network", "Exposure"},
+}
+
+// devopsDomainOf maps a "Kind::Category" check grouping onto a devopsDomains
+// index, so checks from all three artifact kinds roll up into one shared set
+// of domains.
+var devopsDomainOf = map[string]int{
+	"Dockerfile::Base Image Hygiene":        0,
+	"Dockerfile::Build Best Practices":      1,
+	"Dockerfile::Package Manager Hygiene":   1,
+	"Dockerfile::Metadata & Labelling":      1,
+	"Dockerfile::Image Size & Efficiency":   1,
+	"Dockerfile::Privilege & Isolation":     2,
+	"Dockerfile::File System & Permissions": 2,
+	"Dockerfile::Network & Port Exposure":   5,
+
+	"Docker Compose::Version & Syntax": 1,
+	"Docker Compose::Security":         3,
+	"Docker Compose::Resource Limits":  4,
+	"Docker Compose::Network Hygiene":  5,
+
+	"Helm Chart::Chart Structural Quality":    1,
+	"Helm Chart::Template Correctness":        1,
+	"Helm Chart::Values Best Practices":       1,
+	"Helm Chart::Chart Provenance":            1,
+	"Helm Chart::Resource Management":         4,
+	"Helm Chart::Storage & Persistence":       4,
+	"Helm Chart::Pod Disruption Budget":       4,
+	"Helm Chart::Security Contexts":           3,
+	"Helm Chart::RBAC & Service Accounts":     2,
+	"Helm Chart::Network Policies & Exposure": 5,
+}
+
+// devopsSeverity classifies a check's Metric label for the defect-density
+// chart and the health-score weighting. Metrics not listed default to
+// "medium".
+var devopsSeverity = map[string]string{
+	// Critical — direct host-breakout or credential-exposure primitives.
+	"Secrets in ARG/ENV":           "critical",
+	"privileged: true services":    "critical",
+	"Dangerous cap_add":            "critical",
+	"docker.sock mounted":          "critical",
+	"Secrets in environment":       "critical",
+	"Privileged containers":        "critical",
+	"Dangerous capabilities added": "critical",
+	"Wildcard ClusterRole rules":   "critical",
+
+	// High — privilege / supply-chain hygiene.
+	"Pinned digest (no :latest)":      "high",
+	"Non-root USER":                   "high",
+	"Numeric UID":                     "high",
+	"curl | sh pipes":                 "high",
+	"chmod 777 / world-writable":      "high",
+	"Deprecated K8s API versions":     "high",
+	"runAsNonRoot enforced":           "high",
+	"allowPrivilegeEscalation: false": "high",
+
+	// Medium — build/runtime hardening practices.
+	"RUN instructions":             "medium",
+	"ADD instead of COPY":          "medium",
+	"HEALTHCHECK present":          "medium",
+	"Privileged ports (<1024)":     "medium",
+	"deploy.resources.limits":      "medium",
+	"Ports on 0.0.0.0":             "medium",
+	"Hardcoded namespace":          "medium",
+	"resources.requests defined":   "medium",
+	"resources.limits defined":     "medium",
+	"readOnlyRootFilesystem":       "medium",
+	"seccompProfile set":           "medium",
+	"NetworkPolicy defined":        "medium",
+	"Ingress TLS configured":       "medium",
+	"Dedicated serviceAccountName": "medium",
+
+	// Low — cosmetic / documentation / efficiency.
+	"COPY --chown set":            "low",
+	"Absolute WORKDIR":            "low",
+	"Multi-stage build":           "low",
+	"Layers (RUN/COPY/ADD)":       "low",
+	"apt --no-install-recommends": "low",
+	"apk --no-cache":              "low",
+	"OCI LABELs present":          "low",
+	"Obsolete compose version":    "low",
+	"restart: always usage":       "low",
+	"Custom networks defined":     "low",
+	"Chart.yaml required fields":  "low",
+	"values.schema.json":          "low",
+	"Maintainers & icon metadata": "low",
+	"LoadBalancer services":       "low",
+	"PodDisruptionBudget defined": "low",
+	"emptyDir sizeLimit":          "low",
+	"Signed chart (*.prov)":       "low",
+	"values.yaml documentation":   "low",
+}
+
+func devopsSeverityOf(metric string) string {
+	if s, ok := devopsSeverity[metric]; ok {
+		return s
+	}
+	return "medium"
+}
+
+func devopsSeverityWeight(sev string) float64 {
+	switch sev {
+	case "critical":
+		return 10
+	case "high":
+		return 5
+	case "medium":
+		return 2
+	default:
+		return 1
+	}
+}
+
+// devopsComplianceDomains averages every evaluable check (pass=100, warn=50,
+// fail=0; "na" excluded) into the six devopsDomains buckets. has[i] is false
+// when no artifact contributed an evaluable check to that domain.
+func devopsComplianceDomains(lint *scanner.DevOpsLint) (scores [6]int, has [6]bool) {
+	var pts, n [6]float64
+	for _, a := range []*scanner.DevOpsArtifactLint{lint.Dockerfiles, lint.Compose, lint.Helm} {
+		if a == nil {
+			continue
+		}
+		for _, c := range a.Checks {
+			d, ok := devopsDomainOf[a.Kind+"::"+c.Category]
+			if !ok {
+				continue
+			}
+			switch c.Status {
+			case "pass":
+				pts[d]++
+				n[d]++
+			case "warn":
+				pts[d] += 0.5
+				n[d]++
+			case "fail":
+				n[d]++
+			}
+		}
+	}
+	for i := range scores {
+		if n[i] > 0 {
+			scores[i] = int(pts[i]/n[i]*100 + 0.5)
+			has[i] = true
+		}
+	}
+	return
+}
+
+// devopsDefectCounts tallies non-passing (warn/fail) checks by artifact kind
+// and severity, in [critical, high, medium, low] order. Kinds with zero
+// violations are omitted from the returned order.
+func devopsDefectCounts(lint *scanner.DevOpsLint) (order []string, counts map[string][4]int) {
+	counts = map[string][4]int{}
+	sevIdx := map[string]int{"critical": 0, "high": 1, "medium": 2, "low": 3}
+	for _, a := range []*scanner.DevOpsArtifactLint{lint.Dockerfiles, lint.Compose, lint.Helm} {
+		if a == nil {
+			continue
+		}
+		var c [4]int
+		any := false
+		for _, ch := range a.Checks {
+			if ch.Status != "warn" && ch.Status != "fail" {
+				continue
+			}
+			c[sevIdx[devopsSeverityOf(ch.Metric)]]++
+			any = true
+		}
+		if any {
+			order = append(order, a.Kind)
+			counts[a.Kind] = c
+		}
+	}
+	return
+}
+
+// devopsHealthScore rolls every evaluable check into one severity-weighted
+// 0-100 score (pass=full weight, warn=half, fail=0; "na" excluded), so a
+// mounted docker.sock (critical, weight 10) moves the needle far more than a
+// missing OCI label (low, weight 1).
+func devopsHealthScore(lint *scanner.DevOpsLint) (int, bool) {
+	var pts, total float64
+	for _, a := range []*scanner.DevOpsArtifactLint{lint.Dockerfiles, lint.Compose, lint.Helm} {
+		if a == nil {
+			continue
+		}
+		for _, c := range a.Checks {
+			if c.Status == "na" {
+				continue
+			}
+			w := devopsSeverityWeight(devopsSeverityOf(c.Metric))
+			total += w
+			switch c.Status {
+			case "pass":
+				pts += w
+			case "warn":
+				pts += w / 2
+			}
+		}
+	}
+	if total == 0 {
+		return 0, false
+	}
+	return int(pts/total*100 + 0.5), true
+}
+
+// gradeColor grades a 0-100 score into the shared good/warn/crit palette.
+func gradeColor(score int) string {
+	switch {
+	case score >= 75:
+		return "var(--good)"
+	case score >= 50:
+		return "var(--warn)"
+	default:
+		return "var(--crit)"
+	}
+}
+
+// renderDevOpsCharts renders the three compliance charts (radar, defect
+// density, health gauge) shown above the raw static-analysis matrix.
+func renderDevOpsCharts(lint *scanner.DevOpsLint) string {
+	scores, has := devopsComplianceDomains(lint)
+	kinds, defects := devopsDefectCounts(lint)
+	health, healthOK := devopsHealthScore(lint)
+
+	anyDomain := false
+	for _, h := range has {
+		if h {
+			anyDomain = true
+			break
+		}
+	}
+	if !anyDomain && len(kinds) == 0 && !healthOK {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(`<div class="as-dvo-charts">`)
+
+	b.WriteString(`<div class="as-dvo-chart as-dvo-chart--health"><div class="as-dvo-chart__title">🩺 DevOps Health Score</div>`)
+	if healthOK {
+		b.WriteString(renderHealthGauge(health))
+	} else {
+		b.WriteString(`<p class="as-empty">Not enough evaluable checks.</p>`)
+	}
+	b.WriteString(`<div class="as-dvo-chart__note">Severity-weighted rollup of every evaluable check (critical ×10 … low ×1).</div></div>`)
+
+	b.WriteString(`<div class="as-dvo-chart as-dvo-chart--defect"><div class="as-dvo-chart__title">📊 Defect Density by Artifact</div>`)
+	if len(kinds) > 0 {
+		b.WriteString(renderDefectDensityBars(lint, kinds, defects))
+	} else {
+		b.WriteString(`<p class="as-empty">No failing or warned checks — clean bill of health.</p>`)
+	}
+	b.WriteString(`<div class="as-dvo-chart__note">Non-passing checks per artifact type, stacked by severity.</div></div>`)
+
+	b.WriteString(`<div class="as-dvo-chart as-dvo-chart--radar"><div class="as-dvo-chart__title">🎯 Security &amp; Compliance Radar</div>`)
+	b.WriteString(renderComplianceRadarSVG(scores, has))
+	b.WriteString(renderComplianceDomainList(scores, has))
+	b.WriteString(`<div class="as-dvo-chart__note">Domain average of related checks (pass=100%, warn=50%, fail=0%).</div></div>`)
+
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// renderComplianceRadarSVG draws a static 6-axis spider chart (guide rings +
+// spokes + a filled score polygon) with a shortened, color-graded label at
+// each vertex; the full domain names and exact percentages are listed
+// separately by renderComplianceDomainList.
+func renderComplianceRadarSVG(scores [6]int, has [6]bool) string {
+	const size = 360
+	const cx, cy = size / 2, size/2 + 6
+	const maxR = 94.0
+	n := len(devopsDomains)
+
+	point := func(i int, r float64) (float64, float64) {
+		a := -math.Pi/2 + float64(i)*2*math.Pi/float64(n)
+		return float64(cx) + r*math.Cos(a), float64(cy) + r*math.Sin(a)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, `<svg viewBox="0 0 %d %d" class="as-dvo-radar-svg" role="img" aria-label="Security and compliance radar">`, size, size)
+
+	for _, frac := range []float64{0.25, 0.5, 0.75, 1.0} {
+		var pts []string
+		for i := 0; i < n; i++ {
+			x, y := point(i, maxR*frac)
+			pts = append(pts, fmt.Sprintf("%.1f,%.1f", x, y))
+		}
+		fmt.Fprintf(&b, `<polygon points="%s" fill="none" stroke="var(--border)" stroke-width="1"/>`, strings.Join(pts, " "))
+	}
+	for i := 0; i < n; i++ {
+		x, y := point(i, maxR)
+		fmt.Fprintf(&b, `<line x1="%d" y1="%d" x2="%.1f" y2="%.1f" stroke="var(--border)" stroke-width="1"/>`, cx, cy, x, y)
+	}
+
+	avgSum, avgN := 0, 0
+	var pts []string
+	for i := 0; i < n; i++ {
+		v := 0
+		if has[i] {
+			v = scores[i]
+			avgSum += v
+			avgN++
+		}
+		x, y := point(i, maxR*float64(v)/100)
+		pts = append(pts, fmt.Sprintf("%.1f,%.1f", x, y))
+	}
+	col := "var(--text-faint)"
+	if avgN > 0 {
+		col = gradeColor(avgSum / avgN)
+	}
+	fmt.Fprintf(&b, `<polygon points="%s" fill="%s" fill-opacity="0.22" stroke="%s" stroke-width="2" stroke-linejoin="round"/>`,
+		strings.Join(pts, " "), col, col)
+
+	for i := 0; i < n; i++ {
+		v := 0
+		if has[i] {
+			v = scores[i]
+		}
+		x, y := point(i, maxR*float64(v)/100)
+		fmt.Fprintf(&b, `<circle cx="%.1f" cy="%.1f" r="3" fill="%s"><title>%d. %s%s</title></circle>`,
+			x, y, col, i+1, esc(devopsDomains[i]), domainValueSuffix(scores[i], has[i]))
+	}
+
+	// Shortened vertex labels, color-graded per domain (muted when n/a).
+	const labelR = maxR + 34
+	for i := 0; i < n; i++ {
+		lx, ly := point(i, labelR)
+		anchor := "middle"
+		if lx < float64(cx)-6 {
+			anchor = "end"
+		} else if lx > float64(cx)+6 {
+			anchor = "start"
+		}
+		lcol := "var(--text-faint)"
+		if has[i] {
+			lcol = gradeColor(scores[i])
+		}
+		lines := devopsDomainAxisLines[i]
+		fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" text-anchor="%s" class="as-dvo-radar-axis-label" fill="%s"><title>%s</title>%s</text>`,
+			lx, ly-4, anchor, lcol, esc(devopsDomains[i]), esc(lines[0]))
+		if lines[1] != "" {
+			fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" text-anchor="%s" class="as-dvo-radar-axis-label" fill="%s">%s</text>`,
+				lx, ly+9, anchor, lcol, esc(lines[1]))
+		}
+	}
+
+	b.WriteString(`</svg>`)
+	return b.String()
+}
+
+func domainValueSuffix(score int, has bool) string {
+	if !has {
+		return ": n/a"
+	}
+	return fmt.Sprintf(": %d%%", score)
+}
+
+// renderComplianceDomainList renders the six domains as a compact numbered
+// bar list beneath the radar SVG (mirrors the Danger Index's category-weight
+// list styling).
+func renderComplianceDomainList(scores [6]int, has [6]bool) string {
+	var b strings.Builder
+	b.WriteString(`<div class="as-dvo-dom-list">`)
+	for i, name := range devopsDomains {
+		if !has[i] {
+			fmt.Fprintf(&b, `<div class="as-dvo-dom-row"><span class="as-dvo-dom-num">%d</span>`+
+				`<span class="as-dvo-dom-name" title="%s">%s</span>`+
+				`<div class="as-dvo-dom-track"><div class="as-sec-wb-na" style="width:100%%"></div></div>`+
+				`<span class="as-dvo-dom-val as-dvo-dom-val--na">n/a</span></div>`,
+				i+1, esc(name), esc(name))
+			continue
+		}
+		col := gradeColor(scores[i])
+		fmt.Fprintf(&b, `<div class="as-dvo-dom-row"><span class="as-dvo-dom-num">%d</span>`+
+			`<span class="as-dvo-dom-name" title="%s">%s</span>`+
+			`<div class="as-dvo-dom-track"><div class="as-dvo-dom-fill" style="width:%d%%;background:%s"></div></div>`+
+			`<span class="as-dvo-dom-val" style="color:%s">%d%%</span></div>`,
+			i+1, esc(name), esc(name), scores[i], col, col, scores[i])
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// devopsKindIcon maps a DevOpsArtifactLint.Kind to its column icon.
+func devopsKindIcon(lint *scanner.DevOpsLint, kind string) string {
+	for _, a := range []*scanner.DevOpsArtifactLint{lint.Dockerfiles, lint.Compose, lint.Helm} {
+		if a != nil && a.Kind == kind {
+			return a.Icon
+		}
+	}
+	return "•"
+}
+
+// renderDefectDensityBars renders one stacked horizontal bar per artifact
+// kind: segment width is proportional to that severity's share of the
+// largest kind's total, so both composition (which severities dominate) and
+// relative volume (which artifact type carries the most debt) read at a
+// glance.
+func renderDefectDensityBars(lint *scanner.DevOpsLint, order []string, counts map[string][4]int) string {
+	maxTotal := 1
+	for _, k := range order {
+		c := counts[k]
+		total := c[0] + c[1] + c[2] + c[3]
+		if total > maxTotal {
+			maxTotal = total
+		}
+	}
+	sevClass := [4]string{"fill-crit", "fill-bad", "fill-warn", "as-dvo-sev-low"}
+	sevLabel := [4]string{"Critical", "High", "Medium", "Low"}
+
+	var b strings.Builder
+	b.WriteString(`<div class="as-dvo-defect-list">`)
+	for _, k := range order {
+		c := counts[k]
+		total := c[0] + c[1] + c[2] + c[3]
+		fmt.Fprintf(&b, `<div class="as-dvo-defect-row"><span class="as-dvo-defect-icon">%s</span>`+
+			`<span class="as-dvo-defect-name" title="%s">%s</span><div class="as-dvo-defect-track">`,
+			devopsKindIcon(lint, k), esc(k), esc(k))
+		for i, n := range c {
+			if n == 0 {
+				continue
+			}
+			pct := float64(n) / float64(maxTotal) * 100
+			fmt.Fprintf(&b, `<div class="as-dvo-defect-seg %s" style="width:%.1f%%" title="%s: %d"></div>`,
+				sevClass[i], pct, sevLabel[i], n)
+		}
+		fmt.Fprintf(&b, `</div><span class="as-dvo-defect-total">%d</span></div>`, total)
+	}
+	b.WriteString(`</div>`)
+	b.WriteString(`<div class="as-dvo-defect-legend">`)
+	for i, label := range sevLabel {
+		fmt.Fprintf(&b, `<span><i class="%s"></i>%s</span>`, sevClass[i], label)
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// renderHealthGauge draws a static semicircle gauge (0-100) for the
+// severity-weighted DevOps health score.
+func renderHealthGauge(score int) string {
+	const w, h = 200, 116
+	const r, cx, cy = 80.0, 100.0, 100.0
+	pct := math.Min(math.Max(float64(score)/100, 0.001), 0.999)
+	ang := math.Pi * (1 - pct)
+	ex := cx + r*math.Cos(ang)
+	ey := cy - r*math.Sin(ang)
+	col := gradeColor(score)
+
+	band, cls := "At Risk", "crit"
+	switch {
+	case score >= 80:
+		band, cls = "Strong", "good"
+	case score >= 50:
+		band, cls = "Needs Attention", "warn"
+	}
+
+	var b strings.Builder
+	b.WriteString(`<div class="as-dvo-gauge-wrap">`)
+	fmt.Fprintf(&b, `<svg viewBox="0 0 %d %d" class="as-dvo-gauge-svg" role="img" aria-label="DevOps health score gauge">`, w, h)
+	fmt.Fprintf(&b, `<path d="M %g,%g A %g,%g 0 0 1 %g,%g" fill="none" stroke="var(--border)" stroke-width="14" stroke-linecap="round"/>`,
+		cx-r, cy, r, r, cx+r, cy)
+	fmt.Fprintf(&b, `<path d="M %g,%g A %g,%g 0 0 1 %.2f,%.2f" fill="none" stroke="%s" stroke-width="14" stroke-linecap="round"/>`,
+		cx-r, cy, r, r, ex, ey, col)
+	fmt.Fprintf(&b, `<text x="%g" y="%g" text-anchor="middle" class="as-dvo-gauge-val" fill="%s">%d%%</text>`, cx, cy-8, col, score)
+	b.WriteString(`</svg>`)
+	fmt.Fprintf(&b, `<div class="as-dvo-gauge-band band-%s">%s</div>`, cls, esc(band))
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// ── 📡 Technical Radar ───────────────────────────────────────────────────────
+
+// radarRingColors are the fill/stroke colors for rings 0..3 (Adopt..Hold),
+// matching the .as-radar-chip--N badge palette in theme.go.
+var radarRingColors = [4]string{"var(--good)", "#00b8cc", "var(--warn)", "var(--crit)"}
+
+// radarRings classifies known technology labels into radar rings:
+// 0=Adopt (green), 1=Trial (teal), 2=Assess (yellow), 3=Hold (red).
+// Technologies not listed default to Trial (1).
+var radarRings = map[string]int{
+	// Adopt — proven, use by default
+	"Go": 0, "Python": 0, "Rust": 0, "Swift": 0, "Kotlin": 0, "Java": 0,
+	"TypeScript / JS": 0, "JavaScript": 0,
+	"React": 0, "React Native": 0,
+	"net/http": 0, "gRPC": 0, "Protobuf": 0,
+	"PostgreSQL": 0, "Redis": 0, "Elasticsearch": 0, "Kafka": 0,
+	"OpenTelemetry": 0, "Prometheus": 0,
+	"Django REST Framework": 0, "FastAPI": 0,
+	"Testify": 0, "pytest": 0,
+	"SwiftUI": 0, "UIKit": 0,
+	"Jetpack Compose": 0,
+	// Trial — try in a pilot project
+	"Next.js": 1, "Tailwind CSS": 1, "Expo": 1, "Redux": 1,
+	"Vue": 1, "Nuxt": 1, "Svelte": 1,
+	"Gin": 1, "Chi": 1, "Echo": 1, "Fiber": 1, "Gorilla Mux": 1,
+	"Cobra": 1,
+	"MinIO": 1, "MongoDB": 1, "RabbitMQ": 1,
+	"Grafana": 1, "Jaeger": 1,
+	"Requests": 1, "Axios": 1, "HTTPx": 1,
+	"Celery": 1, "Dramatiq": 1,
+	"SQLAlchemy": 1, "SQLModel": 1, "GORM": 1,
+	"NumPy": 1, "pandas": 1, "SciPy": 1,
+	"Zap": 1, "slog": 1, "Logrus": 1,
+	"Spring Boot": 1, "Spring": 1, "Ktor": 1,
+	"Actix-web": 1, "Axum": 1, "Tokio": 1,
+	// Assess — research before committing
+	"Ant Design": 2, "Dash": 2, "MUI": 2, "Chakra UI": 2, "Streamlit": 2,
+	"Django": 2, "Flask": 2, "Express": 2, "NestJS": 2,
+	"Angular": 2, "SolidJS": 2, "Astro": 2,
+	"Click": 2, "Uvicorn": 2, "Starlette": 2,
+	"NATS": 2, "Redis Pub/Sub": 2, "Apache Pulsar": 2,
+	"Matplotlib": 2, "Plotly": 2, "Seaborn": 2,
+	"Day.js": 2, "Lodash": 2,
+	"MySQL driver": 2, "Prisma": 2, "TypeORM": 2,
+	"TensorFlow": 2, "PyTorch": 2,
+	"Datadog": 2, "New Relic": 2, "Zipkin": 2,
+	// Hold — avoid, plan to replace
+	"Moment.js": 3, "jQuery": 3, "Bootstrap": 3,
+	"log": 3, "Log4j": 3,
+	"Objective-C":           3,
+	"AMQP":                  3,
+	"Java Standard Library": 3,
+}
+
+func radarRingFor(label string) int {
+	if r, ok := radarRings[label]; ok {
+		return r
+	}
+	return 1 // unknown technology → Trial
+}
+
+// radarChip is one detected technology or pattern placed on the radar.
+type radarChip struct {
+	label string
+	ring  int
+}
+
+// radarCategory is one tech-stack category row (as-stack grouping key + its
+// display title).
+type radarCategory struct{ key, title string }
+
+// radarQuadrants are the four aoe_technology_radar-style quadrants: a corner
+// title plus an accent color used for its label and background corner glow.
+// Order is fixed — index doubles as the quadrant position (0=top-left,
+// 1=top-right, 2=bottom-left, 3=bottom-right).
+var radarQuadrants = [4]struct{ title, color string }{
+	{"Tools", "#4ea1ff"},
+	{"Languages & Frameworks", "#a371f7"},
+	{"Platforms & Operations", "#39c5cf"},
+	{"Methods & Patterns", "#db61a2"},
+}
+
+// radarQuadLines is the (up to) two-line wrapped label drawn in each
+// quadrant's outer corner (SVG text has no auto-wrap).
+var radarQuadLines = [4][2]string{
+	{"TOOLS", ""},
+	{"LANGUAGES", "& FRAMEWORKS"},
+	{"PLATFORMS", "& OPERATIONS"},
+	{"METHODS", "& PATTERNS"},
+}
+
+// dispCatQuadrant maps a tech-stack category key onto a radarQuadrants index.
+var dispCatQuadrant = map[string]int{
+	"languages": 1, "frontend": 1, "backend": 1,
+	"data": 2, "brokers": 2,
+	"linters": 0,
+}
+
+// techPatternMatches merges Gang-of-Four design-pattern detections across
+// every platform's module panel into one de-duplicated, repo-wide chip list
+// for the Methods & Patterns quadrant. RawResult is the same opaque
+// per-module result other cross-module joins already rely on (see the
+// traffic/dddmodel/arch lookups above).
+func techPatternMatches(res *result.AnalysisResult) []radarChip {
+	counts := map[string]int{}
+	var order []string
+	for _, p := range res.ModulePanels {
+		if p.ModuleID != "designpattern" {
+			continue
+		}
+		r, ok := p.RawResult.(designpattern.Result)
+		if !ok {
+			continue
+		}
+		for _, m := range r.Matches {
+			if _, seen := counts[m.Pattern]; !seen {
+				order = append(order, m.Pattern)
+			}
+			counts[m.Pattern] += m.Count
+		}
+	}
+	sort.Strings(order)
+	chips := make([]radarChip, 0, len(order))
+	for _, name := range order {
+		chips = append(chips, radarChip{label: name, ring: radarRingFor(name)})
+	}
+	return chips
+}
+
+// renderTechRadarSection renders a static, full-content-width SVG adoption
+// radar in the aoe_technology_radar house style: cross-divided quadrants
+// (Tools / Languages & Frameworks / Platforms & Operations / Methods &
+// Patterns) with a corner accent glow, concentric Adopt→Hold rings, and every
+// detected chip plotted as a small blip inside its quadrant at its ring's
+// radius. The same chips are listed as text underneath, grouped by quadrant
+// then category, for full legibility.
+func renderTechRadarSection(res *result.AnalysisResult) string {
+	catSets := techCategorySets(res)
+
+	// Collect languages from parsed files.
+	langs := map[string]bool{}
+	for _, f := range res.Files {
+		if lbl, ok := langLabels[f.LanguageID]; ok {
+			langs[lbl] = true
+		}
+	}
+
+	dispCats := []radarCategory{
+		{"languages", "Languages"},
+		{"frontend", "Frontend"},
+		{"backend", "Backend"},
+		{"data", "Data"},
+		{"brokers", "Brokers"},
+		{"linters", "Monitoring"},
+	}
+	catChips := map[string][]radarChip{}
+	for lbl := range langs {
+		catChips["languages"] = append(catChips["languages"], radarChip{lbl, radarRingFor(lbl)})
+	}
+	for cat, techs := range catSets {
+		for tech := range techs {
+			catChips[cat] = append(catChips[cat], radarChip{tech, radarRingFor(tech)})
+		}
+	}
+	ringNames := [4]string{"Adopt", "Trial", "Assess", "Hold"}
+	for cat := range catChips {
+		sort.Slice(catChips[cat], func(i, j int) bool {
+			if catChips[cat][i].ring != catChips[cat][j].ring {
+				return catChips[cat][i].ring < catChips[cat][j].ring
+			}
+			return catChips[cat][i].label < catChips[cat][j].label
+		})
+	}
+	patternChips := techPatternMatches(res)
+
+	hasAnyChip := len(patternChips) > 0
+	for _, dc := range dispCats {
+		if len(catChips[dc.key]) > 0 {
+			hasAnyChip = true
+			break
+		}
+	}
+	if !hasAnyChip {
+		return ""
+	}
+
+	// Quadrant groups, each holding its category sub-rows — the same
+	// grouping used to plot the blips on the radar, kept fully legible.
+	var quadCats [4][]radarCategory
+	for _, dc := range dispCats {
+		q := dispCatQuadrant[dc.key]
+		quadCats[q] = append(quadCats[q], dc)
+	}
+
+	renderQuadGroup := func(qi int) string {
+		quad := radarQuadrants[qi]
+		hasContent := qi == 3 && len(patternChips) > 0
+		for _, dc := range quadCats[qi] {
+			if len(catChips[dc.key]) > 0 {
+				hasContent = true
+			}
+		}
+		if !hasContent {
+			return ""
+		}
+		var qb strings.Builder
+		fmt.Fprintf(&qb, `<div class="as-radar-quad-group"><div class="as-radar-quad-group__title" style="color:%s">%s</div>`,
+			quad.color, esc(quad.title))
+		for _, dc := range quadCats[qi] {
+			chips := catChips[dc.key]
+			if len(chips) == 0 {
+				continue
+			}
+			fmt.Fprintf(&qb, `<div class="as-radar-row"><span class="as-radar-row__label">%s</span><div class="as-radar-row__chips">`, esc(dc.title))
+			for _, ch := range chips {
+				fmt.Fprintf(&qb, `<span class="as-radar-chip as-radar-chip--%d" title="%s">%s</span>`, ch.ring, esc(ringNames[ch.ring]), esc(ch.label))
+			}
+			qb.WriteString(`</div></div>`)
+		}
+		if qi == 3 && len(patternChips) > 0 {
+			qb.WriteString(`<div class="as-radar-row"><span class="as-radar-row__label">Design Patterns</span><div class="as-radar-row__chips">`)
+			for _, ch := range patternChips {
+				fmt.Fprintf(&qb, `<span class="as-radar-chip as-radar-chip--%d" title="%s">%s</span>`, ch.ring, esc(ringNames[ch.ring]), esc(ch.label))
+			}
+			qb.WriteString(`</div></div>`)
+		}
+		qb.WriteString(`</div>`)
+		return qb.String()
+	}
+
+	// Sandwich layout: the top quadrants' (Tools, Languages & Frameworks)
+	// chip rows sit above the radar, the bottom quadrants' (Platforms &
+	// Operations, Methods & Patterns) sit below it — mirroring the radar's
+	// own top/bottom quadrant split.
+	top := renderQuadGroup(0) + renderQuadGroup(1)
+	bottom := renderQuadGroup(2) + renderQuadGroup(3)
+
+	var b strings.Builder
+	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">📡</span><h2>Technical Radar</h2></div>`)
+	b.WriteString(`<div class="as-section__sub" style="margin-top:0">Detected technologies placed on an adoption radar — Adopt (center, safe default) to Hold (rim, avoid/replace) — across four quadrants: tools, languages &amp; frameworks, platforms &amp; operations, and methods &amp; patterns.</div>`)
+
+	if top != "" {
+		b.WriteString(`<div class="as-radar-quads">`)
+		b.WriteString(top)
+		b.WriteString(`</div>`)
+	}
+
+	b.WriteString(`<div class="as-radar">`)
+	b.WriteString(renderTechRadarQuadrantSVG(catChips, dispCats, patternChips))
+	b.WriteString(`</div>`)
+
+	if bottom != "" {
+		b.WriteString(`<div class="as-radar-quads">`)
+		b.WriteString(bottom)
+		b.WriteString(`</div>`)
+	}
+
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// renderTechRadarQuadrantSVG draws a full-width square radar: a per-quadrant
+// corner glow + cross divider (aoe_technology_radar's gradient/quadrant
+// style), neutral concentric Adopt→Hold guide rings, corner quadrant titles,
+// and every chip plotted as a small ring-colored blip inside its quadrant at
+// the radius for its ring. Chips within the same quadrant+ring band are
+// spread evenly across that band's 90° arc so they don't stack exactly on
+// top of one another.
+func renderTechRadarQuadrantSVG(catChips map[string][]radarChip, dispCats []radarCategory, patternChips []radarChip) string {
+	const size = 400.0
+	const cx, cy = size / 2, size / 2
+	const outerR = 186.0
+	ringR := [4]float64{outerR * 0.34, outerR * 0.6, outerR * 0.82, outerR}
+	ringInner := [4]float64{0, ringR[0], ringR[1], ringR[2]}
+	stageNames := [4]string{"Adopt", "Trial", "Assess", "Hold"}
+
+	// quadStart[i] is the starting angle (degrees; 0=+x/east, increasing
+	// clockwise since SVG y grows downward) of radarQuadrants[i]'s 90° arc.
+	quadStart := [4]float64{180, 270, 90, 0}
+	// quadRect is the (x,y) top-left of the square housing that quadrant's
+	// corner glow — same rect AOE's Chart.tsx anchors renderGlow to.
+	quadRect := [4][2]float64{{0, 0}, {cx, 0}, {0, cy}, {cx, cy}}
+	quadCorner := [4][2]string{{"0%", "0%"}, {"100%", "0%"}, {"0%", "100%"}, {"100%", "100%"}}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, `<svg viewBox="0 0 %g %g" class="as-radar-svg" role="img" `+
+		`aria-label="Technology adoption radar with tools, languages and frameworks, platforms and operations, and methods and patterns quadrants">`, size, size)
+
+	b.WriteString(`<defs>`)
+	for i, q := range radarQuadrants {
+		fmt.Fprintf(&b, `<radialGradient id="as-radar-q%d" cx="%s" cy="%s" r="80%%">`+
+			`<stop offset="0%%" stop-color="%s" stop-opacity=".22"/>`+
+			`<stop offset="100%%" stop-color="%s" stop-opacity="0"/></radialGradient>`,
+			i, quadCorner[i][0], quadCorner[i][1], q.color, q.color)
+	}
+	b.WriteString(`</defs>`)
+	for i := range radarQuadrants {
+		fmt.Fprintf(&b, `<rect x="%g" y="%g" width="%g" height="%g" fill="url(#as-radar-q%d)"/>`,
+			quadRect[i][0], quadRect[i][1], cx, cy, i)
+	}
+
+	// Concentric guide rings (neutral — maturity is carried by blip color).
+	// vector-effect keeps the stroke a constant few px regardless of how
+	// large the SVG is scaled up to; width tapers from the innermost ring
+	// (thicker) to the outermost (thinner), echoing aoe_technology_radar's
+	// own ring weight.
+	ringStroke := [4]float64{1.6, 1.3, 1, 0.75}
+	for i, r := range ringR {
+		fmt.Fprintf(&b, `<circle cx="%g" cy="%g" r="%.1f" fill="none" stroke="var(--border-strong)" stroke-opacity="0.6" stroke-width="%g" vector-effect="non-scaling-stroke"/>`, cx, cy, r, ringStroke[i])
+	}
+	// Cross divider spanning the outer ring's diameter.
+	fmt.Fprintf(&b, `<line x1="%g" y1="%g" x2="%g" y2="%g" stroke="var(--border-strong)" stroke-width="1" vector-effect="non-scaling-stroke"/>`, cx-outerR, cy, cx+outerR, cy)
+	fmt.Fprintf(&b, `<line x1="%g" y1="%g" x2="%g" y2="%g" stroke="var(--border-strong)" stroke-width="1" vector-effect="non-scaling-stroke"/>`, cx, cy-outerR, cx, cy+outerR)
+
+	// Ring labels on the horizontal axis (left/right mirrored, ADOPT nearest
+	// center growing out to HOLD at the rim), colored by ring for quick
+	// scanning, sitting just above the divider line.
+	prev := 0.0
+	for i, r := range ringR {
+		mid := (prev + r) / 2
+		prev = r
+		fmt.Fprintf(&b, `<text x="%.1f" y="%g" class="as-radar-ring-label" fill="%s" text-anchor="middle">%s</text>`,
+			cx-mid, cy-6, radarRingColors[i], strings.ToUpper(stageNames[i]))
+		fmt.Fprintf(&b, `<text x="%.1f" y="%g" class="as-radar-ring-label" fill="%s" text-anchor="middle">%s</text>`,
+			cx+mid, cy-6, radarRingColors[i], strings.ToUpper(stageNames[i]))
+	}
+
+	// Quadrant corner titles.
+	labelX := [4]float64{14, size - 14, 14, size - 14}
+	labelAnchor := [4]string{"start", "end", "start", "end"}
+	labelY := [4][2]float64{{18, 30}, {18, 30}, {size - 30, size - 18}, {size - 30, size - 18}}
+	for i, q := range radarQuadrants {
+		lines := radarQuadLines[i]
+		fmt.Fprintf(&b, `<text x="%g" y="%g" text-anchor="%s" class="as-radar-quad-label" fill="%s">%s</text>`,
+			labelX[i], labelY[i][0], labelAnchor[i], q.color, lines[0])
+		if lines[1] != "" {
+			fmt.Fprintf(&b, `<text x="%g" y="%g" text-anchor="%s" class="as-radar-quad-label" fill="%s">%s</text>`,
+				labelX[i], labelY[i][1], labelAnchor[i], q.color, lines[1])
+		}
+	}
+
+	// Bucket every chip by (quadrant, ring) then spread each bucket evenly
+	// across that ring band's 90° arc within the quadrant.
+	type bucketKey struct{ quad, ring int }
+	buckets := map[bucketKey][]string{}
+	add := func(quad, ring int, label string) {
+		buckets[bucketKey{quad, ring}] = append(buckets[bucketKey{quad, ring}], label)
+	}
+	for _, dc := range dispCats {
+		quad := dispCatQuadrant[dc.key]
+		for _, ch := range catChips[dc.key] {
+			add(quad, ch.ring, ch.label)
+		}
+	}
+	for _, ch := range patternChips {
+		add(3, ch.ring, ch.label)
+	}
+
+	for quad := 0; quad < 4; quad++ {
+		for ring := 0; ring < 4; ring++ {
+			labels := buckets[bucketKey{quad, ring}]
+			n := len(labels)
+			if n == 0 {
+				continue
+			}
+			bandMid := (ringInner[ring] + ringR[ring]) / 2
+			for i, lbl := range labels {
+				frac := (float64(i) + 0.5) / float64(n)
+				angle := (quadStart[quad] + frac*90) * math.Pi / 180
+				r := bandMid + bandMid*0.12*float64((i%3)-1)
+				x := cx + r*math.Cos(angle)
+				y := cy + r*math.Sin(angle)
+				fmt.Fprintf(&b, `<circle cx="%.1f" cy="%.1f" r="2.4" fill="%s" stroke="var(--bg-elev)" stroke-width="1" vector-effect="non-scaling-stroke"><title>%s — %s</title></circle>`,
+					x, y, radarRingColors[ring], esc(lbl), stageNames[ring])
+				// Alternate the label above/below its dot (close to the dot
+				// edge) so items packed into the same small ring band don't
+				// all stack their text in a single overlapping line.
+				ly := y + 5.5
+				if i%2 == 1 {
+					ly = y - 3.5
+				}
+				fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" text-anchor="middle" class="as-radar-blip-label" fill="var(--text-dim)">%s</text>`,
+					x, ly, esc(lbl))
+			}
+		}
+	}
+
+	b.WriteString(`</svg>`)
 	return b.String()
 }
 
@@ -1334,7 +2287,15 @@ func renderTabs(res *result.AnalysisResult) string {
 		// ── Card body (full platform panel) ───────────────────────────────
 		// id="p{i}" keeps compatibility with existing JS that uses [id^="p"]
 		fmt.Fprintf(&b, `<div class="as-plat-card__body" id="p%d">`, i)
+		b.WriteString(`<div class="as-plat-view-toggle">` +
+			`<button class="as-seg-btn as-seg-btn--active" data-view="html">HTML</button>` +
+			`<button class="as-seg-btn" data-view="md">MD</button>` +
+			`</div>`)
+		b.WriteString(`<div class="as-plat-view as-plat-view--html">`)
 		b.WriteString(renderPlatformPanel(res, pg))
+		b.WriteString(`</div>`)
+		fmt.Fprintf(&b, `<pre class="as-plat-view as-plat-view--md" style="display:none">%s</pre>`,
+			esc(markdown.RenderPlatform(res, pg)))
 		b.WriteString(`</div>`) // .as-plat-card__body
 		b.WriteString(`</div>`) // .as-plat-card
 	}

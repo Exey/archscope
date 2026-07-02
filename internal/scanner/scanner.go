@@ -55,6 +55,7 @@ type ScanResult struct {
 	Technologies   []string               // tech detected from docker-compose/go.mod/Makefile
 	DockerServices []string               // service names from docker-compose files
 	DevOpsTools    []DevOpsTool           // CI/CD, container, orchestration tools
+	DevOpsLint     *DevOpsLint            // static analysis of Dockerfiles / compose / Helm (nil when none found)
 	FolderAsTab    bool                   // true when --folder-as-tab was used
 }
 
@@ -193,6 +194,7 @@ func Scan(rootPath string, cfg config.Config, reg *langspec.Registry) (*ScanResu
 
 	res.DockerServices, res.Technologies = ScanDockerCompose(abs)
 	res.DevOpsTools = ScanDevOps(abs)
+	res.DevOpsLint = ScanDevOpsLint(abs)
 	res.FolderAsTab = cfg.FolderAsTab
 
 	return res, nil

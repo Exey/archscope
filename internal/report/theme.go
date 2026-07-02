@@ -7,7 +7,7 @@
 package report
 
 // Version is the tool version surfaced in the report header and SARIF driver.
-const Version = "26.6.18"
+const Version = "26.7.3"
 
 // CSS is the full stylesheet, including dark (default) and light themes and the
 // class vocabulary emitted by report modules (.as-arch__*, .as-dp__*, etc.).
@@ -60,8 +60,6 @@ code,.mono{font-family:var(--mono)}
 .as-theme-seg{display:flex;border:1px solid var(--border-strong);border-radius:999px;overflow:hidden}
 .as-seg-btn{background:var(--bg-elev);color:var(--text-faint);border:none;padding:6px 11px;cursor:pointer;font-size:13px;line-height:1;transition:background .15s,color .15s}
 .as-seg-btn--active{background:var(--accent-dim);color:var(--text)}
-.as-save-btn{font-size:12px;padding:6px 12px}
-.as-save-btn--ok{border-color:var(--green,#3fb950)!important;color:var(--green,#3fb950)!important}
 .as-toggle{
   border:1px solid var(--border-strong); background:var(--bg-elev); color:var(--text);
   border-radius:999px; padding:7px 12px; cursor:pointer; font-size:13px; line-height:1;
@@ -512,8 +510,101 @@ a.as-chip:hover{opacity:.8}
 .as-plat-card__chevron{color:var(--text-faint);font-size:20px;font-weight:300;transition:transform .2s;display:inline-block;line-height:1;margin-left:2px}
 .as-plat-card--open .as-plat-card__chevron{transform:rotate(90deg)}
 .as-plat-card__body{display:none;padding:4px 16px 16px;border-top:1px solid var(--border)}
+.as-plat-view-toggle{display:inline-flex;border:1px solid var(--border-strong);border-radius:999px;overflow:hidden;margin:12px 0 4px}
+.as-plat-view--md{white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:11.5px;line-height:1.5;
+  color:var(--text-dim);background:var(--bg-inset);border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:14px;margin:0;max-height:80vh;overflow:auto}
 .as-plat-card--open .as-plat-card__body{display:block}
 
+/* ☁️ DevOps static-analysis matrix (compact) */
+.as-dvo-score{margin-left:auto;font-family:var(--mono);font-size:12px;font-weight:700;padding:2px 9px;border-radius:10px;border:1px solid var(--border)}
+.as-dvo-score--good{color:var(--good);background:var(--good-bg)}
+.as-dvo-score--warn{color:var(--warn);background:var(--warn-bg)}
+.as-dvo-score--crit{color:var(--crit)}
+.as-dvo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;align-items:start}
+.as-dvo-col{background:var(--bg-inset);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;min-width:0}
+.as-dvo-col__head{font-size:13px;font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.as-dvo-col__files{margin-left:auto;font-family:var(--mono);font-size:10.5px;font-weight:400;color:var(--text-faint);cursor:default}
+.as-dvo-cat{color:var(--text-faint);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;margin:8px 0 3px}
+.as-dvo-row{display:flex;align-items:center;gap:7px;padding:1.5px 0;font-size:12px;line-height:1.35;min-width:0}
+.as-dvo-m{color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.as-dvo-v{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--text-faint);white-space:nowrap;flex-shrink:0}
+.as-dvo-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.as-dvo-dot--pass{background:var(--good)}
+.as-dvo-dot--warn{background:var(--warn)}
+.as-dvo-dot--fail{background:var(--crit)}
+.as-dvo-dot--na{background:transparent;border:1.5px solid var(--text-faint);opacity:.55}
+
+/* ☁️ DevOps compliance charts (radar · defect density · health gauge) */
+/* 2-column layout: health gauge + defect density stacked on the left, the
+   taller compliance radar spanning both rows on the right. */
+.as-dvo-charts{display:grid;grid-template-columns:1fr 1.15fr;grid-template-rows:auto auto;
+  grid-template-areas:"health radar" "defect radar";gap:14px;margin:14px 0 4px}
+.as-dvo-chart--health{grid-area:health}
+.as-dvo-chart--defect{grid-area:defect}
+.as-dvo-chart--radar{grid-area:radar;display:flex;flex-direction:column}
+@media (max-width:720px){
+  .as-dvo-charts{grid-template-columns:1fr;grid-template-areas:"radar" "health" "defect"}
+}
+.as-dvo-chart{background:var(--bg-inset);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px}
+.as-dvo-chart__title{font-size:11.5px;font-weight:600;color:var(--text-faint);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+.as-dvo-chart__note{font-size:10.5px;color:var(--text-faint);margin-top:12px;line-height:1.4}
+/* Compliance radar */
+.as-dvo-radar-svg{width:100%;max-width:340px;display:block;margin:0 auto}
+.as-dvo-radar-axis-label{font-size:10px;font-weight:600;font-family:var(--mono)}
+.as-dvo-dom-list{margin-top:6px}
+.as-dvo-dom-row{display:flex;align-items:center;gap:7px;margin-top:5px}
+.as-dvo-dom-num{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;
+  font-size:9px;font-weight:700;font-family:var(--mono);background:var(--bg-elev-2);color:var(--text-faint);flex-shrink:0}
+.as-dvo-dom-name{font-size:10.5px;color:var(--text-dim);flex:0 0 128px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.as-dvo-dom-track{flex:1;height:5px;background:var(--bg-elev-2);border-radius:3px;overflow:hidden;min-width:30px}
+.as-dvo-dom-fill{height:100%;border-radius:3px}
+.as-dvo-dom-val{font-family:var(--mono);font-size:10px;font-weight:600;min-width:32px;text-align:right;flex-shrink:0}
+.as-dvo-dom-val--na{color:var(--text-faint);font-weight:400;font-style:italic}
+/* Defect density */
+.as-dvo-defect-list{margin-top:2px}
+.as-dvo-defect-row{display:flex;align-items:center;gap:8px;margin-top:10px}
+.as-dvo-defect-name{font-size:11px;color:var(--text-dim);flex:0 0 106px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.as-dvo-defect-track{flex:1;height:13px;background:var(--bg-elev-2);border-radius:4px;overflow:hidden;display:flex;min-width:40px}
+.as-dvo-defect-seg{height:100%}
+.as-dvo-sev-low{background:var(--text-faint)}
+.as-dvo-defect-total{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text-dim);min-width:18px;text-align:right;flex-shrink:0}
+.as-dvo-defect-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+.as-dvo-defect-legend span{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--text-faint)}
+.as-dvo-defect-legend i{width:8px;height:8px;border-radius:2px;display:inline-block}
+/* Health gauge */
+.as-dvo-gauge-wrap{text-align:center}
+.as-dvo-gauge-svg{width:100%;max-width:180px;display:block;margin:0 auto}
+.as-dvo-gauge-val{font-family:var(--mono);font-size:22px;font-weight:700}
+.as-dvo-gauge-band{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:6px;margin-top:2px}
+
+/* 📡 Technical Radar (static SVG quadrant radar + tech chips) */
+.as-radar{position:relative;margin-bottom:18px}
+.as-radar-svg{width:100%;height:auto;aspect-ratio:1/1;display:block;
+  border-radius:8px;box-shadow:0 4px 24px rgba(0,0,0,.18)}
+.as-radar-ring-label{font-size:4.5px;font-weight:700;font-family:var(--mono);letter-spacing:.05em;opacity:.9}
+.as-radar-quad-label{font-size:7px;font-weight:700;font-family:var(--mono);letter-spacing:.04em;opacity:.9}
+.as-radar-blip-label{font-size:3.5px;font-family:var(--mono);opacity:.85}
+/* Quadrant groups sandwich the radar: 2 columns mirroring its own layout —
+   Tools / Languages & Frameworks above (its top quadrants), Platforms &
+   Operations / Methods & Patterns below (its bottom quadrants). */
+.as-radar-quads{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 24px;margin-bottom:16px}
+@media (max-width:480px){.as-radar-quads{grid-template-columns:1fr}}
+.as-radar-quad-group{padding-top:4px;min-width:0}
+.as-radar-quad-group__title{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+  margin-bottom:9px;padding-bottom:5px;border-bottom:1px solid var(--border)}
+/* Tech ring chips */
+.as-radar-row{display:flex;align-items:flex-start;gap:12px;margin-bottom:8px;margin-left:2px}
+.as-radar-row__label{font-size:11px;font-weight:600;color:var(--text-faint);text-transform:uppercase;
+  letter-spacing:.06em;min-width:96px;padding-top:3px;flex-shrink:0}
+.as-radar-row__chips{display:flex;flex-wrap:wrap;gap:5px}
+.as-radar-chip{font-size:11.5px;padding:2px 9px;border-radius:999px;font-family:var(--mono);
+  font-weight:500;cursor:default;white-space:nowrap}
+.as-radar-chip--0{background:rgba(63,185,80,.14);color:var(--good);border:1px solid rgba(63,185,80,.28)}
+.as-radar-chip--1{background:rgba(0,158,176,.14);color:#00b8cc;border:1px solid rgba(0,158,176,.28)}
+.as-radar-chip--2{background:rgba(210,153,34,.14);color:var(--warn);border:1px solid rgba(210,153,34,.28)}
+.as-radar-chip--3{background:rgba(248,81,73,.12);color:var(--crit);border:1px solid rgba(248,81,73,.28)}
+[data-theme="light"] .as-radar-chip--1{color:#007a85;border-color:rgba(0,120,130,.3);background:rgba(0,120,130,.1)}
 `
 
 // JS toggles the color theme (persisted only in-memory per session — no
@@ -533,25 +624,6 @@ const JS = `
     }
     if(dark){dark.addEventListener('click',function(){setTheme(false);});}
     if(light){light.addEventListener('click',function(){setTheme(true);});}
-  })();
-  // HTML / MD save buttons
-  (function(){
-    function saveBlob(blob,name){var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(function(){URL.revokeObjectURL(a.href);},5000);}
-    function flash(btn){btn.classList.add('as-save-btn--ok');var t=btn.textContent;btn.textContent='Saved ✓';setTimeout(function(){btn.classList.remove('as-save-btn--ok');btn.textContent=t;},1800);}
-    var htmlBtn=document.getElementById('as-save-html');
-    if(htmlBtn){htmlBtn.addEventListener('click',function(){
-      var name=htmlBtn.getAttribute('data-filename')||'archscope.html';
-      saveBlob(new Blob([document.documentElement.outerHTML],{type:'text/html'}),name);
-      flash(htmlBtn);
-    });}
-    var mdBtn=document.getElementById('as-save-md');
-    if(mdBtn){mdBtn.addEventListener('click',function(){
-      var name=mdBtn.getAttribute('data-filename')||'archscope.md';
-      var parts=[];
-      document.querySelectorAll('.as-prompt__content').forEach(function(el){parts.push(el.textContent);});
-      saveBlob(new Blob([parts.join('\n\n---\n\n')],{type:'text/markdown'}),name);
-      flash(mdBtn);
-    });}
   })();
   // Security platform card → open accordion + scroll to danger section
   document.addEventListener('click',function(e){
@@ -669,6 +741,21 @@ const JS = `
     if(!wasOpen)card.classList.add('as-plat-card--open');
   });
 
+
+  // ── Per-platform HTML/MD view toggle ──────────────────────────────────────
+  document.addEventListener('click',function(e){
+    var btn=e.target.closest('.as-plat-view-toggle button');
+    if(!btn)return;
+    var body=btn.closest('.as-plat-card__body');
+    if(!body)return;
+    var view=btn.getAttribute('data-view');
+    body.querySelectorAll('.as-plat-view-toggle button').forEach(function(b){
+      b.classList.toggle('as-seg-btn--active',b===btn);
+    });
+    body.querySelectorAll(':scope > .as-plat-view').forEach(function(v){
+      v.style.display=v.classList.contains('as-plat-view--'+view)?'':'none';
+    });
+  });
 
   // ── Unfold / Fold All platforms ──────────────────────────────────────────
   var unfoldBtn=document.getElementById('as-plat-unfold');

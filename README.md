@@ -21,21 +21,25 @@ go run ./cmd/archscope ~/code --open
 
 ![ArchScope](https://exey.github.io/ArchScopeDocs/as_summary.svg)
 
-2. **🧰 Tech Stack & Modules** — repo-wide tag cloud: languages present + frameworks auto-detected from imports (SwiftUI, Combine, React, Next.js, Django, FastAPI, gRPC, GORM, …) and from config files (docker-compose, go.mod, Makefile). Below it: a package grid sized by LOC with per-language badges. DevOps tools (Docker, Kubernetes, GitHub Actions, etc.) appear when detected.
+2. **🧰 Tech Stack & Modules** — repo-wide tag cloud: languages present + frameworks auto-detected from imports (SwiftUI, Combine, React, Next.js, Django, FastAPI, gRPC, GORM, …) and from config files (docker-compose, go.mod, Makefile). Below it: a package grid sized by LOC with per-language badges.
 
-3. **🛡️ Danger Index** — weighted security score (0 = hardened → 100% = critical) across **14 categories**, each with its own weight and a saturating violation-density curve. Risk band: Hardened / Minor exposure / Elevated risk / Critical exposure. Backed by **137+ security rules** across all languages plus universal cross-language checks.
+3. **📡 Technical Radar** — an [aoe_technology_radar](https://techradar.aoe.com)-style adoption radar, sized to the full report width: four cross-divided quadrants (**Tools**, **Languages & Frameworks**, **Platforms & Operations**, **Methods & Patterns**) with concentric Adopt → Trial → Assess → Hold rings. Every detected technology (plus GoF design patterns picked up repo-wide) is plotted as a labeled blip in its quadrant at its ring, with the same chips listed underneath grouped by quadrant for full legibility.
+
+4. **☁️ DevOps** — detected CI/CD, container, and IaC tooling as chips, followed by three compliance charts: a **Security & Compliance Radar** (6-domain spider chart — Image Hygiene, Best Practices, Privilege & Isolation, Runtime Security, Resource Protection, Network Exposure), a **Defect Density by Artifact** stacked bar (non-passing checks per Dockerfile/Compose/Helm, by severity), and a severity-weighted **DevOps Health Score** gauge. Below the charts: a dependency-free static-analysis matrix (Hadolint / Dockle / KubeLinter / Checkov-style checks) for Dockerfiles, docker-compose files, and Helm charts.
+
+5. **🛡️ Danger Index** — weighted security score (0 = hardened → 100% = critical) across **14 categories**, each with its own weight and a saturating violation-density curve. Risk band: Hardened / Minor exposure / Elevated risk / Critical exposure. Backed by **137+ security rules** across all languages plus universal cross-language checks.
 
 ![ArchScope](https://exey.github.io/ArchScopeDocs/as_danger.svg)
 
-4. **📅 Contribution Calendar** — GitHub-style 14-month heat-map of commit activity. One row per git repository (sorted most-active first), with month labels and a colour scale from no-activity to high-activity. Anomalous weeks (unusually high or low relative to the author's own baseline) are flagged with a dot overlay. Hover any cell to see the exact date, commit count and anomaly note.
+6. **📅 Contribution Calendar** — GitHub-style 14-month heat-map of commit activity. One row per git repository (sorted most-active first), with month labels and a colour scale from no-activity to high-activity. Anomalous weeks (unusually high or low relative to the author's own baseline) are flagged with a dot overlay. Hover any cell to see the exact date, commit count and anomaly note.
 
-5. **Per-platform tabs** — one tab per language (auto-expands when only 1–2 platforms detected), each containing:
+7. **Per-platform tabs** — one tab per language (auto-expands when only 1–2 platforms detected), each containing:
 
    **🏛️ Architecture** — *client* languages (Swift/ObjC, Kotlin, TS/JS) get **app-architecture pattern detection**: MVC, MVVM (and variants), VIPER, VIP, RIBs, Clean, Redux, TCA, MVP, MV — scored by role conventions and weighted signals. *Backend* languages (Go, Python, Java) get a **layered architecture view**: API / Models / Services / Persistence / Auth / Config / CLI / Infra / Tests bars + detected component chips.
 
 ![ArchScope](https://exey.github.io/ArchScopeDocs/as_platform.svg)
 
-5. **🍱 Domain Model** *(Go · Python · Kotlin · Java)* — spectrum from **Anemic Domain Model** (DAO/DTO/Manager-heavy service layer) to **Rich Domain Model** (DDD tactical patterns). Scored across three weighted dimensions:
+8. **🍱 Domain Model** *(Go · Python · Kotlin · Java)* — spectrum from **Anemic Domain Model** (DAO/DTO/Manager-heavy service layer) to **Rich Domain Model** (DDD tactical patterns). Scored across three weighted dimensions:
      - *Rich Domain Types* (40%) — Entities, Value Objects, Aggregates (×2) vs. DAO/DTO/Manager/BO/DO/PO. Detects both **Java/Kotlin-style suffixes** (`*Entity`, `*Repository`) and **Go/Python-style directory conventions** (`aggregate/`, `entity/`, `valueobject/`).
      - *Tactical DDD Patterns* (35%) — Repository, Domain Event, Domain Service, Specification, Use Case, Factory, Event Handler. 5 of 7 = full score.
      - *Layer Separation* (25%) — presence of `/domain/`, `/infrastructure/`, `/application/`, hex-arch port/adapter paths vs. anemic `/dao/` structure. Supports Go monorepo layouts (`/pkg/domain/`, `/internal/domain/`).
@@ -44,18 +48,11 @@ go run ./cmd/archscope ~/code --open
 
    - **⚖️ OOP vs POP** *(Swift)* — protocol-oriented vs. object-oriented signal across five categories (Type System, Abstraction, Composition, Behavior, Architecture), with a spectrum bar and per-category breakdown. Appears in place of Domain Model for Swift platforms.
 
-6. **🧱 Spec Coverage** *(Go · Python · Java · Kotlin · TypeScript)* — measures **code→spec coverage**: what percentage of detected code routes have a matching entry in a spec file. Scans the project tree for OpenAPI / Swagger (YAML + JSON), gRPC (`.proto`), and GraphQL (`.graphql` / `.gql`) specs and cross-references them against route handlers extracted from source. *Main metric bar* — `code→spec` percentage: `(code routes with a spec entry) / (total code routes)`.
+9. **🧱 Spec Coverage** *(Go · Python · Java · Kotlin · TypeScript)* — measures **code→spec coverage**: what percentage of detected code routes have a matching entry in a spec file. Scans the project tree for OpenAPI / Swagger (YAML + JSON), gRPC (`.proto`), and GraphQL (`.graphql` / `.gql`) specs and cross-references them against route handlers extracted from source. *Main metric bar* — `code→spec` percentage: `(code routes with a spec entry) / (total code routes)`.
 
-7. **🛜 Traffic** *(Go · Python · Java)* — detected inbound and outbound connection signals: HTTP/gRPC endpoints, listener ports, external service calls, and data formats (JSON, Protobuf, …). Shown as two tables — 📥 Inbound and 📤 Outbound — with protocol, URI/pattern, data format, source file, and module. Each inbound route gets a **Spec** column (✅ / ❓) when spec files are found.
+10. **🛜 Traffic** *(Go · Python · Java)* — detected inbound and outbound connection signals: HTTP/gRPC endpoints, listener ports, external service calls, and data formats (JSON, Protobuf, …). Shown as two tables — 📥 Inbound and 📤 Outbound — with protocol, URI/pattern, data format, source file, and module. Each inbound route gets a **Spec** column (✅ / ❓) when spec files are found.
 
-8. **💬 Prompt** — AI-ready context card, placed right after Traffic. Generates a structured prompt describing the current platform/module at five token budgets (1K / 10K / 50K / 100K / 200K, default 10K). Paste into any LLM for instant code review, refactoring advice, or architecture Q&A. Includes a one-click **Copy** button.
-   - **1K** — essentials: platform name, tech stack, file/line counts, top 5 files, top 3 security findings.
-   - **10K** — full picture: 30 files with declarations, domain model note, API spec coverage with missing endpoints, inbound/outbound traffic, 15 security findings with descriptions, git stats and hot files.
-   - **50K** — deep dive: all files and declarations, all routes, all security findings, full git churn list.
-   - **100K** — graph data: architecture layer breakdown per file, detected components, full module dependency edge list, hotspot table with in/out-degree, all longest functions.
-   - **200K** — exhaustive: all security findings with code snippets and blame, all TODOs & FIXMEs with location, all large functions, per-file git history (change frequency + recent commit messages), commit type distribution.
-
-9. **💡 Module Insights** — four sub-sections in a responsive grid:
+11. **💡 Module Insights** — four sub-sections in a responsive grid:
      - **🕸️ Dependency Hotspots** — modules ranked by in-degree (how many others depend on them), with Lines & Decl. Backend tabs also include an inline **SVG dependency graph** (node radius ∝ dependents).
      - **🔧 Microservices** *(Go)* / **📦 Packages & Modules** *(other languages)* — clickable module grid with file count and LOC.
      - **🔗 Module Penetration** — modules imported by the most other modules (highest shared-dependency risk).
@@ -65,7 +62,7 @@ go run ./cmd/archscope ~/code --open
 
    - **🧩 Design Patterns** *(all languages)* — GoF pattern detection from naming conventions: Factory, Singleton, Builder, Observer, Strategy, Decorator, Adapter, Facade, Command, and more — grouped by Creational / Structural / Behavioral category.
 
-10. **🐙 Git Analysis** (repo-wide):
+12. **🐙 Git Analysis** (repo-wide):
 
    - **Branching model classifier** — scores Gitflow / Trunk-Based / GitHub Flow / GitLab Flow / OneFlow with confidence % and detected signals.
    - **Top contributors** — commits and files touched per author.
@@ -73,9 +70,9 @@ go run ./cmd/archscope ~/code --open
    - **Tags & commits** — semver tag list, commit volume, conventional-commit hygiene.
    - **Branch inventory** — all branches with stale detection.
 
-11. **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
+13. **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
 
-12. **📂 Modules & Microservices** — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, **estimated tokens**, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
+14. **📂 Modules & Microservices** — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, **estimated tokens**, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
 
 ---
 

@@ -27,9 +27,10 @@ type AnalysisResult struct {
 	Security       []security.RuleResult
 	SecurityScore  security.Score
 	Git            GitBundle
-	Technologies   []string              // merged tech from imports + docker-compose/go.mod/Makefile
-	DockerServices []string              // service names from docker-compose
-	DevOpsTools    []scanner.DevOpsTool  // CI/CD, container, orchestration tools
+	Technologies   []string             // merged tech from imports + docker-compose/go.mod/Makefile
+	DockerServices []string             // service names from docker-compose
+	DevOpsTools    []scanner.DevOpsTool // CI/CD, container, orchestration tools
+	DevOpsLint     *scanner.DevOpsLint  // Dockerfile / compose / Helm static analysis (nil when none found)
 
 	// ModulePanels are report-module outputs already rendered to HTML, grouped
 	// per platform tab. This is the pragmatic form of DESIGN's ModuleResults:
@@ -51,16 +52,16 @@ type ModulePanel struct {
 // GitBundle is the repository-history surface (DESIGN §9.3), shared across all
 // platforms (git history is repo-wide, not per-language).
 type GitBundle struct {
-	Available   bool
-	Authors     map[string]*git.AuthorStats
-	Churn       []git.FileChurnStat
-	Tags        git.TagStats
-	Commits     git.CommitStats
-	Branch      git.BranchStats
+	Available    bool
+	Authors      map[string]*git.AuthorStats
+	Churn        []git.FileChurnStat
+	Tags         git.TagStats
+	Commits      git.CommitStats
+	Branch       git.BranchStats
 	Repos        []string
 	WeeklyByExt  map[string][git.NCalWeeks]int            // lowercase extension → weekly commit counts (index 0=oldest)
 	WeeklyByRepo map[string]map[string][git.NCalWeeks]int // repo root → extension → weekly counts
-	RemoteURL    string                        // git origin URL (HTTPS, .git suffix stripped)
+	RemoteURL    string                                   // git origin URL (HTTPS, .git suffix stripped)
 }
 
 // PanelsForPlatform returns the module panels belonging to one platform tab.
