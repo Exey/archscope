@@ -683,7 +683,7 @@ func renderDevOpsSection(res *result.AnalysisResult) string {
 		b.WriteString(`</div>`)
 	}
 
-	// Kubernetes Pods sub-card: workload cards from a kubectl cluster dump
+	// Kubernetes sub-card: workload cards from a kubectl cluster dump
 	// or plain manifest files.
 	if !k8s.Empty() {
 		b.WriteString(renderK8sPodsCard(k8s))
@@ -750,28 +750,56 @@ var devopsDocLinks = map[string][]devopsDocLink{
 	"Chart.yaml required fields":  {{"Helm: Chart.yaml", "https://helm.sh/docs/topics/charts/#the-chartyaml-file"}},
 	"values.schema.json":          {{"Helm: schema files", "https://helm.sh/docs/topics/charts/#schema-files"}},
 	"Maintainers & icon metadata": {{"Helm: Chart.yaml fields", "https://helm.sh/docs/topics/charts/#the-chartyaml-file"}},
-	"Deprecated K8s API versions": {{"KubeLinter deprecated-api-version", "https://docs.kubelinter.io/#/checks/deprecated-api-version"}},
-	"Hardcoded namespace":         {{"Helm best practice: templates", "https://helm.sh/docs/chart_best_practices/templates/#namespaces"}},
-	"resources.requests defined":  {{"Kubernetes: managing resources", "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"}},
-	"resources.limits defined":    {{"Checkov CKV_K8S_11/12", "https://docs.bridgecrew.io/docs/ensure-cpu-limits-are-set"}},
-	"runAsNonRoot enforced":       {{"KubeLinter run-as-non-root", "https://docs.kubelinter.io/#/checks/run-as-non-root"}},
-	"readOnlyRootFilesystem":      {{"KubeLinter read-only-root-filesystem", "https://docs.kubelinter.io/#/checks/read-only-root-filesystem"}},
-	"allowPrivilegeEscalation: false": {
-		{"KubeLinter privilege-escalation-container", "https://docs.kubelinter.io/#/checks/privilege-escalation-container"},
-		{"Checkov CKV_K8S_14", "https://docs.bridgecrew.io/docs/ensure-containers-do-not-allow-privilege-escalation"},
+	"Deprecated K8s API versions": {
+		{"KubeLinter no-extensions-v1beta", "https://docs.kubelinter.io/#/generated/checks?id=no-extensions-v1beta"},
+		{"Kubernetes: deprecation guide", "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"},
 	},
-	"Privileged containers":        {{"KubeLinter privileged-container", "https://docs.kubelinter.io/#/checks/privileged-container"}},
-	"Dangerous capabilities added": {{"KubeLinter dangerous-capabilities", "https://docs.kubelinter.io/#/checks/dangerous-capabilities"}},
-	"seccompProfile set":           {{"KubeLinter seccomp-profile-required", "https://docs.kubelinter.io/#/checks/seccomp-profile-required"}},
-	"NetworkPolicy defined":        {{"KubeLinter required-network-policy", "https://docs.kubelinter.io/#/checks/required-network-policy"}},
-	"LoadBalancer services":        {{"Checkov CKV_K8S_36", "https://docs.bridgecrew.io/docs/ensure-that-loadbalancer-services-are-not-exposed"}},
-	"Ingress TLS configured":       {{"KubeLinter tls-ingress", "https://docs.kubelinter.io/#/checks/tls-ingress"}},
+	"Hardcoded namespace":        {{"Helm best practice: templates", "https://helm.sh/docs/chart_best_practices/templates/#namespaces"}},
+	"resources.requests defined": {{"Kubernetes: managing resources", "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"}},
+	"resources.limits defined": {
+		{"KubeLinter unset-cpu-requirements", "https://docs.kubelinter.io/#/generated/checks?id=unset-cpu-requirements"},
+		{"KubeLinter unset-memory-requirements", "https://docs.kubelinter.io/#/generated/checks?id=unset-memory-requirements"},
+	},
+	"runAsNonRoot enforced":  {{"KubeLinter run-as-non-root", "https://docs.kubelinter.io/#/generated/checks?id=run-as-non-root"}},
+	"readOnlyRootFilesystem": {{"KubeLinter no-read-only-root-fs", "https://docs.kubelinter.io/#/generated/checks?id=no-read-only-root-fs"}},
+	"allowPrivilegeEscalation: false": {
+		{"KubeLinter privilege-escalation-container", "https://docs.kubelinter.io/#/generated/checks?id=privilege-escalation-container"},
+	},
+	"Privileged containers":        {{"KubeLinter privileged-container", "https://docs.kubelinter.io/#/generated/checks?id=privileged-container"}},
+	"Dangerous capabilities added": {{"Kubernetes: Pod Security Standards", "https://kubernetes.io/docs/concepts/security/pod-security-standards/"}},
+	"seccompProfile set":           {{"Kubernetes: seccomp", "https://kubernetes.io/docs/tutorials/security/seccomp/"}},
+	"NetworkPolicy defined":        {{"KubeLinter non-isolated-pod", "https://docs.kubelinter.io/#/generated/checks?id=non-isolated-pod"}},
+	"LoadBalancer services":        {{"Kubernetes: Service types", "https://kubernetes.io/docs/concepts/services-networking/service/#loadbalancer"}},
+	"Ingress TLS configured":       {{"Kubernetes: Ingress TLS", "https://kubernetes.io/docs/concepts/services-networking/ingress/#tls"}},
 	"PodDisruptionBudget defined":  {{"Kubernetes: PDB", "https://kubernetes.io/docs/tasks/run-application/configure-pdb/"}},
-	"emptyDir sizeLimit":           {{"Checkov CKV_K8S_28", "https://docs.bridgecrew.io/docs/ensure-emptydir-volumes-have-a-sizelimit-set"}},
+	"emptyDir sizeLimit":           {{"Kubernetes: emptyDir", "https://kubernetes.io/docs/concepts/storage/volumes/#emptydir"}},
 	"Dedicated serviceAccountName": {{"Kubernetes: Service Accounts", "https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/"}},
-	"Wildcard ClusterRole rules":   {{"KubeLinter wildcard-resource-rbac", "https://docs.kubelinter.io/#/checks/wildcard-resource-rbac"}},
+	"Wildcard ClusterRole rules":   {{"KubeLinter wildcard-in-rules", "https://docs.kubelinter.io/#/generated/checks?id=wildcard-in-rules"}},
 	"Signed chart (*.prov)":        {{"Helm Provenance", "https://helm.sh/docs/topics/provenance/"}},
 	"values.yaml documentation":    {{"Helm best practice: document values", "https://helm.sh/docs/chart_best_practices/values/#document-each-value"}},
+
+	// ☸️ Kubernetes — kube-linter / Kubernetes docs
+	"CPU/memory requests set": {{"Kubernetes: managing resources", "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"}},
+	"CPU/memory limits set": {
+		{"KubeLinter unset-cpu-requirements", "https://docs.kubelinter.io/#/generated/checks?id=unset-cpu-requirements"},
+		{"KubeLinter unset-memory-requirements", "https://docs.kubelinter.io/#/generated/checks?id=unset-memory-requirements"},
+	},
+	"Privileged container": {{"KubeLinter privileged-container", "https://docs.kubelinter.io/#/generated/checks?id=privileged-container"}},
+	"Liveness probe configured": {
+		{"KubeLinter no-liveness-probe", "https://docs.kubelinter.io/#/generated/checks?id=no-liveness-probe"},
+		{"Kubernetes: liveness probes", "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/"},
+	},
+	"Readiness probe configured": {
+		{"KubeLinter no-readiness-probe", "https://docs.kubelinter.io/#/generated/checks?id=no-readiness-probe"},
+		{"Kubernetes: readiness probes", "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/"},
+	},
+	"Pinned image tag (no :latest)": {
+		{"KubeLinter latest-tag", "https://docs.kubelinter.io/#/generated/checks?id=latest-tag"},
+		{"Hadolint DL3006", "https://github.com/hadolint/hadolint/wiki/DL3006"},
+	},
+	"hostNetwork/hostPID/hostIPC": {{"KubeLinter host-network / host-ipc / host-pid", "https://docs.kubelinter.io/#/generated/checks?id=host-network"}},
+	"Dedicated service account":   {{"KubeLinter default-service-account", "https://docs.kubelinter.io/#/generated/checks?id=default-service-account"}},
+	"hostPath volumes mounted":    {{"KubeLinter sensitive-host-mounts", "https://docs.kubelinter.io/#/generated/checks?id=sensitive-host-mounts"}},
 
 	// 🐙 Docker Compose — Compose Spec / Docker docs
 	"Obsolete compose version":  {{"Compose Spec: version (deprecated)", "https://docs.docker.com/compose/compose-file/#version-top-level-element"}},
@@ -818,7 +846,7 @@ func renderDevOpsColumn(a *scanner.DevOpsArtifactLint) string {
 	return b.String()
 }
 
-// ── ☸️ Kubernetes Pods (DevOps sub-card) ─────────────────────────────────────
+// ── ☸️ Kubernetes (DevOps sub-card) ─────────────────────────────────────
 
 var k8sKindIcon = map[string]string{
 	"Pod": "🔹", "Deployment": "🚀", "StatefulSet": "🗄️",
@@ -834,7 +862,7 @@ const k8sMaxCardsPerKind = 30
 // k8sKindOrder fixes the display order of the per-kind subsections.
 var k8sKindOrder = []string{"StatefulSet", "Pod", "DaemonSet", "Deployment", "Job", "CronJob"}
 
-// renderK8sPodsCard renders the "Kubernetes Pods" DevOps sub-card: an overall
+// renderK8sPodsCard renders the "Kubernetes" DevOps sub-card: an overall
 // pass-rate badge, then one subsection per workload kind (in k8sKindOrder,
 // each titled with its icon and count), holding a responsive grid of small
 // per-workload cards — sorted biggest resource footprint first and capped at
@@ -851,7 +879,7 @@ func renderK8sPodsCard(lint *scanner.K8sLint) string {
 
 	var b strings.Builder
 	b.WriteString(`<div class="as-sub as-k8s-sub" style="margin-top:18px">`)
-	b.WriteString(`<span>☸️ Kubernetes Pods</span>`)
+	b.WriteString(`<span>☸️ Kubernetes</span>`)
 	fmt.Fprintf(&b, `<span class="as-dvo-score as-dvo-score--%s" title="Average check pass rate across %d workload(s) (pass=1, warn=½, fail=0)">%d%% PASSED</span>`,
 		dvoScoreClass(avg), len(lint.Workloads), avg)
 	b.WriteString(`</div>`)
@@ -884,6 +912,291 @@ func renderK8sPodsCard(lint *scanner.K8sLint) string {
 				moreCount, esc(kind), plural(moreCount, "", "s"), k8sMaxCardsPerKind)
 		}
 	}
+	b.WriteString(renderK8sClusterStats(lint.Stats))
+	return b.String()
+}
+
+// k8sStatRow is one line item within a cluster-stats sub-card: a label, a
+// display value, and an optional pass/warn/fail dot when the number itself
+// is the finding (e.g. zero NetworkPolicies). Status "" renders a blank
+// placeholder dot so labels stay aligned against rows that do have one.
+type k8sStatRow struct {
+	Label  string
+	Value  string
+	Status string // "", "pass", "warn", "fail"
+}
+
+func renderK8sStatCard(icon, title string, rows []k8sStatRow) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="as-k8s-stat-card">`)
+	fmt.Fprintf(&b, `<div class="as-k8s-stat-card__head">%s %s</div>`, icon, esc(title))
+	for _, r := range rows {
+		dotClass := "as-k8s-dot--none"
+		if r.Status != "" {
+			dotClass = "as-k8s-dot--" + r.Status
+		}
+		fmt.Fprintf(&b, `<div class="as-k8s-stat-row"><span class="as-k8s-dot %s"></span><span class="as-k8s-stat-label">%s</span><span class="as-k8s-stat-val">%s</span></div>`,
+			dotClass, esc(r.Label), esc(r.Value))
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+func fallback(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+func passWarn(good bool) string {
+	if good {
+		return "pass"
+	}
+	return "warn"
+}
+
+// renderK8sClusterStats renders the informational sub-cards that continue
+// the ☸️ Kubernetes card past the workload grid — Networking & Exposure,
+// Configuration & Storage, RBAC & Service Accounts, Autoscaling & Budgets,
+// and Operators — summarizing the non-workload resources found alongside
+// the linted Pods/Deployments/etc. Each card is omitted when its category
+// has nothing to show, and the whole block is omitted when none do.
+func renderK8sClusterStats(s scanner.K8sClusterStats) string {
+	if s.Empty() {
+		return ""
+	}
+	var cards []string
+
+	if s.Services > 0 || s.Ingresses > 0 || s.NetworkPolicies > 0 {
+		var rows []k8sStatRow
+		if s.Services > 0 {
+			rows = append(rows, k8sStatRow{"Services", strconv.Itoa(s.Services), ""})
+			rows = append(rows, k8sStatRow{"Privileged ports (<1024)", strconv.Itoa(s.ServicesPrivPorts), passWarn(s.ServicesPrivPorts == 0)})
+		}
+		if s.Ingresses > 0 {
+			rows = append(rows, k8sStatRow{"Ingresses", strconv.Itoa(s.Ingresses), ""})
+			rows = append(rows, k8sStatRow{"...with TLS configured", fmt.Sprintf("%d/%d", s.IngressesTLS, s.Ingresses), passWarn(s.IngressesTLS == s.Ingresses)})
+		}
+		rows = append(rows, k8sStatRow{"NetworkPolicies", strconv.Itoa(s.NetworkPolicies), passWarn(s.NetworkPolicies > 0)})
+		cards = append(cards, renderK8sStatCard("🌐", "Networking & Exposure", rows))
+	}
+
+	if s.ConfigMaps > 0 || s.PVCs > 0 || s.StorageClasses > 0 {
+		var rows []k8sStatRow
+		if s.ConfigMaps > 0 {
+			rows = append(rows, k8sStatRow{"ConfigMaps (custom)", strconv.Itoa(s.ConfigMaps), ""})
+		}
+		if s.PVCs > 0 {
+			rows = append(rows, k8sStatRow{"PersistentVolumeClaims", strconv.Itoa(s.PVCs), ""})
+			rows = append(rows, k8sStatRow{"...with a StorageClass", fmt.Sprintf("%d/%d", s.PVCsWithStorageClass, s.PVCs), passWarn(s.PVCsWithStorageClass == s.PVCs)})
+		}
+		if s.StorageClasses > 0 {
+			rows = append(rows, k8sStatRow{"StorageClasses", strconv.Itoa(s.StorageClasses), ""})
+		}
+		cards = append(cards, renderK8sStatCard("🗄️", "Configuration & Storage", rows))
+	}
+
+	if s.ServiceAccounts > 0 || s.Roles > 0 || s.RoleBindings > 0 || s.ClusterRoles > 0 || s.ClusterRoleBindings > 0 {
+		var rows []k8sStatRow
+		if s.ServiceAccounts > 0 {
+			rows = append(rows, k8sStatRow{"ServiceAccounts (custom)", strconv.Itoa(s.ServiceAccounts), ""})
+		}
+		if s.Roles > 0 {
+			rows = append(rows, k8sStatRow{"Roles", strconv.Itoa(s.Roles), ""})
+			rows = append(rows, k8sStatRow{"...with wildcard rules", strconv.Itoa(s.RolesWildcard), passWarn(s.RolesWildcard == 0)})
+		}
+		if s.RoleBindings > 0 {
+			rows = append(rows, k8sStatRow{"RoleBindings", strconv.Itoa(s.RoleBindings), ""})
+		}
+		if s.ClusterRoles > 0 {
+			rows = append(rows, k8sStatRow{"ClusterRoles", strconv.Itoa(s.ClusterRoles), ""})
+			rows = append(rows, k8sStatRow{"...with wildcard rules", strconv.Itoa(s.ClusterRolesWildcard), passWarn(s.ClusterRolesWildcard == 0)})
+		}
+		if s.ClusterRoleBindings > 0 {
+			rows = append(rows, k8sStatRow{"ClusterRoleBindings", strconv.Itoa(s.ClusterRoleBindings), ""})
+		}
+		cards = append(cards, renderK8sStatCard("🔐", "RBAC & Service Accounts", rows))
+	}
+
+	if s.HPAs > 0 || s.PDBs > 0 {
+		rows := []k8sStatRow{
+			{"HorizontalPodAutoscalers", strconv.Itoa(s.HPAs), passWarn(s.HPAs > 0)},
+			{"PodDisruptionBudgets", strconv.Itoa(s.PDBs), passWarn(s.PDBs > 0)},
+		}
+		cards = append(cards, renderK8sStatCard("📈", "Autoscaling & Budgets", rows))
+	}
+
+	if len(s.Operators) > 0 {
+		ops := append([]scanner.K8sOperatorResource(nil), s.Operators...)
+		sort.Slice(ops, func(i, j int) bool { return ops[i].Kind < ops[j].Kind })
+		var rows []k8sStatRow
+		for _, op := range ops {
+			val := strconv.Itoa(op.Count)
+			if op.HasAvailableReplicas {
+				val = fmt.Sprintf("%d (%d avail. replica%s)", op.Count, op.AvailableReplicas, plural(op.AvailableReplicas, "", "s"))
+			}
+			rows = append(rows, k8sStatRow{op.Kind, val, ""})
+		}
+		cards = append(cards, renderK8sStatCard("🧩", "Operators", rows))
+	}
+
+	if len(cards) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="as-k8s-kind-sub">📊 Cluster Resources</div>`)
+	b.WriteString(`<div class="as-k8s-stats-grid">`)
+	for _, c := range cards {
+		b.WriteString(c)
+	}
+	b.WriteString(`</div>`)
+	b.WriteString(renderK8sIngressDetail(s.IngressDetails))
+	b.WriteString(renderK8sServiceDetail(s.ServiceDetails))
+	return b.String()
+}
+
+// k8sMaxIngressCards/k8sMaxServiceCards cap how many Ingress/Service detail
+// cards are rendered — same "biggest report, still readable" rationale as
+// k8sMaxCardsPerKind. Services get a much higher ceiling since a dump
+// legitimately has far more Services than Ingresses.
+const (
+	k8sMaxIngressCards = 40
+	k8sMaxServiceCards = 150
+)
+
+// splitBackendPort splits a "service:port" backend string (as built by
+// ingressBackend) into the service name and a ":port" suffix (empty if the
+// backend has no port), so the port can be highlighted separately.
+func splitBackendPort(backend string) (name, port string) {
+	if idx := strings.LastIndex(backend, ":"); idx >= 0 {
+		return backend[:idx], backend[idx:]
+	}
+	return backend, ""
+}
+
+// renderK8sIngressDetail renders one two-column card per Ingress — host,
+// path, backend, TLS secret, and (best-effort) proxy timeout — the
+// per-object detail the aggregate "N Ingresses, X/Y TLS" counts can't show.
+func renderK8sIngressDetail(details []scanner.K8sIngressDetail) string {
+	if len(details) == 0 {
+		return ""
+	}
+	items := append([]scanner.K8sIngressDetail(nil), details...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Namespace != items[j].Namespace {
+			return items[i].Namespace < items[j].Namespace
+		}
+		return items[i].Name < items[j].Name
+	})
+	moreCount := 0
+	if len(items) > k8sMaxIngressCards {
+		moreCount = len(items) - k8sMaxIngressCards
+		items = items[:k8sMaxIngressCards]
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `<div class="as-k8s-kind-sub">🚪 Ingresses <span class="as-k8s-kind-count">(%d)</span></div>`, len(details))
+	b.WriteString(`<div class="as-k8s-detail-grid">`)
+	for _, d := range items {
+		b.WriteString(renderK8sIngressCard(d))
+	}
+	b.WriteString(`</div>`)
+	if moreCount > 0 {
+		fmt.Fprintf(&b, `<div class="as-more">+%d more Ingress%s not shown</div>`, moreCount, plural(moreCount, "", "es"))
+	}
+	return b.String()
+}
+
+func renderK8sIngressCard(d scanner.K8sIngressDetail) string {
+	var b strings.Builder
+	b.WriteString(`<div class="as-k8s-detail-card">`)
+	fmt.Fprintf(&b, `<div class="as-k8s-detail-card__head">%s<span class="as-k8s-detail-card__ns">%s</span></div>`, esc(d.Name), esc(d.Namespace))
+	if len(d.Rules) == 0 {
+		b.WriteString(`<div class="as-k8s-detail-row as-k8s-detail-row--muted">no rules</div>`)
+	}
+	for _, r := range d.Rules {
+		host := fallback(r.Host, "*")
+		path := fallback(r.Path, "/")
+		svcName, svcPort := splitBackendPort(fallback(r.Backend, "–"))
+		portHTML := ""
+		if svcPort != "" {
+			portHTML = fmt.Sprintf(`<span class="as-k8s-detail-port">%s</span>`, esc(svcPort))
+		}
+		fmt.Fprintf(&b, `<div class="as-k8s-detail-row"><span class="as-k8s-detail-mono as-k8s-detail-mono--src">%s%s</span><span class="as-k8s-detail-arrow">→</span><span class="as-k8s-detail-mono as-k8s-detail-mono--dst">%s%s</span></div>`,
+			esc(host), esc(path), esc(svcName), portHTML)
+	}
+	// Each entry is pre-escaped HTML, not plain text — the timeout entries
+	// carry a label/value span pair with their own colors, so the whole
+	// line can't be joined-then-escaped as one string.
+	var meta []string
+	switch {
+	case len(d.TLSSecrets) > 0:
+		meta = append(meta, "TLS: "+esc(strings.Join(d.TLSSecrets, ", ")))
+	case d.TLS:
+		meta = append(meta, "TLS: yes")
+	default:
+		meta = append(meta, "TLS: no")
+	}
+	for _, t := range d.Timeouts {
+		meta = append(meta, fmt.Sprintf(`<span class="as-k8s-detail-meta-label">%s</span> <span class="as-k8s-detail-port">%s</span>`, esc(t.Label), esc(t.Value)))
+	}
+	if d.IngressClass != "" {
+		meta = append(meta, "class: "+esc(d.IngressClass))
+	}
+	fmt.Fprintf(&b, `<div class="as-k8s-detail-meta">%s</div>`, strings.Join(meta, " · "))
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// renderK8sServiceDetail renders one two-column card per Service — type and
+// port→targetPort mappings.
+func renderK8sServiceDetail(details []scanner.K8sServiceDetail) string {
+	if len(details) == 0 {
+		return ""
+	}
+	items := append([]scanner.K8sServiceDetail(nil), details...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Namespace != items[j].Namespace {
+			return items[i].Namespace < items[j].Namespace
+		}
+		return items[i].Name < items[j].Name
+	})
+	moreCount := 0
+	if len(items) > k8sMaxServiceCards {
+		moreCount = len(items) - k8sMaxServiceCards
+		items = items[:k8sMaxServiceCards]
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `<div class="as-k8s-kind-sub">🔌 Services <span class="as-k8s-kind-count">(%d)</span></div>`, len(details))
+	b.WriteString(`<div class="as-k8s-detail-grid as-k8s-detail-grid--3col">`)
+	for _, d := range items {
+		b.WriteString(renderK8sServiceCard(d))
+	}
+	b.WriteString(`</div>`)
+	if moreCount > 0 {
+		fmt.Fprintf(&b, `<div class="as-more">+%d more Service%s not shown</div>`, moreCount, plural(moreCount, "", "s"))
+	}
+	return b.String()
+}
+
+func renderK8sServiceCard(d scanner.K8sServiceDetail) string {
+	var b strings.Builder
+	b.WriteString(`<div class="as-k8s-detail-card">`)
+	fmt.Fprintf(&b, `<div class="as-k8s-detail-card__head">%s<span class="as-k8s-detail-card__ns">%s</span></div>`, esc(d.Name), esc(d.Namespace))
+	fmt.Fprintf(&b, `<div class="as-k8s-detail-row as-k8s-detail-row--muted">%s</div>`, esc(d.Type))
+	if len(d.Ports) == 0 {
+		b.WriteString(`<div class="as-k8s-detail-row as-k8s-detail-row--muted">no ports</div>`)
+	}
+	for _, p := range d.Ports {
+		label := fallback(p.Name, p.Protocol)
+		target := fallback(p.TargetPort, p.Port)
+		fmt.Fprintf(&b, `<div class="as-k8s-detail-row"><span class="as-k8s-detail-mono as-k8s-detail-mono--src">%s %s</span><span class="as-k8s-detail-arrow">→</span><span class="as-k8s-detail-mono as-k8s-detail-mono--dst">%s</span></div>`,
+			esc(label), esc(p.Port), esc(target))
+	}
+	b.WriteString(`</div>`)
 	return b.String()
 }
 
@@ -968,26 +1281,37 @@ func renderK8sWorkloadCard(w scanner.K8sWorkload) string {
 		return formatMemBytes(v)
 	}
 
+	type issue struct {
+		label  string
+		metric string
+	}
 	pass, warn, fail := 0, 0, 0
-	var failed []string
+	var failed, warned []issue
+	var failedLabels, warnedLabels []string
 	for _, c := range w.Checks {
+		label := c.Metric
+		if c.Category != "Pod" {
+			label = c.Category + ": " + c.Metric
+		}
 		switch c.Status {
 		case "pass":
 			pass++
 		case "warn":
 			warn++
+			warned = append(warned, issue{label, c.Metric})
+			warnedLabels = append(warnedLabels, label)
 		case "fail":
 			fail++
-			label := c.Metric
-			if c.Category != "Pod" {
-				label = c.Category + ": " + c.Metric
-			}
-			failed = append(failed, label)
+			failed = append(failed, issue{label, c.Metric})
+			failedLabels = append(failedLabels, label)
 		}
 	}
 	tooltip := fmt.Sprintf("%d passed · %d warned · %d failed", pass, warn, fail)
-	if len(failed) > 0 {
-		tooltip += "\n\nFailed:\n- " + strings.Join(failed, "\n- ")
+	if len(failedLabels) > 0 {
+		tooltip += "\n\nFailed:\n- " + strings.Join(failedLabels, "\n- ")
+	}
+	if len(warnedLabels) > 0 {
+		tooltip += "\n\nWarned:\n- " + strings.Join(warnedLabels, "\n- ")
 	}
 
 	icon := k8sKindIcon[w.Kind]
@@ -1015,15 +1339,30 @@ func renderK8sWorkloadCard(w scanner.K8sWorkload) string {
 	fmt.Fprintf(&b, `<div class="as-k8s-card__lint" title="%s"><span class="as-k8s-dot as-k8s-dot--pass"></span>%d<span class="as-k8s-dot as-k8s-dot--warn"></span>%d<span class="as-k8s-dot as-k8s-dot--fail"></span>%d`+
 		`<span class="as-k8s-card__score" style="color:%s">%d%%</span></div>`,
 		esc(tooltip), pass, warn, fail, gradeColor(w.Score), w.Score)
-	if len(failed) > 0 {
-		b.WriteString(`<div class="as-k8s-card__failed">`)
-		for _, f := range failed {
-			fmt.Fprintf(&b, `<div>✕ %s</div>`, esc(f))
+	if len(failed) > 0 || len(warned) > 0 {
+		b.WriteString(`<div class="as-k8s-card__issues">`)
+		for _, iss := range failed {
+			b.WriteString(renderK8sIssue(iss.label, iss.metric, "fail", "✕"))
+		}
+		for _, iss := range warned {
+			b.WriteString(renderK8sIssue(iss.label, iss.metric, "warn", "⚠"))
 		}
 		b.WriteString(`</div>`)
 	}
 	b.WriteString(`</div>`)
 	return b.String()
+}
+
+// renderK8sIssue renders one visible fail/warn line under a Kubernetes
+// workload card, linking the check name to its kube-linter/Kubernetes/Checkov
+// documentation when devopsDocLinks has an entry for the raw metric.
+func renderK8sIssue(label, metric, variant, mark string) string {
+	name := esc(label)
+	if docs := devopsDocLinks[metric]; len(docs) > 0 {
+		name = fmt.Sprintf(`<a href="%s" target="_blank" rel="noopener" title="%s docs">%s</a>`,
+			esc(docs[0].URL), esc(docs[0].Label), esc(label))
+	}
+	return fmt.Sprintf(`<div class="as-k8s-issue--%s">%s %s</div>`, variant, mark, name)
 }
 
 func parseCPUMillis(s string) (float64, bool) {
@@ -2966,6 +3305,9 @@ func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup,
 	}
 	if lf := renderLongestFunctions(files, rootPath); lf != "" {
 		parts = append(parts, lf)
+	}
+	if bt := renderBiggestTypes(files, rootPath); bt != "" {
+		parts = append(parts, bt)
 	}
 	if len(parts) == 0 {
 		return ""

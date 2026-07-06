@@ -42,6 +42,16 @@ type FunctionInfo struct {
 	StartLine int    `json:"startLine"`
 }
 
+// TypeInfo records the size/location of a type declaration (struct, class,
+// interface, enum, actor) — the same shape as FunctionInfo plus its Kind.
+type TypeInfo struct {
+	Name      string   `json:"name"`
+	Kind      DeclKind `json:"kind"`
+	LineCount int      `json:"lineCount"`
+	FilePath  string   `json:"filePath"`
+	StartLine int      `json:"startLine"`
+}
+
 // GitMetadata holds per-file git history (filled later by the git analyzer).
 type GitMetadata struct {
 	LastModified    float64  `json:"lastModified"`
@@ -75,6 +85,7 @@ type ParsedFile struct {
 	Todos        []TodoItem     `json:"todos,omitempty"`
 	LongestFunc  *FunctionInfo  `json:"longestFunction,omitempty"`
 	BigFunctions []FunctionInfo `json:"bigFunctions,omitempty"`
+	LongestType  *TypeInfo      `json:"longestType,omitempty"`
 	GitMeta      GitMetadata    `json:"gitMetadata"`
 	// Extra is a free-form bag for language hooks (e.g. Swift sceneGroup) so the
 	// core model stays stable while hooks add language-specific data.

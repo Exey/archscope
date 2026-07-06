@@ -71,6 +71,13 @@ func ParseUniversal(filePath string, lines []string, spec *langspec.LanguageSpec
 		curFuncName string
 		funcStart   int
 		braceDepth  int
+
+		// type-size tracking via brace depth
+		inType         bool
+		curTypeName    string
+		curTypeKind    DeclKind
+		typeStart      int
+		typeBraceDepth int
 	)
 
 	for idx, raw := range lines {
@@ -114,6 +121,13 @@ func ParseUniversal(filePath string, lines []string, spec *langspec.LanguageSpec
 						pf.Description = strings.Join(docLines, " ")
 					}
 					docLines = nil
+					if !inType {
+						inType = true
+						curTypeName = name
+						curTypeKind = kind
+						typeStart = lineNo
+						typeBraceDepth = 0
+					}
 				}
 			}
 		}
@@ -151,6 +165,22 @@ func ParseUniversal(filePath string, lines []string, spec *langspec.LanguageSpec
 				}
 				inFunc = false
 				curFuncName = ""
+			}
+		}
+
+		// ── Type-length tracking (brace depth) ──
+		if inType {
+			typeBraceDepth += strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
+			if typeBraceDepth <= 0 && strings.Contains(trimmed, "}") {
+				length := lineNo - typeStart + 1
+				if pf.LongestType == nil || length > pf.LongestType.LineCount {
+					pf.LongestType = &TypeInfo{
+						Name: curTypeName, Kind: curTypeKind, LineCount: length,
+						FilePath: filePath, StartLine: typeStart,
+					}
+				}
+				inType = false
+				curTypeName = ""
 			}
 		}
 

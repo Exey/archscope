@@ -876,6 +876,57 @@ func renderLongestFunctions(files []*parser.ParsedFile, rootPath string) string 
 	return b.String()
 }
 
+// ── Biggest types ─────────────────────────────────────────────────────────────
+
+func renderBiggestTypes(files []*parser.ParsedFile, rootPath string) string {
+	type entry struct {
+		ty  *parser.TypeInfo
+		mod string
+	}
+	var types []entry
+	for _, f := range files {
+		if f.LongestType != nil && !isTestFile(f.FilePath) {
+			types = append(types, entry{f.LongestType, f.ModuleName})
+		}
+	}
+	if len(types) == 0 {
+		return ""
+	}
+	sort.Slice(types, func(i, j int) bool { return types[i].ty.LineCount > types[j].ty.LineCount })
+	if len(types) > 20 {
+		types = types[:20]
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">📐</span><h3>Biggest Types</h3></div>`)
+	b.WriteString(`<table class="as-table"><thead><tr><th>Type</th><th>Kind</th><th>Lines</th><th>File</th><th>Module</th></tr></thead><tbody>`)
+	for _, e := range types {
+		ty := e.ty
+		_, base := splitRel(ty.FilePath, rootPath)
+
+		// Type column: VS Code link on the type name at its start line
+		typeCell := esc(ty.Name)
+		if href := vscodeHref(ty.FilePath, ty.StartLine); href != "" {
+			typeCell = fmt.Sprintf(`<a class="as-vs" href="%s" title="Open in VS Code">%s</a>`, esc(href), esc(ty.Name))
+		}
+
+		// File column: link to the file
+		fileCell := esc(base)
+		if href := vscodeHref(ty.FilePath, 0); href != "" {
+			fileCell = fmt.Sprintf(`<a class="as-vs" href="%s">%s</a>`, esc(href), esc(base))
+		}
+
+		mod := e.mod
+		if mod == "" {
+			mod = "root"
+		}
+
+		fmt.Fprintf(&b, `<tr><td class="mono">%s</td><td class="mono">%s</td><td class="mono">%d</td><td class="mono">%s</td><td class="mono">%s</td></tr>`,
+			typeCell, esc(string(ty.Kind)), ty.LineCount, fileCell, esc(mod))
+	}
+	b.WriteString(`</tbody></table></div>`)
+	return b.String()
+}
+
 // ── Penetration matrix ────────────────────────────────────────────────────────
 
 func renderPenetrationMatrix(files []*parser.ParsedFile) string {

@@ -52,9 +52,111 @@ type K8sWorkload struct {
 	Score      int           // 0-100 pass rate (pass=1, warn=0.5, fail=0)
 }
 
+// K8sOperatorResource is one CRD kind from a recognized operator (Prometheus
+// Operator, Vault Secrets Operator, ...) found in the dump, with a total
+// count and — for the few kinds we know how to read a status from — a
+// best-effort health summary.
+type K8sOperatorResource struct {
+	Kind                 string
+	Count                int
+	AvailableReplicas    int // summed status.availableReplicas (Prometheus only)
+	HasAvailableReplicas bool
+}
+
+// K8sIngressRule is one Ingress path rule: the host it matches (empty =
+// catch-all), the path, and the backend it routes to ("service:port").
+type K8sIngressRule struct {
+	Host    string
+	Path    string
+	Backend string
+}
+
+// K8sIngressDetail is one Ingress's routing/TLS/timeout detail — the
+// per-resource drill-down shown alongside the Networking & Exposure
+// aggregate counts, since "2 Ingresses, 1/2 TLS" hides exactly the host,
+// backend, and timeout info developers actually need.
+type K8sIngressDetail struct {
+	Name         string
+	Namespace    string
+	IngressClass string // "" if unset
+	Rules        []K8sIngressRule
+	TLS          bool
+	TLSSecrets   []string
+	Timeouts     []K8sIngressTimeout // best-effort from common proxy-timeout annotations; empty if none found
+}
+
+// K8sIngressTimeout is one proxy-timeout annotation found on an Ingress,
+// split into its label (the short annotation name) and value so the
+// renderer can color them separately.
+type K8sIngressTimeout struct {
+	Label string
+	Value string
+}
+
+// K8sServicePort is one Service port mapping.
+type K8sServicePort struct {
+	Name       string
+	Port       string
+	TargetPort string
+	Protocol   string
+}
+
+// K8sServiceDetail is one Service's type/ports.
+type K8sServiceDetail struct {
+	Name      string
+	Namespace string
+	Type      string // ClusterIP/NodePort/LoadBalancer/ExternalName; defaults to ClusterIP
+	Ports     []K8sServicePort
+}
+
+// K8sClusterStats aggregates the non-workload resources found alongside the
+// linted workloads (Services, Ingresses, RBAC, ...) into the counts and
+// ratios shown by the informational sub-cards rendered after the workload
+// grid. Unlike K8sWorkload these are cluster-wide tallies, not per-object
+// pass/warn/fail checks — except IngressDetails/ServiceDetails, which carry
+// enough per-object routing detail for their own drill-down cards.
+type K8sClusterStats struct {
+	Services          int
+	ServicesPrivPorts int // Service ports < 1024, summed across all Services
+	Ingresses         int
+	IngressesTLS      int // Ingresses with spec.tls set
+	NetworkPolicies   int
+
+	IngressDetails []K8sIngressDetail
+	ServiceDetails []K8sServiceDetail
+
+	ConfigMaps           int // excludes system-generated ones (kube-root-ca.crt, kube-system namespace)
+	PVCs                 int
+	PVCsWithStorageClass int
+	StorageClasses       int
+
+	ServiceAccounts      int // excludes the implicit "default" account
+	Roles                int
+	RolesWildcard        int // Role rules using a "*" verb or resource
+	RoleBindings         int
+	ClusterRoles         int
+	ClusterRolesWildcard int
+	ClusterRoleBindings  int
+
+	HPAs int
+	PDBs int
+
+	Operators []K8sOperatorResource
+}
+
+// Empty reports whether no cluster-wide stat resource was found at all.
+func (s K8sClusterStats) Empty() bool {
+	return s.Services == 0 && s.Ingresses == 0 && s.NetworkPolicies == 0 &&
+		s.ConfigMaps == 0 && s.PVCs == 0 && s.StorageClasses == 0 &&
+		s.ServiceAccounts == 0 && s.Roles == 0 && s.RoleBindings == 0 &&
+		s.ClusterRoles == 0 && s.ClusterRoleBindings == 0 &&
+		s.HPAs == 0 && s.PDBs == 0 && len(s.Operators) == 0
+}
+
 // K8sLint is the full result of scanning one or more cluster dumps.
 type K8sLint struct {
 	Workloads []K8sWorkload
+	Stats     K8sClusterStats
 	Files     []string
 	Truncated bool // true when more workloads were found than we render
 }
@@ -99,12 +201,39 @@ func ScanK8sLint(rootPath string) *K8sLint {
 	}
 
 	var workloads []K8sWorkload
+	var stats K8sClusterStats
+	var workloadFiles []string
+	seen := make(map[string]bool)
 	for _, f := range files {
 		lines, ok := readLarge(f, k8sLintMaxFileSize)
 		if !ok {
 			continue
 		}
-		workloads = append(workloads, scanDocuments(lines)...)
+		fileWorkloadCount := 0
+		for _, raw := range scanDocuments(lines) {
+			meta := mapField(raw.Item, "metadata")
+			name, _ := strField(meta, "name")
+			ns, _ := strField(meta, "namespace")
+			// A cluster dump split across multiple `kubectl get` invocations
+			// (e.g. one file per resource kind plus a catch-all full dump)
+			// commonly re-exports the same object more than once; keep only
+			// the first occurrence so it isn't double-counted in the report.
+			key := raw.Kind + "/" + ns + "/" + name
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			if k8sTargetKinds[raw.Kind] {
+				added := workloadsFromItem(raw.Kind, raw.Item)
+				workloads = append(workloads, added...)
+				fileWorkloadCount += len(added)
+			} else {
+				statsFromItem(raw.Kind, raw.Item, &stats)
+			}
+		}
+		if fileWorkloadCount > 0 {
+			workloadFiles = append(workloadFiles, f)
+		}
 	}
 	if len(workloads) == 0 {
 		return nil
@@ -123,7 +252,7 @@ func ScanK8sLint(rootPath string) *K8sLint {
 		workloads = workloads[:k8sLintMaxWorkloads]
 		truncated = true
 	}
-	return &K8sLint{Workloads: workloads, Files: relPaths(rootPath, files), Truncated: truncated}
+	return &K8sLint{Workloads: workloads, Stats: stats, Files: relPaths(rootPath, workloadFiles), Truncated: truncated}
 }
 
 // readLarge reads path fully, rejecting files above maxSize, and returns it
@@ -176,12 +305,39 @@ func looksLikeK8sManifest(path string) bool {
 	return k8sKindSniffRe.MatchString(sniff)
 }
 
-var k8sKindSniffRe = regexp.MustCompile(`(?m)^\s{0,2}kind:\s*(Pod|Deployment|StatefulSet|DaemonSet|Job|CronJob|List)\s*$`)
+var k8sKindSniffRe = regexp.MustCompile(`(?m)^\s{0,2}kind:\s*(Pod|Deployment|StatefulSet|DaemonSet|Job|CronJob|Service|Ingress|NetworkPolicy|ConfigMap|PersistentVolumeClaim|StorageClass|ServiceAccount|Role|RoleBinding|ClusterRole|ClusterRoleBinding|HorizontalPodAutoscaler|PodDisruptionBudget|Prometheus|Alertmanager|PrometheusRule|ServiceMonitor|PodMonitor|ScrapeConfig|VaultStaticSecret|VaultPKISecret|VaultConnection|VaultAuth|HTTPBackendGroup|GRPCBackendGroup|IngressGroupSetting|List)\s*$`)
 
 var k8sTargetKinds = map[string]bool{
 	"Pod": true, "Deployment": true, "StatefulSet": true,
 	"DaemonSet": true, "Job": true, "CronJob": true,
 }
+
+// k8sOperatorKinds are CRD kinds from recognized operators (Prometheus
+// Operator, Vault Secrets Operator, gateway/ALB-style backend CRDs) that get
+// grouped into the "Operators" stats card, one row per kind.
+var k8sOperatorKinds = map[string]bool{
+	"Prometheus": true, "Alertmanager": true, "PrometheusRule": true,
+	"ServiceMonitor": true, "PodMonitor": true, "ScrapeConfig": true,
+	"VaultStaticSecret": true, "VaultPKISecret": true, "VaultConnection": true, "VaultAuth": true,
+	"HTTPBackendGroup": true, "GRPCBackendGroup": true, "IngressGroupSetting": true,
+}
+
+// k8sStatsKinds are the non-workload kinds counted into K8sClusterStats —
+// networking/exposure, config/storage, RBAC, autoscaling/budgets, plus the
+// operator CRDs in k8sOperatorKinds.
+var k8sStatsKinds = func() map[string]bool {
+	m := map[string]bool{
+		"Service": true, "Ingress": true, "NetworkPolicy": true,
+		"ConfigMap": true, "PersistentVolumeClaim": true, "StorageClass": true,
+		"ServiceAccount": true, "Role": true, "RoleBinding": true,
+		"ClusterRole": true, "ClusterRoleBinding": true,
+		"HorizontalPodAutoscaler": true, "PodDisruptionBudget": true,
+	}
+	for k := range k8sOperatorKinds {
+		m[k] = true
+	}
+	return m
+}()
 
 // ── YAML-lite parser ─────────────────────────────────────────────────────
 //
@@ -477,12 +633,19 @@ func parseSequence(lines []string, i, indent int) ([]any, int) {
 // ── document/list scanning ────────────────────────────────────────────────
 
 var topKindRe = regexp.MustCompile(`^kind:\s*(\S+)\s*$`)
-var itemKindRe = regexp.MustCompile(`^  kind:\s*(Pod|Deployment|StatefulSet|DaemonSet|Job|CronJob)\s*$`)
+var itemKindRe = regexp.MustCompile(`^  kind:\s*(\S+)\s*$`)
+
+// k8sRawItem is one parsed manifest object paired with its `kind:`, before
+// it's routed to either workload linting or cluster-stats aggregation.
+type k8sRawItem struct {
+	Kind string
+	Item map[string]any
+}
 
 // scanDocuments splits raw file lines on top-level "---" separators and
 // scans each resulting document.
-func scanDocuments(lines []string) []K8sWorkload {
-	var out []K8sWorkload
+func scanDocuments(lines []string) []k8sRawItem {
+	var out []k8sRawItem
 	start := 0
 	for i, l := range lines {
 		if strings.TrimSpace(l) == "---" && lineIndent(l) == 0 {
@@ -497,7 +660,7 @@ func scanDocuments(lines []string) []K8sWorkload {
 // scanDocument scans one YAML document: either a `kind: List` wrapper (cheap
 // boundary scan over items, deep-parsing only matching ones) or a single
 // plain manifest object.
-func scanDocument(lines []string) []K8sWorkload {
+func scanDocument(lines []string) []k8sRawItem {
 	itemsIdx := -1
 	for idx, l := range lines {
 		if l == "items:" {
@@ -516,19 +679,19 @@ func scanDocument(lines []string) []K8sWorkload {
 			break
 		}
 	}
-	if !k8sTargetKinds[kind] {
+	if !k8sTargetKinds[kind] && !k8sStatsKinds[kind] {
 		return nil
 	}
 	item, _ := parseMapping(lines, 0, 0)
-	return workloadsFromItem(kind, item)
+	return []k8sRawItem{{Kind: kind, Item: item}}
 }
 
 // scanItemsList cheaply locates each top-level "- " item's line range (no
 // parsing) and only runs the full recursive-descent parser on items whose
 // `kind:` line (found via a plain string scan within that range) matches one
-// of our target kinds — the vast majority of a cluster dump (Secrets,
-// ConfigMaps, Events, RBAC, CRDs, ...) is never touched.
-func scanItemsList(lines []string, start int) []K8sWorkload {
+// of our target or stats kinds — the vast majority of a cluster dump
+// (Secrets, Events, Nodes, Leases, ...) is never touched.
+func scanItemsList(lines []string, start int) []k8sRawItem {
 	n := len(lines)
 	var bounds []int
 	endOfList := n
@@ -546,7 +709,7 @@ func scanItemsList(lines []string, start int) []K8sWorkload {
 		endOfList = i
 		break
 	}
-	var out []K8sWorkload
+	var out []k8sRawItem
 	for bi, s := range bounds {
 		e := endOfList
 		if bi+1 < len(bounds) {
@@ -559,7 +722,7 @@ func scanItemsList(lines []string, start int) []K8sWorkload {
 				break
 			}
 		}
-		if kind == "" {
+		if kind == "" || !(k8sTargetKinds[kind] || k8sStatsKinds[kind]) {
 			continue
 		}
 		items, _ := parseSequence(lines[s:e], 0, 0)
@@ -570,7 +733,7 @@ func scanItemsList(lines []string, start int) []K8sWorkload {
 		if !ok {
 			continue
 		}
-		out = append(out, workloadsFromItem(kind, item)...)
+		out = append(out, k8sRawItem{Kind: kind, Item: item})
 	}
 	return out
 }
@@ -688,6 +851,245 @@ func workloadsFromItem(kind string, item map[string]any) []K8sWorkload {
 		return nil
 	}
 	return []K8sWorkload{lintWorkload(kind, name, ns, podSpec, replicas)}
+}
+
+// ── cluster stats extraction (Networking/Config/RBAC/Autoscaling/Operators) ─
+
+// k8sSystemNamespaces are excluded from the "custom ConfigMaps"/"custom
+// ServiceAccounts" counts, since they're always present and never
+// user-authored.
+var k8sSystemNamespaces = map[string]bool{
+	"kube-system": true, "kube-public": true, "kube-node-lease": true,
+}
+
+// rulesHaveWildcard reports whether any Role/ClusterRole rule uses a "*"
+// verb or resource — the RBAC over-permissioning signal kube-linter's
+// wildcard-in-rules check flags.
+func rulesHaveWildcard(item map[string]any) bool {
+	for _, r := range listField(item, "rules") {
+		rm, _ := r.(map[string]any)
+		for _, v := range listField(rm, "verbs") {
+			if s, _ := v.(string); s == "*" {
+				return true
+			}
+		}
+		for _, v := range listField(rm, "resources") {
+			if s, _ := v.(string); s == "*" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// addOperatorResource tallies one operator CRD instance into stats.Operators,
+// grouping by kind, and best-effort-reads a health signal for kinds we know
+// how to interpret (currently just Prometheus's status.availableReplicas).
+func addOperatorResource(stats *K8sClusterStats, kind string, item map[string]any) {
+	var i int
+	for i = range stats.Operators {
+		if stats.Operators[i].Kind == kind {
+			break
+		}
+	}
+	if i == len(stats.Operators) {
+		stats.Operators = append(stats.Operators, K8sOperatorResource{Kind: kind})
+	}
+	stats.Operators[i].Count++
+
+	if kind == "Prometheus" {
+		if s, ok := strField(mapField(item, "status"), "availableReplicas"); ok {
+			if n, err := strconv.Atoi(s); err == nil {
+				stats.Operators[i].AvailableReplicas += n
+				stats.Operators[i].HasAvailableReplicas = true
+			}
+		}
+	}
+}
+
+// k8sTimeoutAnnotations are the common ingress-controller annotation keys
+// that set a proxy timeout — there's no standard Ingress spec field for
+// this, so it's best-effort-read from whichever of these is present.
+var k8sTimeoutAnnotations = []string{
+	"nginx.ingress.kubernetes.io/proxy-read-timeout",
+	"nginx.ingress.kubernetes.io/proxy-send-timeout",
+	"nginx.ingress.kubernetes.io/proxy-connect-timeout",
+	"haproxy.org/timeout-server",
+	"haproxy.org/timeout-client",
+	"traefik.ingress.kubernetes.io/router.timeout",
+}
+
+// ingressTimeouts best-effort-reads proxy timeouts from whichever known
+// ingress-controller annotations are present, e.g. {"proxy-read-timeout", "60s"}.
+func ingressTimeouts(item map[string]any) []K8sIngressTimeout {
+	ann := mapField(mapField(item, "metadata"), "annotations")
+	if ann == nil {
+		return nil
+	}
+	var out []K8sIngressTimeout
+	for _, key := range k8sTimeoutAnnotations {
+		v, ok := strField(ann, key)
+		if !ok || v == "" {
+			continue
+		}
+		label := key[strings.LastIndex(key, "/")+1:]
+		if _, err := strconv.Atoi(v); err == nil {
+			v += "s"
+		}
+		out = append(out, K8sIngressTimeout{Label: label, Value: v})
+	}
+	return out
+}
+
+// ingressBackend renders a path/defaultBackend's target as "service:port",
+// supporting both the networking.k8s.io/v1 (backend.service.name/port) and
+// legacy extensions/v1beta1 (backend.serviceName/servicePort) shapes.
+func ingressBackend(bm map[string]any) string {
+	if svc := mapField(bm, "service"); svc != nil {
+		name, _ := strField(svc, "name")
+		port := mapField(svc, "port")
+		num, _ := strField(port, "number")
+		pname, _ := strField(port, "name")
+		p := num
+		if p == "" {
+			p = pname
+		}
+		if name != "" && p != "" {
+			return name + ":" + p
+		}
+		return name
+	}
+	name, _ := strField(bm, "serviceName")
+	port, _ := strField(bm, "servicePort")
+	if name != "" && port != "" {
+		return name + ":" + port
+	}
+	return name
+}
+
+// ingressRules flattens an Ingress spec's host/path rules (falling back to
+// spec.defaultBackend when there are no rules) into a flat display list.
+func ingressRules(spec map[string]any) []K8sIngressRule {
+	var out []K8sIngressRule
+	for _, r := range listField(spec, "rules") {
+		rm, _ := r.(map[string]any)
+		host, _ := strField(rm, "host")
+		paths := listField(mapField(rm, "http"), "paths")
+		if len(paths) == 0 {
+			out = append(out, K8sIngressRule{Host: host})
+			continue
+		}
+		for _, p := range paths {
+			pm, _ := p.(map[string]any)
+			path, _ := strField(pm, "path")
+			out = append(out, K8sIngressRule{Host: host, Path: path, Backend: ingressBackend(mapField(pm, "backend"))})
+		}
+	}
+	if len(out) == 0 {
+		if db := mapField(spec, "defaultBackend"); db != nil {
+			out = append(out, K8sIngressRule{Backend: ingressBackend(db)})
+		}
+	}
+	return out
+}
+
+// ingressTLSSecrets collects the distinct TLS secretNames referenced by an
+// Ingress's spec.tls entries.
+func ingressTLSSecrets(spec map[string]any) []string {
+	var out []string
+	for _, t := range listField(spec, "tls") {
+		tm, _ := t.(map[string]any)
+		if s, ok := strField(tm, "secretName"); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// statsFromItem folds one non-workload manifest object into the running
+// K8sClusterStats totals shown by the informational sub-cards after the
+// workload grid.
+func statsFromItem(kind string, item map[string]any, stats *K8sClusterStats) {
+	meta := mapField(item, "metadata")
+	name, _ := strField(meta, "name")
+	ns, _ := strField(meta, "namespace")
+	spec := mapField(item, "spec")
+
+	switch kind {
+	case "Service":
+		stats.Services++
+		svcType, _ := strField(spec, "type")
+		if svcType == "" {
+			svcType = "ClusterIP"
+		}
+		var ports []K8sServicePort
+		for _, p := range listField(spec, "ports") {
+			pm, _ := p.(map[string]any)
+			port, _ := strField(pm, "port")
+			if n, err := strconv.Atoi(port); err == nil && n > 0 && n < 1024 {
+				stats.ServicesPrivPorts++
+			}
+			pname, _ := strField(pm, "name")
+			targetPort, _ := strField(pm, "targetPort")
+			proto, _ := strField(pm, "protocol")
+			if proto == "" {
+				proto = "TCP"
+			}
+			ports = append(ports, K8sServicePort{Name: pname, Port: port, TargetPort: targetPort, Protocol: proto})
+		}
+		stats.ServiceDetails = append(stats.ServiceDetails, K8sServiceDetail{Name: name, Namespace: ns, Type: svcType, Ports: ports})
+	case "Ingress":
+		stats.Ingresses++
+		hasTLS := len(listField(spec, "tls")) > 0
+		if hasTLS {
+			stats.IngressesTLS++
+		}
+		class, _ := strField(spec, "ingressClassName")
+		stats.IngressDetails = append(stats.IngressDetails, K8sIngressDetail{
+			Name: name, Namespace: ns, IngressClass: class,
+			Rules: ingressRules(spec), TLS: hasTLS, TLSSecrets: ingressTLSSecrets(spec),
+			Timeouts: ingressTimeouts(item),
+		})
+	case "NetworkPolicy":
+		stats.NetworkPolicies++
+	case "ConfigMap":
+		if name != "kube-root-ca.crt" && !k8sSystemNamespaces[ns] {
+			stats.ConfigMaps++
+		}
+	case "PersistentVolumeClaim":
+		stats.PVCs++
+		if sc, ok := strField(spec, "storageClassName"); ok && sc != "" {
+			stats.PVCsWithStorageClass++
+		}
+	case "StorageClass":
+		stats.StorageClasses++
+	case "ServiceAccount":
+		if name != "" && name != "default" {
+			stats.ServiceAccounts++
+		}
+	case "Role":
+		stats.Roles++
+		if rulesHaveWildcard(item) {
+			stats.RolesWildcard++
+		}
+	case "ClusterRole":
+		stats.ClusterRoles++
+		if rulesHaveWildcard(item) {
+			stats.ClusterRolesWildcard++
+		}
+	case "RoleBinding":
+		stats.RoleBindings++
+	case "ClusterRoleBinding":
+		stats.ClusterRoleBindings++
+	case "HorizontalPodAutoscaler":
+		stats.HPAs++
+	case "PodDisruptionBudget":
+		stats.PDBs++
+	default:
+		if k8sOperatorKinds[kind] {
+			addOperatorResource(stats, kind, item)
+		}
+	}
 }
 
 // ── lint checks (inspired by kube-linter's default rule set) ─────────────
