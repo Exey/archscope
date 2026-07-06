@@ -208,7 +208,7 @@ func lintDockerfiles(root string, paths []string) *DevOpsArtifactLint {
 	)
 
 	for _, p := range paths {
-		lines := readSmall(p)
+		lines := joinContinuations(readSmall(p))
 		fromsInFile, runsInFile := 0, 0
 		hasHealth, hasUser, hasUID, hasLabel, hasWorkdir, hasWorkdirAbs := false, false, false, false, false, false
 		for _, raw := range lines {
@@ -221,19 +221,20 @@ func lintDockerfiles(root string, paths []string) *DevOpsArtifactLint {
 			case strings.HasPrefix(up, "FROM "):
 				fromsInFile++
 				fromTotal++
-				img := strings.Fields(line)[1]
-				if strings.Contains(img, "@sha256:") {
-					fromDigest++
-				} else if strings.HasSuffix(img, ":latest") || !strings.Contains(img, ":") {
-					// scratch and stage refs (FROM builder) are fine
-					lowImg := strings.ToLower(img)
-					if lowImg != "scratch" && !isStageRef(lines, img) {
-						fromFloating++
+				if img, ok := fromImageToken(line); ok {
+					if strings.Contains(img, "@sha256:") {
+						fromDigest++
+					} else if strings.HasSuffix(img, ":latest") || !strings.Contains(img, ":") {
+						// scratch and stage refs (FROM builder) are fine
+						lowImg := strings.ToLower(img)
+						if lowImg != "scratch" && !isStageRef(lines, img) {
+							fromFloating++
+						}
 					}
-				}
-				base := strings.ToLower(strings.SplitN(strings.SplitN(img, ":", 2)[0], "@", 2)[0])
-				if base != "" && base != "scratch" {
-					baseImages[filepath.Base(base)] = true
+					base := strings.ToLower(strings.SplitN(strings.SplitN(img, ":", 2)[0], "@", 2)[0])
+					if base != "" && base != "scratch" {
+						baseImages[filepath.Base(base)] = true
+					}
 				}
 			case strings.HasPrefix(up, "RUN "):
 				runsInFile++
@@ -429,6 +430,60 @@ func lintDockerfiles(root string, paths []string) *DevOpsArtifactLint {
 	return &DevOpsArtifactLint{Kind: "Dockerfile", Icon: "🐳", Files: relPaths(root, paths), Checks: checks}
 }
 
+// fromImageToken extracts the image reference from a FROM instruction line,
+// skipping any leading BuildKit flags such as --platform=linux/amd64
+// (FROM [--platform=<platform>] <image> [AS <name>]). Returns ok=false if no
+// image token is present (a malformed FROM line).
+func fromImageToken(line string) (string, bool) {
+	fields := strings.Fields(line)
+	for _, f := range fields[1:] {
+		if strings.HasPrefix(f, "--") {
+			continue
+		}
+		return f, true
+	}
+	return "", false
+}
+
+// joinContinuations merges Dockerfile lines ending in a line-continuation
+// backslash with the line(s) that follow, so multi-line instructions such as
+//
+//	ENV FOO=bar \
+//	    API_TOKEN=supersecret123
+//
+// are scanned as a single logical line. Comment lines never continue.
+func joinContinuations(lines []string) []string {
+	var out []string
+	var cur strings.Builder
+	appending := false
+	for _, raw := range lines {
+		line := strings.TrimRight(raw, "\r")
+		continues := !strings.HasPrefix(strings.TrimSpace(line), "#") &&
+			strings.HasSuffix(strings.TrimRight(line, " \t"), "\\")
+		part := line
+		if continues {
+			part = strings.TrimSuffix(strings.TrimRight(line, " \t"), "\\")
+		}
+		if appending {
+			cur.WriteString(" ")
+			cur.WriteString(strings.TrimSpace(part))
+		} else {
+			cur.WriteString(part)
+		}
+		if continues {
+			appending = true
+			continue
+		}
+		out = append(out, cur.String())
+		cur.Reset()
+		appending = false
+	}
+	if appending {
+		out = append(out, cur.String())
+	}
+	return out
+}
+
 // isStageRef reports whether img matches a named build stage (FROM x AS name).
 func isStageRef(lines []string, img string) bool {
 	needle := " as " + strings.ToLower(img)
@@ -479,11 +534,26 @@ func lintCompose(root string, paths []string) *DevOpsArtifactLint {
 		if regexp.MustCompile(`(?m)^networks:`).MatchString(content) {
 			filesWithNetworks++
 		}
-		inEnv := false
+		// inBlock/blockIndent track which nested key (environment / cap_add /
+		// cap_drop) the current line falls under, by comparing indentation —
+		// a line at or above the indent of the key that opened the block
+		// closes it. This keeps cap_drop (dropping capabilities, a security
+		// best practice — including "cap_drop: [ALL]") from being confused
+		// with cap_add (adding capabilities, which is what's dangerous).
+		inBlock := ""
+		var blockIndent int
 		hasPorts := false
 		for _, raw := range lines {
 			line := strings.TrimSpace(raw)
 			low := strings.ToLower(line)
+			if line == "" {
+				continue
+			}
+			indent := len(raw) - len(strings.TrimLeft(raw, " \t"))
+			if inBlock != "" && indent <= blockIndent {
+				inBlock = ""
+			}
+
 			switch {
 			case strings.HasPrefix(low, "privileged:") && strings.Contains(low, "true"):
 				privileged++
@@ -492,19 +562,26 @@ func lintCompose(root string, paths []string) *DevOpsArtifactLint {
 			case strings.Contains(line, "/var/run/docker.sock"):
 				sockMounts++
 			}
-			for _, c := range dangerousCaps {
-				if strings.Contains(line, c) && (strings.HasPrefix(low, "-") || strings.Contains(low, "cap_add")) {
-					capBad++
-					break
-				}
+
+			switch {
+			case strings.HasPrefix(low, "environment:"):
+				inBlock, blockIndent = "environment", indent
+			case strings.HasPrefix(low, "cap_add:"):
+				inBlock, blockIndent = "cap_add", indent
+			case strings.HasPrefix(low, "cap_drop:"):
+				inBlock, blockIndent = "cap_drop", indent
 			}
-			if strings.HasPrefix(low, "environment:") {
-				inEnv = true
-			} else if !strings.HasPrefix(raw, " ") && !strings.HasPrefix(raw, "\t") && line != "" {
-				inEnv = false
-			}
-			if inEnv && looksLikeHardcodedSecret(line) {
+
+			if inBlock == "environment" && looksLikeHardcodedSecret(line) {
 				secretLines++
+			}
+			if inBlock == "cap_add" {
+				for _, c := range dangerousCaps {
+					if strings.Contains(line, c) {
+						capBad++
+						break
+					}
+				}
 			}
 			if strings.HasPrefix(low, "ports:") {
 				hasPorts = true

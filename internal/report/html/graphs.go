@@ -44,6 +44,9 @@ func nextGraphID() string {
 // ── Global architecture graph ─────────────────────────────────────────────────
 
 func renderGlobalArchGraph(res *result.AnalysisResult) string {
+	if res.Scan.SkipModules {
+		return ""
+	}
 	type modInfo struct {
 		key         string
 		origName    string
@@ -530,7 +533,6 @@ func renderDeclGraph(modName string, files []*parser.ParsedFile) string {
 		string(dj), id, kc, id, kc)
 	return b.String()
 }
-
 
 // ── Architecture layers ───────────────────────────────────────────────────────
 

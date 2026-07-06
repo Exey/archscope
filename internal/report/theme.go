@@ -505,7 +505,11 @@ a.as-chip:hover{opacity:.8}
 .as-plat-card__name{font-weight:600;font-size:14px;white-space:nowrap}
 .as-plat-card__loc{font-family:var(--mono);font-size:12px;color:var(--text-dim);background:var(--bg-inset);padding:2px 8px;border-radius:4px;white-space:nowrap}
 .as-plat-card__files{font-size:12px;color:var(--text-faint);white-space:nowrap}
-.as-plat-card__stat{font-size:12px;color:var(--text-dim);font-weight:500;white-space:nowrap}
+.as-plat-card__stat{font-size:11.5px;font-weight:700;white-space:nowrap;padding:2px 9px;border-radius:999px;border:1px solid transparent}
+.as-plat-card__stat--api{color:#e0839e;background:rgba(107,29,60,.25);border-color:rgba(107,29,60,.5)}
+.as-plat-card__stat--arch{color:#6fcf97;background:rgba(27,67,50,.3);border-color:rgba(45,106,79,.5)}
+[data-theme="light"] .as-plat-card__stat--api{color:#6b1d3c;background:rgba(107,29,60,.08);border-color:rgba(107,29,60,.25)}
+[data-theme="light"] .as-plat-card__stat--arch{color:#1b4332;background:rgba(27,67,50,.08);border-color:rgba(27,67,50,.25)}
 .as-plat-card__actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
 .as-plat-card__chevron{color:var(--text-faint);font-size:20px;font-weight:300;transition:transform .2s;display:inline-block;line-height:1;margin-left:2px}
 .as-plat-card--open .as-plat-card__chevron{transform:rotate(90deg)}
@@ -528,7 +532,12 @@ a.as-chip:hover{opacity:.8}
 .as-dvo-cat{color:var(--text-faint);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;margin:8px 0 3px}
 .as-dvo-row{display:flex;align-items:center;gap:7px;padding:1.5px 0;font-size:12px;line-height:1.35;min-width:0}
 .as-dvo-m{color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+a.as-dvo-m--link{text-decoration:none;border-bottom:1px dotted var(--text-faint)}
+a.as-dvo-m--link:hover{color:var(--accent);border-bottom-color:var(--accent)}
 .as-dvo-v{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--text-faint);white-space:nowrap;flex-shrink:0}
+.as-dvo-doc2{margin:-1px 0 2px 15px;font-size:10px}
+.as-dvo-doc2 a{color:var(--text-faint);text-decoration:none;border-bottom:1px dotted var(--border-strong)}
+.as-dvo-doc2 a:hover{color:var(--accent);border-bottom-color:var(--accent)}
 .as-dvo-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .as-dvo-dot--pass{background:var(--good)}
 .as-dvo-dot--warn{background:var(--warn)}
@@ -577,6 +586,32 @@ a.as-chip:hover{opacity:.8}
 .as-dvo-gauge-svg{width:100%;max-width:180px;display:block;margin:0 auto}
 .as-dvo-gauge-val{font-family:var(--mono);font-size:22px;font-weight:700}
 .as-dvo-gauge-band{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:6px;margin-top:2px}
+
+/* ☸️ Kubernetes Pods (DevOps sub-card) */
+.as-k8s-sub{display:flex;align-items:center;gap:10px}
+.as-k8s-kind-sub{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-faint);
+  margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--border)}
+.as-k8s-kind-count{font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-faint)}
+.as-k8s-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;margin-top:8px}
+.as-k8s-card{background:var(--bg-inset);border:1px solid var(--border);border-left:3px solid var(--border);
+  border-radius:var(--radius-sm);padding:9px 11px;min-width:0}
+.as-k8s-card__head{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12.5px;font-weight:600;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.as-k8s-replicas{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--text-faint);flex-shrink:0}
+.as-k8s-card__ns{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);margin-top:1px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.as-k8s-card__res{display:grid;grid-template-columns:repeat(3,1fr);gap:2px 6px;margin-top:7px}
+.as-k8s-card__res>div{display:flex;flex-direction:column;min-width:0}
+.as-k8s-res-label{font-size:8.5px;font-weight:700;letter-spacing:.04em;color:var(--text-faint)}
+.as-k8s-res-val{font-family:var(--mono);font-size:10px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.as-k8s-card__lint{display:flex;align-items:center;gap:4px;margin-top:8px;cursor:default}
+.as-k8s-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.as-k8s-dot--pass{background:var(--good)}
+.as-k8s-dot--warn{background:var(--warn)}
+.as-k8s-dot--fail{background:var(--crit)}
+.as-k8s-card__score{margin-left:auto;font-family:var(--mono);font-size:11px;font-weight:700}
+.as-k8s-card__failed{margin-top:6px;padding-top:6px;border-top:1px dashed var(--border);font-size:10px;color:var(--crit);line-height:1.5}
+.as-k8s-card__failed div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* 📡 Technical Radar (static SVG quadrant radar + tech chips) */
 .as-radar{position:relative;margin-bottom:18px}

@@ -566,17 +566,6 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 		}
 		return string(list[i].plat) < string(list[j].plat)
 	})
-	// Check if the project has multiple languages — if so, always show lang badge.
-	platSet := map[langspec.Platform]bool{}
-	for _, a := range list {
-		platSet[a.plat] = true
-	}
-	multiLang := len(platSet) > 1
-	// For same-name conflicts across platforms, always badge regardless.
-	namePlatCount := map[string]int{}
-	for _, a := range list {
-		namePlatCount[a.name]++
-	}
 	fmt.Fprintf(&b, `<div class="as-sub" style="margin-top:16px">Packages &amp; modules <span style="color:var(--text-faint);font-weight:400;text-transform:none;letter-spacing:0">(%d)</span></div>`, len(list))
 	if len(list) == 0 {
 		b.WriteString(`<p class="as-empty">No modules detected.</p>`)
@@ -587,16 +576,24 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 			if name == "" {
 				name = "(root)"
 			}
-			badge := ""
-			if !res.Scan.FolderAsTab && (multiLang || namePlatCount[a.name] > 1) {
-				badge = shortLangBadge(a.plat)
+			// The click-to-scroll target only exists when the Modules &
+			// Microservices section is actually rendered; under
+			// --skip-modules these are plain, non-clickable chips.
+			if res.Scan.SkipModules {
+				fmt.Fprintf(&b,
+					`<div class="as-pkg">`+
+						`<span class="as-pkg__name">%s %s</span>`+
+						`<span class="as-pkg__meta"><span class="as-pkg__loc">%s loc</span></span>`+
+						`</div>`,
+					shortLangBadge(a.plat), esc(name), fmtNum(a.loc))
+				continue
 			}
 			fmt.Fprintf(&b,
 				`<div class="as-pkg as-pkg--link" data-mod="%s" style="cursor:pointer" title="Open in Modules &amp; Microservices">`+
-					`<span class="as-pkg__name">%s📦 %s</span>`+
+					`<span class="as-pkg__name">%s %s</span>`+
 					`<span class="as-pkg__meta"><span class="as-pkg__loc">%s loc</span></span>`+
 					`</div>`,
-				esc(anchorID(a.name)), badge, esc(name), fmtNum(a.loc))
+				esc(anchorID(a.name)), shortLangBadge(a.plat), esc(name), fmtNum(a.loc))
 		}
 		b.WriteString(`</div>`)
 	}
@@ -648,20 +645,14 @@ func techCategorySets(res *result.AnalysisResult) map[string]map[string]bool {
 // metrics) for Dockerfiles, Helm charts, and docker-compose files.
 func renderDevOpsSection(res *result.AnalysisResult) string {
 	lint := res.DevOpsLint
-	if len(res.DevOpsTools) == 0 && lint.Empty() {
+	k8s := res.K8sLint
+	if len(res.DevOpsTools) == 0 && lint.Empty() && k8s.Empty() {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">☁️</span><h2>DevOps</h2>`)
 	if score, ok := lint.Score(); ok {
-		cls := "good"
-		if score < 75 {
-			cls = "warn"
-		}
-		if score < 50 {
-			cls = "crit"
-		}
-		fmt.Fprintf(&b, `<span class="as-dvo-score as-dvo-score--%s" title="Static-analysis hygiene score (pass=1, warn=½, fail=0)">%d%%</span>`, cls, score)
+		fmt.Fprintf(&b, `<span class="as-dvo-score as-dvo-score--%s" title="Static-analysis hygiene score (pass=1, warn=½, fail=0)">%d%%</span>`, dvoScoreClass(score), score)
 	}
 	b.WriteString(`</div>`)
 
@@ -692,8 +683,106 @@ func renderDevOpsSection(res *result.AnalysisResult) string {
 		b.WriteString(`</div>`)
 	}
 
+	// Kubernetes Pods sub-card: workload cards from a kubectl cluster dump
+	// or plain manifest files.
+	if !k8s.Empty() {
+		b.WriteString(renderK8sPodsCard(k8s))
+	}
+
 	b.WriteString(`</div>`)
 	return b.String()
+}
+
+// dvoScoreClass grades a 0-100 pass-rate score into the good/warn/crit
+// palette shared by the DevOps score badges.
+func dvoScoreClass(score int) string {
+	switch {
+	case score >= 75:
+		return "good"
+	case score >= 50:
+		return "warn"
+	default:
+		return "crit"
+	}
+}
+
+// devopsDocLink is one reference source for a static-analysis check (the
+// tool/rule that inspired it, e.g. "Hadolint DL3006") plus its docs URL.
+type devopsDocLink struct {
+	Label string
+	URL   string
+}
+
+// devopsDocLinks maps a DevOpsCheck.Metric to the docs it was modeled after.
+// A check may cite more than one source (e.g. both Hadolint and Dockle catch
+// the same non-root-USER practice); the first is rendered as the metric's own
+// link, any further ones as small secondary references underneath.
+var devopsDocLinks = map[string][]devopsDocLink{
+	// 🐳 Dockerfile — Hadolint / Dockle / Checkov / Docker docs
+	"Pinned digest (no :latest)": {
+		{"Hadolint DL3006", "https://github.com/hadolint/hadolint/wiki/DL3006"},
+		{"Docker best practice: FROM", "https://docs.docker.com/develop/develop-images/dockerfile_best-practices/#from"},
+	},
+	"Base image CVE count": {{"Trivy / Docker Scout", "https://docs.docker.com/scout/"}},
+	"RUN instructions":     {{"Docker best practice: minimize layers", "https://docs.docker.com/develop/develop-images/dockerfile_best-practices/#minimize-the-number-of-layers"}},
+	"ADD instead of COPY":  {{"Hadolint DL3020", "https://github.com/hadolint/hadolint/wiki/DL3020"}},
+	"HEALTHCHECK present":  {{"Hadolint DL3018", "https://github.com/hadolint/hadolint/wiki/DL3018"}},
+	"Secrets in ARG/ENV":   {{"Checkov CKV_DOCKER_5", "https://docs.bridgecrew.io/docs/ensure-that-build-arguments-do-not-contain-secrets"}},
+	"Non-root USER": {
+		{"Hadolint DL3002", "https://github.com/hadolint/hadolint/wiki/DL3002"},
+		{"Dockle CIS-DI-0001", "https://github.com/goodwithtech/dockle#CIS-DI-0001"},
+	},
+	"Numeric UID":                {{"Checkov CKV_DOCKER_7", "https://docs.bridgecrew.io/docs/ensure-that-the-user-instruction-sets-a-non-root-user"}},
+	"chmod 777 / world-writable": {{"Checkov CKV_DOCKER_8", "https://docs.bridgecrew.io/docs/ensure-that-files-and-directories-are-not-world-writable"}},
+	"COPY --chown set": {
+		{"Dockle DKL-DI-0002", "https://github.com/goodwithtech/dockle#DKL-DI-0002"},
+		{"Docker best practice: --chown", "https://docs.docker.com/develop/develop-images/dockerfile_best-practices/#add-or-copy"},
+	},
+	"Absolute WORKDIR":            {{"Hadolint DL3000", "https://github.com/hadolint/hadolint/wiki/DL3000"}},
+	"Privileged ports (<1024)":    {{"CIS Docker Benchmark", "https://www.cisecurity.org/benchmark/docker"}},
+	"Multi-stage build":           {{"Docker best practice: multi-stage builds", "https://docs.docker.com/develop/develop-images/dockerfile_best-practices/#use-multi-stage-builds"}},
+	"apt --no-install-recommends": {{"Hadolint DL3015", "https://github.com/hadolint/hadolint/wiki/DL3015"}},
+	"apk --no-cache":              {{"Hadolint DL3019", "https://github.com/hadolint/hadolint/wiki/DL3019"}},
+	"curl | sh pipes":             {{"Hadolint DL4006", "https://github.com/hadolint/hadolint/wiki/DL4006"}},
+	"OCI LABELs present":          {{"Checkov CKV_DOCKER_15", "https://docs.bridgecrew.io/docs/ensure-that-the-image-has-oci-labels"}},
+
+	// ⛵ Helm Chart — Helm best practices / KubeLinter / Checkov / Kubernetes docs
+	"Chart.yaml required fields":  {{"Helm: Chart.yaml", "https://helm.sh/docs/topics/charts/#the-chartyaml-file"}},
+	"values.schema.json":          {{"Helm: schema files", "https://helm.sh/docs/topics/charts/#schema-files"}},
+	"Maintainers & icon metadata": {{"Helm: Chart.yaml fields", "https://helm.sh/docs/topics/charts/#the-chartyaml-file"}},
+	"Deprecated K8s API versions": {{"KubeLinter deprecated-api-version", "https://docs.kubelinter.io/#/checks/deprecated-api-version"}},
+	"Hardcoded namespace":         {{"Helm best practice: templates", "https://helm.sh/docs/chart_best_practices/templates/#namespaces"}},
+	"resources.requests defined":  {{"Kubernetes: managing resources", "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"}},
+	"resources.limits defined":    {{"Checkov CKV_K8S_11/12", "https://docs.bridgecrew.io/docs/ensure-cpu-limits-are-set"}},
+	"runAsNonRoot enforced":       {{"KubeLinter run-as-non-root", "https://docs.kubelinter.io/#/checks/run-as-non-root"}},
+	"readOnlyRootFilesystem":      {{"KubeLinter read-only-root-filesystem", "https://docs.kubelinter.io/#/checks/read-only-root-filesystem"}},
+	"allowPrivilegeEscalation: false": {
+		{"KubeLinter privilege-escalation-container", "https://docs.kubelinter.io/#/checks/privilege-escalation-container"},
+		{"Checkov CKV_K8S_14", "https://docs.bridgecrew.io/docs/ensure-containers-do-not-allow-privilege-escalation"},
+	},
+	"Privileged containers":        {{"KubeLinter privileged-container", "https://docs.kubelinter.io/#/checks/privileged-container"}},
+	"Dangerous capabilities added": {{"KubeLinter dangerous-capabilities", "https://docs.kubelinter.io/#/checks/dangerous-capabilities"}},
+	"seccompProfile set":           {{"KubeLinter seccomp-profile-required", "https://docs.kubelinter.io/#/checks/seccomp-profile-required"}},
+	"NetworkPolicy defined":        {{"KubeLinter required-network-policy", "https://docs.kubelinter.io/#/checks/required-network-policy"}},
+	"LoadBalancer services":        {{"Checkov CKV_K8S_36", "https://docs.bridgecrew.io/docs/ensure-that-loadbalancer-services-are-not-exposed"}},
+	"Ingress TLS configured":       {{"KubeLinter tls-ingress", "https://docs.kubelinter.io/#/checks/tls-ingress"}},
+	"PodDisruptionBudget defined":  {{"Kubernetes: PDB", "https://kubernetes.io/docs/tasks/run-application/configure-pdb/"}},
+	"emptyDir sizeLimit":           {{"Checkov CKV_K8S_28", "https://docs.bridgecrew.io/docs/ensure-emptydir-volumes-have-a-sizelimit-set"}},
+	"Dedicated serviceAccountName": {{"Kubernetes: Service Accounts", "https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/"}},
+	"Wildcard ClusterRole rules":   {{"KubeLinter wildcard-resource-rbac", "https://docs.kubelinter.io/#/checks/wildcard-resource-rbac"}},
+	"Signed chart (*.prov)":        {{"Helm Provenance", "https://helm.sh/docs/topics/provenance/"}},
+	"values.yaml documentation":    {{"Helm best practice: document values", "https://helm.sh/docs/chart_best_practices/values/#document-each-value"}},
+
+	// 🐙 Docker Compose — Compose Spec / Docker docs
+	"Obsolete compose version":  {{"Compose Spec: version (deprecated)", "https://docs.docker.com/compose/compose-file/#version-top-level-element"}},
+	"privileged: true services": {{"Compose file reference: privileged", "https://docs.docker.com/compose/compose-file/#privileged"}},
+	"Dangerous cap_add":         {{"Compose file reference: cap_add", "https://docs.docker.com/compose/compose-file/#cap_add-cap_drop"}},
+	"docker.sock mounted":       {{"Checkov: docker socket", "https://docs.bridgecrew.io/docs/ensure-docker-socket-is-not-mounted-inside-any-containers"}},
+	"Secrets in environment":    {{"Compose: environment variables", "https://docs.docker.com/compose/environment-variables/"}},
+	"deploy.resources.limits":   {{"Compose deploy: resources", "https://docs.docker.com/compose/compose-file/#deploy"}},
+	"restart: always usage":     {{"Compose: restart", "https://docs.docker.com/compose/compose-file/#restart"}},
+	"Ports on 0.0.0.0":          {{"Compose: ports (long syntax)", "https://docs.docker.com/compose/compose-file/#ports"}},
+	"Custom networks defined":   {{"Compose: networks", "https://docs.docker.com/compose/compose-file/#networks"}},
 }
 
 func renderDevOpsColumn(a *scanner.DevOpsArtifactLint) string {
@@ -707,12 +796,312 @@ func renderDevOpsColumn(a *scanner.DevOpsArtifactLint) string {
 			fmt.Fprintf(&b, `<div class="as-dvo-cat">%s</div>`, esc(c.Category))
 			lastCat = c.Category
 		}
+		docs := devopsDocLinks[c.Metric]
+		metricHTML := esc(c.Metric)
+		if len(docs) > 0 {
+			metricHTML = fmt.Sprintf(`<a class="as-dvo-m as-dvo-m--link" href="%s" target="_blank" rel="noopener" title="%s docs">%s</a>`,
+				esc(docs[0].URL), esc(docs[0].Label), esc(c.Metric))
+		} else {
+			metricHTML = fmt.Sprintf(`<span class="as-dvo-m">%s</span>`, esc(c.Metric))
+		}
 		fmt.Fprintf(&b,
-			`<div class="as-dvo-row"><span class="as-dvo-dot as-dvo-dot--%s"></span><span class="as-dvo-m">%s</span><span class="as-dvo-v">%s</span></div>`,
-			esc(c.Status), esc(c.Metric), esc(c.Value))
+			`<div class="as-dvo-row"><span class="as-dvo-dot as-dvo-dot--%s"></span>%s<span class="as-dvo-v">%s</span></div>`,
+			esc(c.Status), metricHTML, esc(c.Value))
+		if len(docs) > 1 {
+			for _, d := range docs[1:] {
+				fmt.Fprintf(&b, `<div class="as-dvo-doc2">↳ <a href="%s" target="_blank" rel="noopener">%s</a></div>`,
+					esc(d.URL), esc(d.Label))
+			}
+		}
 	}
 	b.WriteString(`</div>`)
 	return b.String()
+}
+
+// ── ☸️ Kubernetes Pods (DevOps sub-card) ─────────────────────────────────────
+
+var k8sKindIcon = map[string]string{
+	"Pod": "🔹", "Deployment": "🚀", "StatefulSet": "🗄️",
+	"DaemonSet": "🛰️", "Job": "⏱️", "CronJob": "⏰",
+}
+
+// k8sMaxCardsPerKind caps how many workload cards are rendered per kind
+// group — a cluster dump can contain hundreds of distinct workloads, and the
+// report stays readable (and a reasonable file size) by showing only the
+// biggest ones by resource footprint within each kind.
+const k8sMaxCardsPerKind = 30
+
+// k8sKindOrder fixes the display order of the per-kind subsections.
+var k8sKindOrder = []string{"StatefulSet", "Pod", "DaemonSet", "Deployment", "Job", "CronJob"}
+
+// renderK8sPodsCard renders the "Kubernetes Pods" DevOps sub-card: an overall
+// pass-rate badge, then one subsection per workload kind (in k8sKindOrder,
+// each titled with its icon and count), holding a responsive grid of small
+// per-workload cards — sorted biggest resource footprint first and capped at
+// k8sMaxCardsPerKind — each showing aggregate container resources and a
+// kube-linter-inspired lint summary.
+func renderK8sPodsCard(lint *scanner.K8sLint) string {
+	scoreSum := 0
+	byKind := map[string][]scanner.K8sWorkload{}
+	for _, w := range lint.Workloads {
+		scoreSum += w.Score
+		byKind[w.Kind] = append(byKind[w.Kind], w)
+	}
+	avg := scoreSum / len(lint.Workloads)
+
+	var b strings.Builder
+	b.WriteString(`<div class="as-sub as-k8s-sub" style="margin-top:18px">`)
+	b.WriteString(`<span>☸️ Kubernetes Pods</span>`)
+	fmt.Fprintf(&b, `<span class="as-dvo-score as-dvo-score--%s" title="Average check pass rate across %d workload(s) (pass=1, warn=½, fail=0)">%d%% PASSED</span>`,
+		dvoScoreClass(avg), len(lint.Workloads), avg)
+	b.WriteString(`</div>`)
+	fmt.Fprintf(&b, `<div class="as-section__sub" style="margin-top:2px">%d workload%s linted from %s — practices inspired by kube-linter (resource limits, security context, probes, image pinning, host access). Sorted by resource footprint (CPU + memory + storage), biggest first.</div>`,
+		len(lint.Workloads), plural(len(lint.Workloads), "", "s"), esc(strings.Join(lint.Files, ", ")))
+
+	for _, kind := range k8sKindOrder {
+		workloads := byKind[kind]
+		if len(workloads) == 0 {
+			continue
+		}
+		sort.Slice(workloads, func(i, j int) bool {
+			return aggregateK8sResources(workloads[i]).footprint() > aggregateK8sResources(workloads[j]).footprint()
+		})
+		fmt.Fprintf(&b, `<div class="as-k8s-kind-sub">%s %s <span class="as-k8s-kind-count">(%d)</span></div>`,
+			k8sKindIcon[kind], esc(kind), len(workloads))
+
+		moreCount := 0
+		if len(workloads) > k8sMaxCardsPerKind {
+			moreCount = len(workloads) - k8sMaxCardsPerKind
+			workloads = workloads[:k8sMaxCardsPerKind]
+		}
+		b.WriteString(`<div class="as-k8s-grid">`)
+		for _, w := range workloads {
+			b.WriteString(renderK8sWorkloadCard(w))
+		}
+		b.WriteString(`</div>`)
+		if moreCount > 0 {
+			fmt.Fprintf(&b, `<div class="as-more">+%d more %s%s not shown (showing the %d with the largest resource footprint)</div>`,
+				moreCount, esc(kind), plural(moreCount, "", "s"), k8sMaxCardsPerKind)
+		}
+	}
+	return b.String()
+}
+
+// k8sResAgg is a workload's container resources summed across all of its
+// containers, request and limit tracked separately.
+type k8sResAgg struct {
+	cpuReq, cpuLim float64 // millicores
+	memReq, memLim float64 // bytes
+	stoReq, stoLim float64 // ephemeral-storage bytes
+	hasCPUReq      bool
+	hasCPULim      bool
+	hasMemReq      bool
+	hasMemLim      bool
+	hasStoReq      bool
+	hasStoLim      bool
+}
+
+func aggregateK8sResources(w scanner.K8sWorkload) k8sResAgg {
+	var a k8sResAgg
+	for _, c := range w.Containers {
+		if v, ok := parseCPUMillis(c.CPURequest); ok {
+			a.cpuReq += v
+			a.hasCPUReq = true
+		}
+		if v, ok := parseCPUMillis(c.CPULimit); ok {
+			a.cpuLim += v
+			a.hasCPULim = true
+		}
+		if v, ok := parseMemBytes(c.MemRequest); ok {
+			a.memReq += v
+			a.hasMemReq = true
+		}
+		if v, ok := parseMemBytes(c.MemLimit); ok {
+			a.memLim += v
+			a.hasMemLim = true
+		}
+		if v, ok := parseMemBytes(c.StorageReq); ok {
+			a.stoReq += v
+			a.hasStoReq = true
+		}
+		if v, ok := parseMemBytes(c.StorageLim); ok {
+			a.stoLim += v
+			a.hasStoLim = true
+		}
+	}
+	return a
+}
+
+// footprint blends CPU (cores), memory (GiB), and storage (GiB) — each
+// preferring the limit (the workload's real ceiling) and falling back to the
+// request — into one comparable "how big is this workload" number used to
+// rank cards biggest-first.
+func (a k8sResAgg) footprint() float64 {
+	cpu := a.cpuLim
+	if cpu == 0 {
+		cpu = a.cpuReq
+	}
+	mem := a.memLim
+	if mem == 0 {
+		mem = a.memReq
+	}
+	sto := a.stoLim
+	if sto == 0 {
+		sto = a.stoReq
+	}
+	const gib = 1024 * 1024 * 1024
+	return cpu/1000 + mem/gib + sto/gib
+}
+
+func renderK8sWorkloadCard(w scanner.K8sWorkload) string {
+	agg := aggregateK8sResources(w)
+	fmtCPU := func(v float64, has bool) string {
+		if !has {
+			return "–"
+		}
+		return formatCPUMillis(v)
+	}
+	fmtMem := func(v float64, has bool) string {
+		if !has {
+			return "–"
+		}
+		return formatMemBytes(v)
+	}
+
+	pass, warn, fail := 0, 0, 0
+	var failed []string
+	for _, c := range w.Checks {
+		switch c.Status {
+		case "pass":
+			pass++
+		case "warn":
+			warn++
+		case "fail":
+			fail++
+			label := c.Metric
+			if c.Category != "Pod" {
+				label = c.Category + ": " + c.Metric
+			}
+			failed = append(failed, label)
+		}
+	}
+	tooltip := fmt.Sprintf("%d passed · %d warned · %d failed", pass, warn, fail)
+	if len(failed) > 0 {
+		tooltip += "\n\nFailed:\n- " + strings.Join(failed, "\n- ")
+	}
+
+	icon := k8sKindIcon[w.Kind]
+	if icon == "" {
+		icon = "☸️"
+	}
+	replicaBadge := ""
+	if w.Replicas > 1 {
+		replicaBadge = fmt.Sprintf(`<span class="as-k8s-replicas">×%d</span>`, w.Replicas)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, `<div class="as-k8s-card" style="border-left-color:%s">`, gradeColor(w.Score))
+	fmt.Fprintf(&b, `<div class="as-k8s-card__head"><span title="%s: %s">%s %s</span>%s</div>`,
+		esc(w.Kind), esc(w.Name), icon, esc(w.Name), replicaBadge)
+	fmt.Fprintf(&b, `<div class="as-k8s-card__ns" title="%s">%s</div>`, esc(w.Namespace), esc(w.Namespace))
+	fmt.Fprintf(&b, `<div class="as-k8s-card__res">`+
+		`<div title="CPU request → limit"><span class="as-k8s-res-label">CPU</span><span class="as-k8s-res-val">%s→%s</span></div>`+
+		`<div title="Memory request → limit"><span class="as-k8s-res-label">MEM</span><span class="as-k8s-res-val">%s→%s</span></div>`+
+		`<div title="Ephemeral storage request → limit"><span class="as-k8s-res-label">DISK</span><span class="as-k8s-res-val">%s→%s</span></div>`+
+		`</div>`,
+		fmtCPU(agg.cpuReq, agg.hasCPUReq), fmtCPU(agg.cpuLim, agg.hasCPULim),
+		fmtMem(agg.memReq, agg.hasMemReq), fmtMem(agg.memLim, agg.hasMemLim),
+		fmtMem(agg.stoReq, agg.hasStoReq), fmtMem(agg.stoLim, agg.hasStoLim))
+	fmt.Fprintf(&b, `<div class="as-k8s-card__lint" title="%s"><span class="as-k8s-dot as-k8s-dot--pass"></span>%d<span class="as-k8s-dot as-k8s-dot--warn"></span>%d<span class="as-k8s-dot as-k8s-dot--fail"></span>%d`+
+		`<span class="as-k8s-card__score" style="color:%s">%d%%</span></div>`,
+		esc(tooltip), pass, warn, fail, gradeColor(w.Score), w.Score)
+	if len(failed) > 0 {
+		b.WriteString(`<div class="as-k8s-card__failed">`)
+		for _, f := range failed {
+			fmt.Fprintf(&b, `<div>✕ %s</div>`, esc(f))
+		}
+		b.WriteString(`</div>`)
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+func parseCPUMillis(s string) (float64, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false
+	}
+	if strings.HasSuffix(s, "m") {
+		n, err := strconv.ParseFloat(strings.TrimSuffix(s, "m"), 64)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	}
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n * 1000, true
+}
+
+func formatCPUMillis(m float64) string {
+	if m <= 0 {
+		return "–"
+	}
+	mi := int64(m + 0.5)
+	if mi < 1000 {
+		return strconv.FormatInt(mi, 10) + "m"
+	}
+	cores := float64(mi) / 1000
+	if cores == float64(int64(cores)) {
+		return strconv.FormatInt(int64(cores), 10)
+	}
+	return strconv.FormatFloat(cores, 'f', 1, 64)
+}
+
+var k8sMemSuffixes = []struct {
+	suffix string
+	mult   float64
+}{
+	{"Ki", 1024}, {"Mi", 1024 * 1024}, {"Gi", 1024 * 1024 * 1024}, {"Ti", 1024 * 1024 * 1024 * 1024},
+	{"K", 1000}, {"M", 1000 * 1000}, {"G", 1000 * 1000 * 1000}, {"T", 1000 * 1000 * 1000 * 1000},
+}
+
+func parseMemBytes(s string) (float64, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false
+	}
+	for _, u := range k8sMemSuffixes {
+		if strings.HasSuffix(s, u.suffix) {
+			n, err := strconv.ParseFloat(strings.TrimSuffix(s, u.suffix), 64)
+			if err != nil {
+				return 0, false
+			}
+			return n * u.mult, true
+		}
+	}
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+func formatMemBytes(b float64) string {
+	switch {
+	case b <= 0:
+		return "–"
+	case b >= 1024*1024*1024:
+		return strconv.FormatFloat(b/(1024*1024*1024), 'f', 1, 64) + "Gi"
+	case b >= 1024*1024:
+		return strconv.FormatFloat(b/(1024*1024), 'f', 0, 64) + "Mi"
+	case b >= 1024:
+		return strconv.FormatFloat(b/1024, 'f', 0, 64) + "Ki"
+	default:
+		return strconv.FormatFloat(b, 'f', 0, 64)
+	}
 }
 
 // ── ☁️ DevOps compliance charts (radar · defect density · health gauge) ─────
@@ -2243,7 +2632,10 @@ func renderTabs(res *result.AnalysisResult) string {
 		headerStats[panel.Platform] = hs
 	}
 
-	autoOpen := len(platforms) <= 2
+	// --skip-modules drops the Modules & Microservices section (and its
+	// graphs), so there's no longer a reason to keep platforms collapsed by
+	// default — unfold everything regardless of platform count.
+	autoOpen := len(platforms) <= 2 || res.Scan.SkipModules
 
 	var b strings.Builder
 	b.WriteString(`<div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;margin-bottom:8px">`)
@@ -2275,10 +2667,10 @@ func renderTabs(res *result.AnalysisResult) string {
 		fmt.Fprintf(&b, `<span class="as-plat-card__loc">%s loc</span>`, fmtLOC(platLOC))
 		fmt.Fprintf(&b, `<span class="as-plat-card__files">%d files</span>`, pg.FileCount)
 		if hs.apiTotal > 0 {
-			fmt.Fprintf(&b, `<span class="as-plat-card__stat">%d APIs</span>`, hs.apiTotal)
+			fmt.Fprintf(&b, `<span class="as-plat-card__stat as-plat-card__stat--api">%d APIs</span>`, hs.apiTotal)
 		}
 		if hs.archLabel != "" {
-			fmt.Fprintf(&b, `<span class="as-plat-card__stat">%s</span>`, esc(hs.archLabel))
+			fmt.Fprintf(&b, `<span class="as-plat-card__stat as-plat-card__stat--arch">%s</span>`, esc(hs.archLabel))
 		}
 		b.WriteString(`</div>`) // .as-plat-card__summary
 		b.WriteString(`<span class="as-plat-card__chevron">›</span>`)
@@ -2404,8 +2796,12 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 	// 8. 🛡️ Danger Details
 	b.WriteString(renderPlatformSecurity(res, pg.Platform, badge))
 
-	// 9. 📂 Modules & Microservices — per-platform file inventory
-	b.WriteString(renderModuleDetailsPlatform(res.RootPath, files, badge))
+	// 9. 📂 Modules & Microservices — per-platform file inventory. Omitted
+	// entirely under --skip-modules (its declaration graph is CDN-loaded,
+	// and the section itself can be large for big platforms).
+	if !res.Scan.SkipModules {
+		b.WriteString(renderModuleDetailsPlatform(res.RootPath, files, badge))
+	}
 
 	// Remaining panels
 	b.WriteString(renderModulePanels(otherPanels))
@@ -2520,7 +2916,7 @@ func platformFolderSuffix(p langspec.Platform) string {
 }
 
 // renderMicroservicesSection renders the module/package grid card.
-func renderMicroservicesSection(pg *scanner.PlatformGroup, files []*parser.ParsedFile) string {
+func renderMicroservicesSection(pg *scanner.PlatformGroup, files []*parser.ParsedFile, skipModules bool) string {
 	if len(pg.Modules) == 0 {
 		return ""
 	}
@@ -2539,8 +2935,14 @@ func renderMicroservicesSection(pg *scanner.PlatformGroup, files []*parser.Parse
 		if name == "" {
 			name = "(root)"
 		}
-		fmt.Fprintf(&b, `<a class="as-mod" href="#mod-%s"><div class="as-mod__name">%s</div><div class="as-mod__meta">%d %s · %s loc</div></a>`,
-			esc(anchorID(m)), esc(name), counts[m], plural(counts[m], "file", "files"), fmtNum(mloc[m]))
+		// #mod-<name> only exists when Modules & Microservices is actually
+		// rendered; under --skip-modules this is a plain, non-linking card.
+		tag, attrs := "a", fmt.Sprintf(` href="#mod-%s"`, esc(anchorID(m)))
+		if skipModules {
+			tag, attrs = "div", ""
+		}
+		fmt.Fprintf(&b, `<%s class="as-mod"%s><div class="as-mod__name">%s</div><div class="as-mod__meta">%d %s · %s loc</div></%s>`,
+			tag, attrs, esc(name), counts[m], plural(counts[m], "file", "files"), fmtNum(mloc[m]), tag)
 	}
 	b.WriteString(`</div></div>`)
 	return b.String()
@@ -2553,7 +2955,7 @@ func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup,
 	if h := renderHotspots(res, pg); h != "" {
 		parts = append(parts, h)
 	}
-	if m := renderMicroservicesSection(pg, files); m != "" {
+	if m := renderMicroservicesSection(pg, files, res.Scan.SkipModules); m != "" {
 		parts = append(parts, m)
 	}
 	if dp := renderModulePanels(designPanels); dp != "" {

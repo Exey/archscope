@@ -25,7 +25,7 @@ go run ./cmd/archscope ~/code --open
 
 3. **📡 Technical Radar** — four cross-divided quadrants (**Tools**, **Languages & Frameworks**, **Platforms & Operations**, **Methods & Patterns**) with concentric Adopt → Trial → Assess → Hold rings. Every detected technology (plus GoF design patterns picked up repo-wide) is plotted as a labeled blip in its quadrant at its ring, with the same chips listed underneath grouped by quadrant for full legibility.
 
-4. **☁️ DevOps** — detected CI/CD, container, and IaC tooling as chips, followed by three compliance charts: a **Security & Compliance Radar** (6-domain spider chart — Image Hygiene, Best Practices, Privilege & Isolation, Runtime Security, Resource Protection, Network Exposure), a **Defect Density by Artifact** stacked bar (non-passing checks per Dockerfile/Compose/Helm, by severity), and a severity-weighted **DevOps Health Score** gauge. Below the charts: a dependency-free static-analysis matrix (Hadolint / Dockle / KubeLinter / Checkov-style checks) for Dockerfiles, docker-compose files, and Helm charts.
+4. **☁️ DevOps** — detected CI/CD, container, and IaC tooling as chips, followed by three compliance charts: a **Security & Compliance Radar** (6-domain spider chart — Image Hygiene, Best Practices, Privilege & Isolation, Runtime Security, Resource Protection, Network Exposure), a **Defect Density by Artifact** stacked bar (non-passing checks per Dockerfile/Compose/Helm, by severity), and a severity-weighted **DevOps Health Score** gauge. Below the charts: a dependency-free static-analysis matrix (Hadolint / Dockle / KubeLinter / Checkov-style checks) for Dockerfiles, docker-compose files, and Helm charts, and a **☸️ Kubernetes Pods** sub-card — one small card per Pod/Deployment/StatefulSet/DaemonSet/Job/CronJob found in a `kubectl -o yaml` cluster dump or plain manifest files, each showing aggregate container CPU/memory requests↔limits and a kube-linter-inspired pass/warn/fail lint summary (resource limits, security context, probes, image pinning, host access). See [Kubernetes cluster linting](#kubernetes-cluster-linting) for how to feed it a cluster dump.
 
 5. **🛡️ Danger Index** — weighted security score (0 = hardened → 100% = critical) across **14 categories**, each with its own weight and a saturating violation-density curve. Risk band: Hardened / Minor exposure / Elevated risk / Critical exposure. Backed by **137+ security rules** across all languages plus universal cross-language checks.
 
@@ -136,6 +136,7 @@ go build -o archscope ./cmd/archscope
 | `--ref` | git branch/tag/sha to check out (remote URLs only) | default branch |
 | `--depth` | shallow-clone depth (remote URLs only; `0` = full history) | `0` |
 | `--folder-as-tab` | show each top-level folder as its own tab/section (monorepo/few services) | off |
+| `--skip-modules` | omit the Modules & Microservices section (file inventory, declarations, its graph) per platform, plus the global Architecture Graph; all platforms unfold by default | off |
 
 Outputs are written as `<project-name>.html`, `<project-name>.md`, and/or `<project-name>.sarif` inside the output directory.
 
@@ -154,6 +155,19 @@ When several services share a language. `--folder-as-tab` splits them by top-lev
  → Running report modules…
 HTML  → output/myproject.html
 ```
+
+#### Kubernetes cluster linting
+
+The **☁️ DevOps → ☸️ Kubernetes Pods** sub-card lints Kubernetes workloads it finds anywhere in the scanned directory — either plain manifest files (`k8s/*.yaml`, `deploy/*.yaml`, ...) or a full `kubectl get ... -o yaml` cluster dump. To lint a live cluster, drop a dump anywhere inside the path you're about to scan:
+
+```bash
+kubectl get $(kubectl api-resources --verbs=list -o name | tr '\n' ',' | sed 's/,$//') \
+  --all-namespaces -o yaml > ~/code/full-cluster-dump.yaml
+
+go run ./cmd/archscope ~/code --open
+```
+
+ArchScope finds the dump by content (a `kind: List` document or a plain object), not by filename, so it can be named anything and placed anywhere in the tree. Pods owned by a Deployment/StatefulSet/DaemonSet/Job are deduplicated to their controller's pod template so each distinct workload gets exactly one card, and the biggest cluster dumps (hundreds of workloads) are capped to the ones needing the most attention.
 
 ---
 

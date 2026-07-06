@@ -155,6 +155,55 @@ spec:
 	}
 }
 
+// TestComposeCapDropNotFlagged ensures dropping capabilities (a security
+// best practice, including "cap_drop: [ALL]") is never counted as a
+// dangerous cap_add, and that cap_add is still correctly flagged when it
+// actually adds a dangerous capability.
+func TestComposeCapDropNotFlagged(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "docker-compose.yml"), `version: "3.8"
+services:
+  api:
+    image: api:latest
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+  worker:
+    image: worker:latest
+    cap_add:
+      - SYS_ADMIN
+`)
+	lint := ScanDevOpsLint(root)
+	if c := findCheck(t, lint.Compose, "Dangerous cap_add"); c.Status != "fail" || c.Value != "1" {
+		t.Errorf("cap_add: want fail with count 1 (only SYS_ADMIN, not cap_drop's ALL or the safe NET_BIND_SERVICE), got %s (%s)", c.Status, c.Value)
+	}
+}
+
+// TestDockerfilePlatformFlag ensures a --platform flag on FROM doesn't get
+// mistaken for the image reference.
+func TestDockerfilePlatformFlag(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "Dockerfile"), `FROM --platform=linux/amd64 alpine:3.19@sha256:1111111111111111111111111111111111111111111111111111111111abcd
+CMD ["/bin/true"]
+`)
+	lint := ScanDevOpsLint(root)
+	if c := findCheck(t, lint.Dockerfiles, "Pinned digest (no :latest)"); c.Status != "pass" {
+		t.Errorf("pinned digest with --platform flag: want pass, got %s (%s)", c.Status, c.Value)
+	}
+}
+
+// TestDockerfileLineContinuationSecret ensures a secret on a backslash
+// continuation line of a multi-line ENV instruction is still detected.
+func TestDockerfileLineContinuationSecret(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "Dockerfile"), "FROM alpine\nENV FOO=bar \\\n    API_TOKEN=supersecret123\n")
+	lint := ScanDevOpsLint(root)
+	if c := findCheck(t, lint.Dockerfiles, "Secrets in ARG/ENV"); c.Status != "fail" {
+		t.Errorf("secret on ENV continuation line: want fail, got %s (%s)", c.Status, c.Value)
+	}
+}
+
 func TestScanDevOpsLintEmpty(t *testing.T) {
 	if lint := ScanDevOpsLint(t.TempDir()); !lint.Empty() {
 		t.Fatalf("expected nil/empty lint for empty dir, got %+v", lint)

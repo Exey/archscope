@@ -12,6 +12,7 @@
 //	--config        path to .archscope.json (default: .archscope.json in cwd)
 //	--ref           git ref to check out when cloning a remote URL
 //	--depth         clone depth; 0 = full history (default: 0)
+//	--skip-modules  omit the Modules & Microservices section (and its graphs)
 package main
 
 import (
@@ -27,7 +28,7 @@ import (
 
 	"github.com/exey/archscope/internal/config"
 	"github.com/exey/archscope/internal/fetch"
-	_ "github.com/exey/archscope/internal/lang"         // register language specs
+	_ "github.com/exey/archscope/internal/lang" // register language specs
 	"github.com/exey/archscope/internal/modules"
 	_ "github.com/exey/archscope/internal/modules/arch" // register report modules
 	_ "github.com/exey/archscope/internal/modules/dddmodel"
@@ -55,6 +56,7 @@ func main() {
 		ref         string
 		depth       int
 		folderAsTab bool
+		skipModules bool
 	)
 
 	args := os.Args[1:]
@@ -100,6 +102,8 @@ func main() {
 			depth, _ = strconv.Atoi(a[strings.Index(a, "=")+1:])
 		case a == "--folder-as-tab" || a == "-folder-as-tab":
 			folderAsTab = true
+		case a == "--skip-modules" || a == "-skip-modules":
+			skipModules = true
 		case a == "--help" || a == "-h":
 			printUsage()
 			os.Exit(0)
@@ -128,6 +132,9 @@ func main() {
 	}
 	if folderAsTab {
 		cfg.FolderAsTab = true
+	}
+	if skipModules {
+		cfg.SkipModules = true
 	}
 
 	src := fetch.FromArg(target, ref, depth)
@@ -213,6 +220,9 @@ Flags:
   --ref <ref>         git ref for remote URLs (branch/tag/sha)
   --depth <n>         clone depth for remote URLs (0 = full history)
   --folder-as-tab     show each top-level folder as its own tab (e.g. "pharmen Py", "gptzakaz Go")
+  --skip-modules      omit the Modules & Microservices section (file inventory, declarations, and
+                      its CDN-loaded graph) per platform, plus the global Architecture Graph;
+                      all platforms are unfolded by default when this is set
 `)
 }
 

@@ -31,6 +31,7 @@ type AnalysisResult struct {
 	DockerServices []string             // service names from docker-compose
 	DevOpsTools    []scanner.DevOpsTool // CI/CD, container, orchestration tools
 	DevOpsLint     *scanner.DevOpsLint  // Dockerfile / compose / Helm static analysis (nil when none found)
+	K8sLint        *scanner.K8sLint     // Kubernetes manifest/cluster-dump static analysis (nil when none found)
 
 	// ModulePanels are report-module outputs already rendered to HTML, grouped
 	// per platform tab. This is the pragmatic form of DESIGN's ModuleResults:

@@ -53,6 +53,7 @@ type Config struct {
 	EnableCache     bool      `json:"enableCache"`
 	HotspotCount    int       `json:"hotspotCount"`
 	FolderAsTab     bool      `json:"folderAsTab"` // split per-folder into separate tabs
+	SkipModules     bool      `json:"skipModules"` // omit the Modules & Microservices section (and its CDN-loaded graphs) per platform, plus the global Architecture Graph
 	Output          Output    `json:"output"`
 	Languages       Languages `json:"languages"`
 	Security        Security  `json:"security"`
