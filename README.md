@@ -164,6 +164,13 @@ The **☁️ DevOps → ☸️ Kubernetes** sub-card lints Kubernetes workloads 
 kubectl get $(kubectl api-resources --verbs=list -o name | tr '\n' ',' | sed 's/,$//') \
   --all-namespaces -o yaml > ~/code/full-cluster-dump.yaml
 
+// or only important configs
+
+out=~/gitlab/important.yaml
+ns=deployments,statefulsets,daemonsets,jobs,cronjobs,services,ingresses,configmaps,networkpolicies,persistentvolumeclaims,serviceaccounts,roles,rolebindings,horizontalpodautoscalers,poddisruptionbudgets,prometheuses,alertmanagers,prometheusrules,servicemonitors,podmonitors,scrapeconfigs,vaultstaticsecrets,vaultpkisecrets,vaultconnections,vaultauths,httpbackendgroups,grpcbackendgroups,ingressgroupsettings
+cl=storageclasses,clusterroles,clusterrolebindings
+{ kubectl get $ns --all-namespaces -o yaml 2>/dev/null; kubectl get $cl -o yaml 2>/dev/null; } | kubectl neat > $out
+
 go run ./cmd/archscope ~/code --open
 ```
 
