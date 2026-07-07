@@ -2,6 +2,7 @@ package security
 
 import (
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -95,30 +96,55 @@ func (e *Engine) activeRules() []Rule {
 // finishes (may be nil). It mirrors SecurityAnalyzer's phased design but is
 // language-generic. Blame enrichment is added in a later milestone.
 func (e *Engine) Run(files []SourceFile, loader LineLoader, repoPath string, onComplete func(RuleResult)) []RuleResult {
-	cap := e.MaxFindingsPerRule
-	if cap <= 0 {
-		cap = DefaultMaxFindingsPerRule
+	maxFindings := e.MaxFindingsPerRule
+	if maxFindings <= 0 {
+		maxFindings = DefaultMaxFindingsPerRule
 	}
 	rules := e.activeRules()
 
 	// ── Phase 1: load lines for each file once, grouped by language ──
 	type loaded struct {
 		path       string
+		relPath    string // repo-root-relative (for SARIF uri); "" if unreachable
 		languageID string
 		lines      []string
 	}
 	all := make([]loaded, len(files))
-	var wg sync.WaitGroup
-	wg.Add(len(files))
+	// Pre-compute relative paths (cheap string ops, no I/O) before the goroutines.
 	for i := range files {
-		go func(i int) {
+		rel, err := filepath.Rel(repoPath, files[i].Path)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			rel = "" // falls back to displayPath in SARIF
+		}
+		all[i].relPath = filepath.ToSlash(rel)
+	}
+	workers := runtime.NumCPU()
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(files) {
+		workers = len(files)
+	}
+	work := make(chan int, len(files))
+	for i := range files {
+		work <- i
+	}
+	close(work)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for w := 0; w < workers; w++ {
+		go func() {
 			defer wg.Done()
-			lines, err := loader.Load(files[i].Path)
-			if err != nil {
-				lines = nil
+			for i := range work {
+				lines, err := loader.Load(files[i].Path)
+				if err != nil {
+					lines = nil
+				}
+				all[i].path = files[i].Path
+				all[i].languageID = files[i].LanguageID
+				all[i].lines = lines
 			}
-			all[i] = loaded{path: files[i].Path, languageID: files[i].LanguageID, lines: lines}
-		}(i)
+		}()
 	}
 	wg.Wait()
 
@@ -137,14 +163,14 @@ func (e *Engine) Run(files []SourceFile, loader LineLoader, repoPath string, onC
 						continue
 					}
 					vs := rule.Detect(displayPath(f.path), f.lines)
-					// fix up FullPath for blame; Detect only knows display path
 					for k := range vs {
 						vs[k].FullPath = f.path
+						vs[k].RelPath = f.relPath
 						vs[k].RuleID = rule.ID
 					}
 					rr.TotalCount += len(vs)
-					if len(rr.Findings) < cap {
-						take := cap - len(rr.Findings)
+					if len(rr.Findings) < maxFindings {
+						take := maxFindings - len(rr.Findings)
 						if take > len(vs) {
 							take = len(vs)
 						}
@@ -173,11 +199,16 @@ func (e *Engine) Run(files []SourceFile, loader LineLoader, repoPath string, onC
 				if vs[k].FullPath == "" {
 					vs[k].FullPath = filepath.Join(repoPath, vs[k].File)
 				}
+				if vs[k].RelPath == "" && vs[k].FullPath != "" {
+					if rel, err := filepath.Rel(repoPath, vs[k].FullPath); err == nil && !strings.HasPrefix(rel, "..") {
+						vs[k].RelPath = filepath.ToSlash(rel)
+					}
+				}
 			}
 			rr := results[ri]
 			rr.TotalCount += len(vs)
-			if len(rr.Findings) < cap {
-				take := cap - len(rr.Findings)
+			if len(rr.Findings) < maxFindings {
+				take := maxFindings - len(rr.Findings)
 				if take > len(vs) {
 					take = len(vs)
 				}

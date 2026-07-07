@@ -13,50 +13,50 @@ import (
 var goLangs = []string{"go"}
 
 var (
-	reGoWeakCrypto      = regexp.MustCompile(`"crypto/(md5|sha1|des|rc4)"|\b(md5|sha1)\.New\s*\(|\bdes\.NewCipher\s*\(`)
-	reGoInsecureTLS     = regexp.MustCompile(`InsecureSkipVerify\s*:\s*true`)
-	reGoCmdInjection    = regexp.MustCompile(`exec\.Command(Context)?\s*\(.*(fmt\.Sprintf|"\s*\+|\+\s*")`)
-	reGoHTTPNoTLS       = regexp.MustCompile(`\bhttp\.ListenAndServe\s*\(`)
+	reGoWeakCrypto   = regexp.MustCompile(`"crypto/(md5|sha1|des|rc4)"|\b(md5|sha1)\.New\s*\(|\bdes\.NewCipher\s*\(`)
+	reGoInsecureTLS  = regexp.MustCompile(`InsecureSkipVerify\s*:\s*true`)
+	reGoCmdInjection = regexp.MustCompile(`exec\.Command(Context)?\s*\(.*(fmt\.Sprintf|"\s*\+|\+\s*")`)
+	reGoHTTPNoTLS    = regexp.MustCompile(`\bhttp\.ListenAndServe\s*\(`)
 	// reGoMathRand matches actual rand.* function calls (not just the import)
 	// so the rule can be gated on sensitive context via twoReRule.
-	reGoMathRand = regexp.MustCompile(`\brand\.(Int|Intn|Int31|Int31n|Int63|Int63n|Float32|Float64|Uint32|Perm|Shuffle|Read)\s*\(`)
+	reGoMathRand        = regexp.MustCompile(`\brand\.(Int|Intn|Int31|Int31n|Int63|Int63n|Float32|Float64|Uint32|Perm|Shuffle|Read)\s*\(`)
 	reGoTLSNoMinVersion = regexp.MustCompile(`tls\.Config\s*\{`)
 	reGoTLSHasMinVer    = regexp.MustCompile(`MinVersion\s*:`)
 	reGoCookieNoHTTP    = regexp.MustCompile(`http\.Cookie\s*\{`)
 	reGoCookieHTTPOnly  = regexp.MustCompile(`HttpOnly\s*:\s*true`)
 	// security-header rules — file-level helpers
-	reGoGinRouter   = regexp.MustCompile(`\bgin\.(Default|New)\s*\(`)
-	reGoGinSecMW    = regexp.MustCompile(`(?i)(ginhelmet|Content-Security-Policy|X-Frame-Options|X-Content-Type-Options|Strict-Transport-Security)`)
-	reGoHTTPHdrSet  = regexp.MustCompile(`\.Header\(\)\.(Set|Add)\s*\(`)
-	reGoHTTPSecHdr  = regexp.MustCompile(`Content-Security-Policy|X-Frame-Options|X-Content-Type-Options|Strict-Transport-Security`)
+	reGoGinRouter  = regexp.MustCompile(`\bgin\.(Default|New)\s*\(`)
+	reGoGinSecMW   = regexp.MustCompile(`(?i)(ginhelmet|Content-Security-Policy|X-Frame-Options|X-Content-Type-Options|Strict-Transport-Security)`)
+	reGoHTTPHdrSet = regexp.MustCompile(`\.Header\(\)\.(Set|Add)\s*\(`)
+	reGoHTTPSecHdr = regexp.MustCompile(`Content-Security-Policy|X-Frame-Options|X-Content-Type-Options|Strict-Transport-Security`)
 	// two-part SQL rule helpers — used in goSQLFmtRule below
 	reGoSQLFmt = regexp.MustCompile(`\bfmt\.(Sprintf|Printf|Fprintf)\s*\(`)
 	reGoSQLKW  = regexp.MustCompile(`(?i)\b(SELECT\s|INSERT\s+INTO\s|UPDATE\s|DELETE\s+FROM\s|DROP\s+TABLE\s|ALTER\s+TABLE\s)`)
 	// new coverage
-	reGoFileSink    = regexp.MustCompile(`\b(os\.(Open|ReadFile|Remove|Stat|Create|OpenFile)|ioutil\.ReadFile|filepath\.Join)\s*\(`)
-	reGoUserInput   = regexp.MustCompile(`r\.(URL\.Query|FormValue|PathValue|PostFormValue)\s*\(|c\.(Param|Query|PostForm|GetQuery)\s*\(`)
-	reGoLogSink     = regexp.MustCompile(`\b(log\.(Print|Printf|Println|Fatal|Fatalf|Fatalln|Panic|Panicf)|fmt\.(Print|Printf|Println))\s*\(`)
-	reGoGobDecoder  = regexp.MustCompile(`\bgob\.NewDecoder\s*\(`)
+	reGoFileSink     = regexp.MustCompile(`\b(os\.(Open|ReadFile|Remove|Stat|Create|OpenFile)|ioutil\.ReadFile|filepath\.Join)\s*\(`)
+	reGoUserInput    = regexp.MustCompile(`r\.(URL\.Query|FormValue|PathValue|PostFormValue)\s*\(|c\.(Param|Query|PostForm|GetQuery)\s*\(`)
+	reGoLogSink      = regexp.MustCompile(`\b(log\.(Print|Printf|Println|Fatal|Fatalf|Fatalln|Panic|Panicf)|fmt\.(Print|Printf|Println))\s*\(`)
+	reGoGobDecoder   = regexp.MustCompile(`\bgob\.NewDecoder\s*\(`)
 	reGoHTTPCallSink = regexp.MustCompile(`\bhttp\.(Get|Post|Head|NewRequest)\s*\(`)
-	reGoCookieNoSec = regexp.MustCompile(`Secure\s*:\s*true`)
+	reGoCookieNoSec  = regexp.MustCompile(`Secure\s*:\s*true`)
 	// CWE-352: SameSite guard — matches the Strict or Lax assignment on the same line as Cookie{
-	reGoSameSiteGuard  = regexp.MustCompile(`SameSite\s*:\s*http\.SameSite(Strict|Lax)Mode`)
+	reGoSameSiteGuard = regexp.MustCompile(`SameSite\s*:\s*http\.SameSite(Strict|Lax)Mode`)
 	// CWE-434: multipart upload sink and type-validation guard
 	reGoFileUploadSink = regexp.MustCompile(`\br\.FormFile\s*\(|\br\.MultipartReader\s*\(|\bmultipart\.NewReader\s*\(`)
 	reGoFileTypeCheck  = regexp.MustCompile(`(?i)(http\.DetectContentType|mime\.TypeByExtension|Content-Type|allowedExt|validExt|allowedType|checkType)`)
 	// CWE-601: open redirect sink
 	reGoHTTPRedirect = regexp.MustCompile(`\bhttp\.Redirect\s*\(`)
 	// CWE-732: file-system calls with overly permissive modes
-	reGoFilePermSink  = regexp.MustCompile(`\bos\.(OpenFile|Chmod|MkdirAll|Mkdir)\s*\(`)
-	reGoWidePerms     = regexp.MustCompile(`\b(0o?777|0o?666|0o?776|0o?757)\b`)
+	reGoFilePermSink = regexp.MustCompile(`\bos\.(OpenFile|Chmod|MkdirAll|Mkdir)\s*\(`)
+	reGoWidePerms    = regexp.MustCompile(`\b(0o?777|0o?666|0o?776|0o?757)\b`)
 	// CWE-916: fast general-purpose hash in password context
-	reGoFastHashSink  = regexp.MustCompile(`\b(sha256|sha512)\.(New|Sum256|Sum512)\s*\(|\bcrypto\.(sha256|sha512)`)
+	reGoFastHashSink = regexp.MustCompile(`\b(sha256|sha512)\.(New|Sum256|Sum512)\s*\(|\bcrypto\.(sha256|sha512)`)
 	// CWE-347: JWT parse without signing-method validation
-	reGoJWTParse      = regexp.MustCompile(`\bjwt\.(Parse|ParseWithClaims)\s*\(`)
-	reGoJWTMethodChk  = regexp.MustCompile(`token\.Method|SigningMethod`)
+	reGoJWTParse     = regexp.MustCompile(`\bjwt\.(Parse|ParseWithClaims)\s*\(`)
+	reGoJWTMethodChk = regexp.MustCompile(`token\.Method|SigningMethod`)
 	// CWE-22 variant: zip-slip via archive/zip without path guard
-	reGoZipSink       = regexp.MustCompile(`\bzip\.(NewReader|OpenReader)\s*\(`)
-	reGoZipGuard      = regexp.MustCompile(`(?i)(filepath\.Clean|filepath\.Abs|strings\.HasPrefix|path\.Clean)`)
+	reGoZipSink  = regexp.MustCompile(`\bzip\.(NewReader|OpenReader)\s*\(`)
+	reGoZipGuard = regexp.MustCompile(`(?i)(filepath\.Clean|filepath\.Abs|strings\.HasPrefix|path\.Clean)`)
 	// CWE-362: TOCTOU race condition helpers
 	reTOCTOUCheck = regexp.MustCompile(`\bos\.(Stat|Lstat)\s*\(`)
 	reTOCTOUUse   = regexp.MustCompile(`\bos\.(Create|Mkdir|MkdirAll)\s*\(`)
@@ -650,4 +650,3 @@ func goTOCTOURule() security.Rule {
 		},
 	}
 }
-

@@ -19,19 +19,17 @@ type Output struct {
 	Dir    string `json:"dir"`    // output directory
 }
 
-// Languages toggles/extends the built-in language set at runtime. New languages
-// are still added by dropping a Go file in internal/lang; this only enables,
-// disables, or tweaks the ones already registered.
+// Languages toggles the built-in language set at runtime. New languages
+// are still added by dropping a Go file in internal/lang; this only enables
+// or disables the ones already registered.
 type Languages struct {
-	Enabled         []string            `json:"enabled"`  // empty = all registered
-	Disabled        []string            `json:"disabled"` // IDs to skip
-	ExtraExtensions map[string][]string `json:"extraExtensions"`
+	Enabled  []string `json:"enabled"`  // empty = all registered
+	Disabled []string `json:"disabled"` // IDs to skip
 }
 
-// Security configures the security engine (replaces anti-patterns).
+// Security configures the security engine.
 type Security struct {
 	Enabled            bool     `json:"enabled"`
-	CommitLimit        int      `json:"commitLimit"`
 	MaxFindingsPerRule int      `json:"maxFindingsPerRule"`
 	DisabledRules      []string `json:"disabledRules"`
 	MinSeverity        string   `json:"minSeverity"` // "LOW" | "MEDIUM" | "HIGH"
@@ -49,11 +47,9 @@ type Config struct {
 	ExcludePaths    []string  `json:"excludePaths"`
 	MaxFilesAnalyze int       `json:"maxFilesAnalyze"`
 	GitCommitLimit  int       `json:"gitCommitLimit"`
-	EnableParallel  bool      `json:"enableParallel"`
-	EnableCache     bool      `json:"enableCache"`
 	HotspotCount    int       `json:"hotspotCount"`
 	FolderAsTab     bool      `json:"folderAsTab"` // split per-folder into separate tabs
-	SkipModules     bool      `json:"skipModules"` // omit the Modules & Microservices section (and its CDN-loaded graphs) per platform, plus the global Architecture Graph
+	SkipModules     bool      `json:"skipModules"` // omit the Modules & Microservices section
 	Output          Output    `json:"output"`
 	Languages       Languages `json:"languages"`
 	Security        Security  `json:"security"`
@@ -71,14 +67,11 @@ func Default() Config {
 		},
 		MaxFilesAnalyze: 50000,
 		GitCommitLimit:  1000,
-		EnableParallel:  true,
-		EnableCache:     false,
 		HotspotCount:    15,
 		Output:          Output{Format: "html", Dir: "output"},
 		Languages:       Languages{},
 		Security: Security{
 			Enabled:            true,
-			CommitLimit:        500,
 			MaxFindingsPerRule: 100,
 			MinSeverity:        "LOW",
 		},

@@ -135,8 +135,9 @@ type K8sClusterStats struct {
 	RolesWildcard        int // Role rules using a "*" verb or resource
 	RoleBindings         int
 	ClusterRoles         int
-	ClusterRolesWildcard int
+	ClusterRolesWildcard int // ClusterRoles with true wildcard (verbs:* AND resources:* or apiGroups:*)
 	ClusterRoleBindings  int
+	ClusterAdminBindings int // ClusterRoleBindings to cluster-admin with a custom (non-platform) SA
 
 	HPAs int
 	PDBs int
@@ -155,14 +156,67 @@ func (s K8sClusterStats) Empty() bool {
 
 // K8sLint is the full result of scanning one or more cluster dumps.
 type K8sLint struct {
-	Workloads []K8sWorkload
-	Stats     K8sClusterStats
-	Files     []string
-	Truncated bool // true when more workloads were found than we render
+	Workloads       []K8sWorkload
+	Stats           K8sClusterStats
+	Files           []string
+	Truncated       bool                        // true when more workloads were found than we render
+	NamespaceTiers  map[string]K8sNamespaceTier // namespace name → risk tier
+	ClusterFindings []K8sClusterFinding         // cross-cutting findings from resource-graph analysis
 }
 
 // Empty reports whether no lintable workload was found.
 func (l *K8sLint) Empty() bool { return l == nil || len(l.Workloads) == 0 }
+
+// ── namespace classification + cross-cutting findings ─────────────────────
+
+// K8sNamespaceTier is the risk classification of a namespace derived from the
+// objects it contains. The highest-risk tier wins when multiple signals apply.
+type K8sNamespaceTier string
+
+const (
+	K8sTierSystem         K8sNamespaceTier = "system"
+	K8sTierInternetFacing K8sNamespaceTier = "internet-facing"
+	K8sTierProduction     K8sNamespaceTier = "production"
+	K8sTierStateful       K8sNamespaceTier = "stateful"
+)
+
+// K8sClusterFinding is a cross-cutting finding produced by resource-graph
+// checks that run after all manifest objects have been parsed. Unlike the
+// per-container DevOpsChecks, these span multiple resource kinds.
+type K8sClusterFinding struct {
+	RuleID    string
+	Namespace string
+	Kind      string
+	Name      string
+	Tier      K8sNamespaceTier
+	Severity  string // "critical" | "high" | "medium" | "low"
+	Title     string
+	Detail    string
+	CWE       string
+	File      string // absolute path of the source YAML manifest (for VSCode links)
+	Line      int    // 1-based line number within File where this resource is defined
+}
+
+// k8sGraph is the in-memory resource index built in a first pass over all
+// parsed manifest items. The cross-cutting checks (C1/C3) consume it.
+type k8sGraph struct {
+	nsTier          map[string]K8sNamespaceTier
+	nsNPCount       map[string]int
+	nsDefaultDeny   map[string]bool
+	nsHasLB         map[string]bool
+	nsHasIngress    map[string]bool
+	nsHasStateful   map[string]bool
+	nsHasDatastore  map[string]bool
+	nsWorkloadNames map[string][]string
+	hpaTargets      map[string]bool // "ns/name"
+	pdbNamespaces   map[string]bool
+	// findings collected during build (before cross-checks)
+	lbFindings      []K8sClusterFinding
+	ingressFindings []K8sClusterFinding
+	rbacFindings    []K8sClusterFinding
+	secretFindings  []K8sClusterFinding
+	hardenFindings  []K8sClusterFinding
+}
 
 // ScanK8sLint walks rootPath (up to k8sLintMaxDepth levels) for YAML files
 // that look like Kubernetes manifests or `kubectl -o yaml` cluster dumps,
@@ -200,8 +254,8 @@ func ScanK8sLint(rootPath string) *K8sLint {
 		return nil
 	}
 
-	var workloads []K8sWorkload
-	var stats K8sClusterStats
+	// Pass 1: collect all items, deduplicating across files.
+	var allItems []k8sRawItem
 	var workloadFiles []string
 	seen := make(map[string]bool)
 	for _, f := range files {
@@ -209,35 +263,48 @@ func ScanK8sLint(rootPath string) *K8sLint {
 		if !ok {
 			continue
 		}
-		fileWorkloadCount := 0
+		fileHasWorkload := false
 		for _, raw := range scanDocuments(lines) {
 			meta := mapField(raw.Item, "metadata")
 			name, _ := strField(meta, "name")
 			ns, _ := strField(meta, "namespace")
 			// A cluster dump split across multiple `kubectl get` invocations
-			// (e.g. one file per resource kind plus a catch-all full dump)
 			// commonly re-exports the same object more than once; keep only
-			// the first occurrence so it isn't double-counted in the report.
+			// the first occurrence so it isn't double-counted.
 			key := raw.Kind + "/" + ns + "/" + name
 			if seen[key] {
 				continue
 			}
 			seen[key] = true
+			raw.File = f // absolute path for VSCode deep links
+			allItems = append(allItems, raw)
 			if k8sTargetKinds[raw.Kind] {
-				added := workloadsFromItem(raw.Kind, raw.Item)
-				workloads = append(workloads, added...)
-				fileWorkloadCount += len(added)
-			} else {
-				statsFromItem(raw.Kind, raw.Item, &stats)
+				fileHasWorkload = true
 			}
 		}
-		if fileWorkloadCount > 0 {
+		if fileHasWorkload {
 			workloadFiles = append(workloadFiles, f)
+		}
+	}
+
+	// Pass 2: route items to workloads or cluster stats.
+	var workloads []K8sWorkload
+	var stats K8sClusterStats
+	for _, raw := range allItems {
+		if k8sTargetKinds[raw.Kind] {
+			workloads = append(workloads, workloadsFromItem(raw.Kind, raw.Item)...)
+		} else {
+			statsFromItem(raw.Kind, raw.Item, &stats)
 		}
 	}
 	if len(workloads) == 0 {
 		return nil
 	}
+
+	// Pass 3: build resource graph and run cross-cutting checks.
+	graph := buildK8sGraph(allItems)
+	clusterFindings := runCrossChecks(graph)
+
 	sort.Slice(workloads, func(i, j int) bool {
 		if workloads[i].Score != workloads[j].Score {
 			return workloads[i].Score < workloads[j].Score // worst first
@@ -252,7 +319,14 @@ func ScanK8sLint(rootPath string) *K8sLint {
 		workloads = workloads[:k8sLintMaxWorkloads]
 		truncated = true
 	}
-	return &K8sLint{Workloads: workloads, Stats: stats, Files: relPaths(rootPath, workloadFiles), Truncated: truncated}
+	return &K8sLint{
+		Workloads:       workloads,
+		Stats:           stats,
+		Files:           relPaths(rootPath, workloadFiles),
+		Truncated:       truncated,
+		NamespaceTiers:  graph.nsTier,
+		ClusterFindings: clusterFindings,
+	}
 }
 
 // readLarge reads path fully, rejecting files above maxSize, and returns it
@@ -638,8 +712,10 @@ var itemKindRe = regexp.MustCompile(`^  kind:\s*(\S+)\s*$`)
 // k8sRawItem is one parsed manifest object paired with its `kind:`, before
 // it's routed to either workload linting or cluster-stats aggregation.
 type k8sRawItem struct {
-	Kind string
-	Item map[string]any
+	Kind      string
+	Item      map[string]any
+	File      string // absolute path of the source YAML file (for VSCode links)
+	StartLine int    // 1-based line number of this item within File
 }
 
 // scanDocuments splits raw file lines on top-level "---" separators and
@@ -649,18 +725,18 @@ func scanDocuments(lines []string) []k8sRawItem {
 	start := 0
 	for i, l := range lines {
 		if strings.TrimSpace(l) == "---" && lineIndent(l) == 0 {
-			out = append(out, scanDocument(lines[start:i])...)
+			out = append(out, scanDocument(lines[start:i], start)...)
 			start = i + 1
 		}
 	}
-	out = append(out, scanDocument(lines[start:])...)
+	out = append(out, scanDocument(lines[start:], start)...)
 	return out
 }
 
 // scanDocument scans one YAML document: either a `kind: List` wrapper (cheap
 // boundary scan over items, deep-parsing only matching ones) or a single
 // plain manifest object.
-func scanDocument(lines []string) []k8sRawItem {
+func scanDocument(lines []string, offset int) []k8sRawItem {
 	itemsIdx := -1
 	for idx, l := range lines {
 		if l == "items:" {
@@ -669,7 +745,7 @@ func scanDocument(lines []string) []k8sRawItem {
 		}
 	}
 	if itemsIdx >= 0 {
-		return scanItemsList(lines, itemsIdx+1)
+		return scanItemsList(lines, itemsIdx+1, offset)
 	}
 
 	kind := ""
@@ -683,7 +759,7 @@ func scanDocument(lines []string) []k8sRawItem {
 		return nil
 	}
 	item, _ := parseMapping(lines, 0, 0)
-	return []k8sRawItem{{Kind: kind, Item: item}}
+	return []k8sRawItem{{Kind: kind, Item: item, StartLine: offset + 1}}
 }
 
 // scanItemsList cheaply locates each top-level "- " item's line range (no
@@ -691,7 +767,7 @@ func scanDocument(lines []string) []k8sRawItem {
 // `kind:` line (found via a plain string scan within that range) matches one
 // of our target or stats kinds — the vast majority of a cluster dump
 // (Secrets, Events, Nodes, Leases, ...) is never touched.
-func scanItemsList(lines []string, start int) []k8sRawItem {
+func scanItemsList(lines []string, start, offset int) []k8sRawItem {
 	n := len(lines)
 	var bounds []int
 	endOfList := n
@@ -733,7 +809,7 @@ func scanItemsList(lines []string, start int) []k8sRawItem {
 		if !ok {
 			continue
 		}
-		out = append(out, k8sRawItem{Kind: kind, Item: item})
+		out = append(out, k8sRawItem{Kind: kind, Item: item, StartLine: offset + s + 1})
 	}
 	return out
 }
@@ -862,9 +938,171 @@ var k8sSystemNamespaces = map[string]bool{
 	"kube-system": true, "kube-public": true, "kube-node-lease": true,
 }
 
-// rulesHaveWildcard reports whether any Role/ClusterRole rule uses a "*"
-// verb or resource — the RBAC over-permissioning signal kube-linter's
-// wildcard-in-rules check flags.
+// k8sTierSystemPrefixes are namespace name prefixes/exact names that indicate
+// platform/operator namespaces — their DaemonSet privilege findings and missing
+// NetworkPolicies are expected and suppressed.
+var k8sTierSystemPrefixes = []string{
+	"kube-", "cattle-", "calico-", "cilium", "istio-", "linkerd",
+	"monitoring", "logging", "cert-manager", "ingress-", "external-",
+	"flux-", "argocd", "velero", "crossplane",
+}
+
+// k8sDatastoreImages are container image substrings that indicate a datastore
+// workload — used to escalate severity when such a workload is publicly exposed.
+var k8sDatastoreImages = []string{
+	"mongo", "postgresql", "postgres", "mysql", "mariadb",
+	"redis", "kafka", "rabbitmq", "elasticsearch", "opensearch",
+	"cassandra", "influxdb", "minio", "qdrant", "weaviate",
+	"chromadb", "etcd",
+}
+
+// k8sDatastorePorts are TCP ports commonly used by datastores — an unrestricted
+// LoadBalancer exposing any of these is escalated to "critical".
+var k8sDatastorePorts = map[string]bool{
+	"27017": true, "5432": true, "3306": true, "6379": true,
+	"5672": true, "15672": true, "9200": true, "9300": true,
+	"6333": true, "6334": true, "9092": true, "2379": true,
+	"2380": true, "9000": true,
+}
+
+// k8sPlatformSANames are well-known system/operator ServiceAccount names whose
+// cluster-admin binding is expected and should not trigger an alert.
+var k8sPlatformSANames = map[string]bool{
+	"default": true, "cluster-admin": true,
+	"kube-controller-manager": true, "kube-scheduler": true,
+	"node-problem-detector": true, "cluster-autoscaler": true,
+	"cert-manager": true, "external-secrets": true,
+	"vault": true, "prometheus": true, "prometheus-operator": true,
+	"prometheus-kube-prometheus-prometheus": true,
+	"coredns":                               true, "metrics-server": true,
+	"ingress-nginx": true, "aws-node": true, "kube-proxy": true,
+	"flannel": true, "calico-node": true, "weave-net": true,
+	"cilium": true, "cilium-operator": true,
+	"argo-workflows": true, "argocd-application-controller": true,
+	"argocd-server": true, "velero": true,
+	"flux-system": true, "helm-operator": true,
+	"crossplane": true, "crossplane-rbac-manager": true,
+}
+
+// k8sEnvSecretKeyRe matches env var names that commonly hold credentials.
+// Matched against the variable name only — values are NEVER emitted in output.
+var k8sEnvSecretKeyRe = regexp.MustCompile(
+	`(?i)(password|passwd|secret|api[_-]?key|apitoken|auth[_-]?token|` +
+		`access[_-]?token|private[_-]?key|client[_-]?secret|` +
+		`signing[_-]?key|encryption[_-]?key|database[_-]?url|db[_-]?url|` +
+		`dsn|jwt[_-]?secret|hmac[_-]?key|bearer[_-]?token)`,
+)
+
+// k8sHardeningEntry is one catalog rule for a well-known container image.
+type k8sHardeningEntry struct {
+	matchImage    string    // substring to match in container image (case-insensitive)
+	requireAnyEnv []string  // flag if NONE of these env vars are set
+	forbidEnvPair [2]string // {name, value}: flag if env[name] == value
+	severity      string
+	cwe           string
+	title         string
+	detail        string
+}
+
+// k8sHardeningCatalog defines per-image hardening rules checked during graph
+// analysis. Secret values from forbidEnvPair comparisons are NEVER emitted.
+var k8sHardeningCatalog = []k8sHardeningEntry{
+	{
+		matchImage:    "qdrant/qdrant",
+		requireAnyEnv: []string{"QDRANT__SERVICE__API_KEY", "QDRANT__SERVICE__READ_ONLY_API_KEY"},
+		severity:      "high", cwe: "306",
+		title:  "Qdrant started without API key",
+		detail: "Set QDRANT__SERVICE__API_KEY (or READ_ONLY_API_KEY) to restrict access to the vector database.",
+	},
+	{
+		matchImage: "rabbitmq", forbidEnvPair: [2]string{"RABBITMQ_DEFAULT_USER", "guest"},
+		severity: "critical", cwe: "798",
+		title:  "RabbitMQ using default guest credentials",
+		detail: "Change RABBITMQ_DEFAULT_USER and RABBITMQ_DEFAULT_PASS from the default 'guest/guest'.",
+	},
+	{
+		matchImage:    "mongo",
+		requireAnyEnv: []string{"MONGO_INITDB_ROOT_PASSWORD", "MONGODB_ROOT_PASSWORD", "MONGO_INITDB_ROOT_PASSWORD_FILE"},
+		severity:      "critical", cwe: "306",
+		title:  "MongoDB started without root password",
+		detail: "Set MONGO_INITDB_ROOT_PASSWORD — without it the database is accessible to anyone with network access.",
+	},
+	{
+		matchImage:    "postgres",
+		requireAnyEnv: []string{"POSTGRES_PASSWORD", "POSTGRES_PASSWORD_FILE", "PGPASSWORD"},
+		severity:      "high", cwe: "306",
+		title:  "PostgreSQL started without a password",
+		detail: "Set POSTGRES_PASSWORD (or POSTGRES_PASSWORD_FILE) to require authentication.",
+	},
+	{
+		matchImage:    "mysql",
+		requireAnyEnv: []string{"MYSQL_ROOT_PASSWORD", "MYSQL_ROOT_PASSWORD_FILE", "MYSQL_ALLOW_EMPTY_PASSWORD", "MYSQL_RANDOM_ROOT_PASSWORD"},
+		severity:      "high", cwe: "306",
+		title:  "MySQL started without root password",
+		detail: "Set MYSQL_ROOT_PASSWORD (or MYSQL_ROOT_PASSWORD_FILE) to require authentication.",
+	},
+	{
+		matchImage: "mysql", forbidEnvPair: [2]string{"MYSQL_ALLOW_EMPTY_PASSWORD", "true"},
+		severity: "critical", cwe: "306",
+		title:  "MySQL MYSQL_ALLOW_EMPTY_PASSWORD=true",
+		detail: "MYSQL_ALLOW_EMPTY_PASSWORD=true disables password authentication entirely.",
+	},
+	{
+		matchImage:    "redis",
+		requireAnyEnv: []string{"REDIS_PASSWORD", "REQUIREPASS"},
+		severity:      "medium", cwe: "306",
+		title:  "Redis started without a password",
+		detail: "Set REQUIREPASS or pass --requirepass in command args to enable authentication.",
+	},
+	{
+		matchImage:    "minio/minio",
+		requireAnyEnv: []string{"MINIO_ROOT_PASSWORD", "MINIO_SECRET_KEY"},
+		severity:      "high", cwe: "306",
+		title:  "MinIO started without root password",
+		detail: "Set MINIO_ROOT_PASSWORD and MINIO_ROOT_USER to enable authentication.",
+	},
+	{
+		matchImage: "minio/minio", forbidEnvPair: [2]string{"MINIO_ROOT_USER", "minioadmin"},
+		severity: "high", cwe: "798",
+		title:  "MinIO using default minioadmin credentials",
+		detail: "Change MINIO_ROOT_USER and MINIO_ROOT_PASSWORD from the default 'minioadmin/minioadmin'.",
+	},
+}
+
+// rulesHaveTrueWildcard reports whether a ClusterRole has a "true" wildcard:
+// verbs contains "*" AND (resources or apiGroups contains "*"). A scoped
+// wildcard (verbs:["*"] on a specific CRD apiGroup) is benign/informational
+// and should not be counted as a security finding.
+func rulesHaveTrueWildcard(item map[string]any) bool {
+	for _, r := range listField(item, "rules") {
+		rm, _ := r.(map[string]any)
+		verbsStar := false
+		for _, v := range listField(rm, "verbs") {
+			if s, _ := v.(string); s == "*" {
+				verbsStar = true
+				break
+			}
+		}
+		if !verbsStar {
+			continue
+		}
+		for _, v := range listField(rm, "resources") {
+			if s, _ := v.(string); s == "*" {
+				return true
+			}
+		}
+		for _, v := range listField(rm, "apiGroups") {
+			if s, _ := v.(string); s == "*" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// rulesHaveWildcard reports whether any Role rule uses a "*" verb or resource.
+// Used for namespace-scoped Roles where any wildcard is flagged (they have
+// narrower scope than ClusterRoles so the threshold is lower).
 func rulesHaveWildcard(item map[string]any) bool {
 	for _, r := range listField(item, "rules") {
 		rm, _ := r.(map[string]any)
@@ -1074,13 +1312,24 @@ func statsFromItem(kind string, item map[string]any, stats *K8sClusterStats) {
 		}
 	case "ClusterRole":
 		stats.ClusterRoles++
-		if rulesHaveWildcard(item) {
+		if rulesHaveTrueWildcard(item) {
 			stats.ClusterRolesWildcard++
 		}
 	case "RoleBinding":
 		stats.RoleBindings++
 	case "ClusterRoleBinding":
 		stats.ClusterRoleBindings++
+		roleRef := mapField(item, "roleRef")
+		if roleName, _ := strField(roleRef, "name"); roleName == "cluster-admin" {
+			for _, subj := range listField(item, "subjects") {
+				sm, _ := subj.(map[string]any)
+				subjKind, _ := strField(sm, "kind")
+				subjName, _ := strField(sm, "name")
+				if subjKind == "ServiceAccount" && !k8sPlatformSANames[subjName] {
+					stats.ClusterAdminBindings++
+				}
+			}
+		}
 	case "HorizontalPodAutoscaler":
 		stats.HPAs++
 	case "PodDisruptionBudget":
@@ -1260,4 +1509,411 @@ func fallback(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// ── resource graph + cross-cutting checks ────────────────────────────────
+
+// buildK8sGraph does a single pass over all parsed items to build the
+// correlation index needed by the cross-cutting checks (C1/C2/C3).
+func buildK8sGraph(items []k8sRawItem) *k8sGraph {
+	g := &k8sGraph{
+		nsTier:          make(map[string]K8sNamespaceTier),
+		nsNPCount:       make(map[string]int),
+		nsDefaultDeny:   make(map[string]bool),
+		nsHasLB:         make(map[string]bool),
+		nsHasIngress:    make(map[string]bool),
+		nsHasStateful:   make(map[string]bool),
+		nsHasDatastore:  make(map[string]bool),
+		nsWorkloadNames: make(map[string][]string),
+		hpaTargets:      make(map[string]bool),
+		pdbNamespaces:   make(map[string]bool),
+	}
+	allNS := make(map[string]bool)
+
+	for _, raw := range items {
+		meta := mapField(raw.Item, "metadata")
+		name, _ := strField(meta, "name")
+		ns, _ := strField(meta, "namespace")
+		if ns == "" {
+			ns = "default"
+		}
+		allNS[ns] = true
+		spec := mapField(raw.Item, "spec")
+
+		switch raw.Kind {
+		case "NetworkPolicy":
+			g.nsNPCount[ns]++
+			podSel := mapField(spec, "podSelector")
+			if podSel != nil {
+				hasLabels := len(mapField(podSel, "matchLabels")) > 0
+				hasExprs := len(listField(podSel, "matchExpressions")) > 0
+				if !hasLabels && !hasExprs {
+					g.nsDefaultDeny[ns] = true
+				}
+			}
+
+		case "Service":
+			svcType, _ := strField(spec, "type")
+			if svcType == "LoadBalancer" || svcType == "NodePort" {
+				g.nsHasLB[ns] = true
+			}
+			if svcType == "LoadBalancer" {
+				srcRanges := listField(spec, "loadBalancerSourceRanges")
+				ann := mapField(meta, "annotations")
+				isInternal := false
+				for k := range ann {
+					if strings.Contains(strings.ToLower(k), "internal") {
+						isInternal = true
+					}
+				}
+				if !isInternal && len(srcRanges) == 0 {
+					var ports []string
+					for _, p := range listField(spec, "ports") {
+						pm, _ := p.(map[string]any)
+						port, _ := strField(pm, "port")
+						if port != "" {
+							ports = append(ports, port)
+						}
+					}
+					sev := "high"
+					detail := "Service '" + name + "' in namespace '" + ns + "' is a LoadBalancer with no loadBalancerSourceRanges — anyone on the internet can reach this endpoint."
+					if k8sPortsAreDatastore(ports) {
+						sev = "critical"
+						detail += " The exposed ports match known datastore services — a data breach is possible."
+					}
+					g.lbFindings = append(g.lbFindings, K8sClusterFinding{
+						RuleID:    "k8s.unrestricted_lb",
+						Namespace: ns, Kind: "Service", Name: name,
+						Severity: sev, CWE: "749", File: raw.File, Line: raw.StartLine,
+						Title:  "LoadBalancer without source IP restriction",
+						Detail: detail,
+					})
+				}
+			}
+
+		case "Ingress":
+			g.nsHasIngress[ns] = true
+			if len(listField(spec, "tls")) == 0 {
+				g.ingressFindings = append(g.ingressFindings, K8sClusterFinding{
+					RuleID:    "k8s.ingress_no_tls",
+					Namespace: ns, Kind: "Ingress", Name: name,
+					Severity: "medium", CWE: "319", File: raw.File, Line: raw.StartLine,
+					Title:  "Ingress without TLS termination",
+					Detail: "Ingress '" + name + "' in namespace '" + ns + "' has no spec.tls entry — traffic between client and cluster is unencrypted.",
+				})
+			}
+
+		case "StatefulSet":
+			g.nsHasStateful[ns] = true
+
+		case "HorizontalPodAutoscaler":
+			target := mapField(spec, "scaleTargetRef")
+			if tname, _ := strField(target, "name"); tname != "" {
+				g.hpaTargets[ns+"/"+tname] = true
+			}
+
+		case "PodDisruptionBudget":
+			g.pdbNamespaces[ns] = true
+
+		case "ClusterRoleBinding":
+			roleRef := mapField(raw.Item, "roleRef")
+			roleName, _ := strField(roleRef, "name")
+			if roleName == "cluster-admin" {
+				for _, subj := range listField(raw.Item, "subjects") {
+					sm, _ := subj.(map[string]any)
+					subjKind, _ := strField(sm, "kind")
+					subjName, _ := strField(sm, "name")
+					subjNS, _ := strField(sm, "namespace")
+					if subjKind == "ServiceAccount" && !k8sPlatformSANames[subjName] {
+						g.rbacFindings = append(g.rbacFindings, K8sClusterFinding{
+							RuleID:    "k8s.cluster_admin_custom_sa",
+							Namespace: subjNS, Kind: "ClusterRoleBinding", Name: name,
+							Severity: "critical", CWE: "269", File: raw.File, Line: raw.StartLine,
+							Title:  "Custom ServiceAccount bound to cluster-admin",
+							Detail: "ClusterRoleBinding '" + name + "' grants cluster-admin to ServiceAccount '" + subjName + "' — full read/write access to all cluster resources.",
+						})
+					}
+				}
+			}
+
+		case "ConfigMap":
+			if name == "kube-root-ca.crt" || k8sSystemNamespaces[ns] {
+				break
+			}
+			data := mapField(raw.Item, "data")
+			for k, v := range data {
+				val, _ := v.(string)
+				// Only flag non-empty literal values (not templated references like $(VAR) or ${VAR})
+				if k8sEnvSecretKeyRe.MatchString(k) && val != "" &&
+					!strings.ContainsAny(val, "$(") && !strings.Contains(val, "${") {
+					g.secretFindings = append(g.secretFindings, K8sClusterFinding{
+						RuleID:    "k8s.secret_in_configmap",
+						Namespace: ns, Kind: "ConfigMap", Name: name,
+						Severity: "high", CWE: "312", File: raw.File, Line: raw.StartLine,
+						Title:  "Sensitive key in ConfigMap: " + k,
+						Detail: "ConfigMap '" + name + "' key '" + k + "' matches a credential pattern. ConfigMaps are unencrypted — use a Secret with encryption-at-rest or an external secret manager.",
+					})
+				}
+			}
+		}
+
+		// Workload-level graph data: datastore images, env secrets, app hardening.
+		if k8sTargetKinds[raw.Kind] {
+			g.nsWorkloadNames[ns] = append(g.nsWorkloadNames[ns], name)
+			podSpec := k8sGetPodSpec(raw.Kind, raw.Item)
+			for _, cv := range listField(podSpec, "containers") {
+				cm, _ := cv.(map[string]any)
+				image, _ := strField(cm, "image")
+				if isDatastoreImage(image) {
+					g.nsHasDatastore[ns] = true
+				}
+				for _, f := range checkAppHardening(ns, name, cm) {
+					f.File = raw.File
+					f.Line = raw.StartLine
+					g.hardenFindings = append(g.hardenFindings, f)
+				}
+				for _, f := range checkEnvSecrets(ns, raw.Kind, name, cm) {
+					f.File = raw.File
+					f.Line = raw.StartLine
+					g.secretFindings = append(g.secretFindings, f)
+				}
+			}
+		}
+	}
+
+	// Escalate LB findings for datastore namespaces (image-based signal may
+	// arrive after the Service was scanned, so apply after the full pass).
+	for i := range g.lbFindings {
+		f := &g.lbFindings[i]
+		if f.Severity != "critical" && g.nsHasDatastore[f.Namespace] {
+			f.Severity = "critical"
+			f.Detail += " This namespace hosts datastore workloads — a data breach is possible."
+		}
+	}
+
+	// Classify namespace tiers.
+	for ns := range allNS {
+		g.nsTier[ns] = classifyNSTier(ns, g)
+	}
+
+	// Stamp tier onto all pre-collected findings.
+	for i := range g.lbFindings {
+		g.lbFindings[i].Tier = g.nsTier[g.lbFindings[i].Namespace]
+	}
+	for i := range g.ingressFindings {
+		g.ingressFindings[i].Tier = g.nsTier[g.ingressFindings[i].Namespace]
+	}
+	for i := range g.rbacFindings {
+		if g.rbacFindings[i].Namespace != "" {
+			g.rbacFindings[i].Tier = g.nsTier[g.rbacFindings[i].Namespace]
+		}
+	}
+	for i := range g.secretFindings {
+		g.secretFindings[i].Tier = g.nsTier[g.secretFindings[i].Namespace]
+	}
+	for i := range g.hardenFindings {
+		g.hardenFindings[i].Tier = g.nsTier[g.hardenFindings[i].Namespace]
+	}
+
+	return g
+}
+
+// classifyNSTier assigns a risk tier to a namespace based on the graph signals
+// collected during buildK8sGraph.
+func classifyNSTier(ns string, g *k8sGraph) K8sNamespaceTier {
+	if k8sSystemNamespaces[ns] {
+		return K8sTierSystem
+	}
+	for _, pfx := range k8sTierSystemPrefixes {
+		if strings.HasPrefix(ns, pfx) || ns == strings.TrimSuffix(pfx, "-") {
+			return K8sTierSystem
+		}
+	}
+	if g.nsHasStateful[ns] || g.nsHasDatastore[ns] {
+		return K8sTierStateful
+	}
+	if g.nsHasLB[ns] || g.nsHasIngress[ns] {
+		return K8sTierInternetFacing
+	}
+	lns := strings.ToLower(ns)
+	if strings.HasPrefix(lns, "prod") || strings.HasSuffix(lns, "-prod") ||
+		strings.HasSuffix(lns, "-production") || strings.Contains(lns, "-prod-") {
+		return K8sTierProduction
+	}
+	return K8sTierProduction // default non-system to production (conservative)
+}
+
+// runCrossChecks uses the completed graph to produce the final list of
+// ClusterFindings, adding NetworkPolicy gap findings and merging the rest.
+func runCrossChecks(g *k8sGraph) []K8sClusterFinding {
+	var findings []K8sClusterFinding
+
+	// C3: NetworkPolicy gap — namespace has workloads but no default-deny NP.
+	for ns, workloadNames := range g.nsWorkloadNames {
+		if g.nsTier[ns] == K8sTierSystem {
+			continue
+		}
+		if len(workloadNames) == 0 || g.nsDefaultDeny[ns] {
+			continue
+		}
+		sev := "medium"
+		if g.nsTier[ns] == K8sTierInternetFacing || g.nsTier[ns] == K8sTierStateful {
+			sev = "high"
+		}
+		findings = append(findings, K8sClusterFinding{
+			RuleID:    "k8s.np_gap",
+			Namespace: ns, Kind: "Namespace",
+			Tier:     g.nsTier[ns],
+			Severity: sev, CWE: "284",
+			Title:  "Namespace lacks a default-deny NetworkPolicy",
+			Detail: "Namespace '" + ns + "' has " + strconv.Itoa(len(workloadNames)) + " workload(s) but no NetworkPolicy with an empty podSelector — all pod-to-pod traffic is implicitly allowed.",
+		})
+	}
+
+	findings = append(findings, g.rbacFindings...)
+	findings = append(findings, g.lbFindings...)
+	findings = append(findings, g.secretFindings...)
+	findings = append(findings, g.hardenFindings...)
+	findings = append(findings, g.ingressFindings...)
+
+	sort.Slice(findings, func(i, j int) bool {
+		ri, rj := k8sSeverityRank(findings[i].Severity), k8sSeverityRank(findings[j].Severity)
+		if ri != rj {
+			return ri > rj
+		}
+		if findings[i].Namespace != findings[j].Namespace {
+			return findings[i].Namespace < findings[j].Namespace
+		}
+		return findings[i].Title < findings[j].Title
+	})
+	return findings
+}
+
+func k8sSeverityRank(s string) int {
+	switch s {
+	case "critical":
+		return 4
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	}
+	return 0
+}
+
+// k8sGetPodSpec extracts the pod spec map from a workload item.
+func k8sGetPodSpec(kind string, item map[string]any) map[string]any {
+	spec := mapField(item, "spec")
+	switch kind {
+	case "Pod":
+		return spec
+	case "Deployment", "StatefulSet", "DaemonSet", "Job":
+		return getMapPath(spec, "template", "spec")
+	case "CronJob":
+		return getMapPath(spec, "jobTemplate", "spec", "template", "spec")
+	}
+	return nil
+}
+
+// isDatastoreImage returns true if the image name contains a known datastore substring.
+func isDatastoreImage(image string) bool {
+	low := strings.ToLower(image)
+	for _, ds := range k8sDatastoreImages {
+		if strings.Contains(low, ds) {
+			return true
+		}
+	}
+	return false
+}
+
+// k8sPortsAreDatastore returns true if any of the given port strings matches a
+// well-known datastore port.
+func k8sPortsAreDatastore(ports []string) bool {
+	for _, p := range ports {
+		if k8sDatastorePorts[p] {
+			return true
+		}
+	}
+	return false
+}
+
+// checkEnvSecrets scans a container's env list for literal values assigned to
+// credential-named variables. Values are NEVER included in the output.
+func checkEnvSecrets(ns, kind, workloadName string, c map[string]any) []K8sClusterFinding {
+	cname, _ := strField(c, "name")
+	var findings []K8sClusterFinding
+	for _, ev := range listField(c, "env") {
+		em, _ := ev.(map[string]any)
+		ename, _ := strField(em, "name")
+		evalue, _ := strField(em, "value")
+		_, hasValueFrom := em["valueFrom"]
+		if ename != "" && evalue != "" && !hasValueFrom && k8sEnvSecretKeyRe.MatchString(ename) {
+			findings = append(findings, K8sClusterFinding{
+				RuleID:    "k8s.secret_in_env",
+				Namespace: ns, Kind: kind, Name: workloadName + "/" + cname,
+				Severity: "critical", CWE: "312",
+				Title:  "Secret literal in env: " + ename,
+				Detail: "Container '" + cname + "' sets env var '" + ename + "' with a hardcoded literal value. Use secretKeyRef to reference a Kubernetes Secret — never store credentials in manifests.",
+			})
+		}
+	}
+	return findings
+}
+
+// checkAppHardening checks a container against the app hardening catalog.
+// Values from forbidEnvPair comparisons are never included in findings.
+func checkAppHardening(ns, workloadName string, c map[string]any) []K8sClusterFinding {
+	image, _ := strField(c, "image")
+	if image == "" {
+		return nil
+	}
+	lowImage := strings.ToLower(image)
+	cname, _ := strField(c, "name")
+
+	envMap := map[string]string{}
+	for _, ev := range listField(c, "env") {
+		em, _ := ev.(map[string]any)
+		k, _ := strField(em, "name")
+		v, _ := strField(em, "value")
+		if k != "" {
+			envMap[k] = v
+		}
+	}
+
+	var findings []K8sClusterFinding
+	for _, entry := range k8sHardeningCatalog {
+		if !strings.Contains(lowImage, strings.ToLower(entry.matchImage)) {
+			continue
+		}
+		if len(entry.requireAnyEnv) > 0 {
+			found := false
+			for _, req := range entry.requireAnyEnv {
+				if _, ok := envMap[req]; ok {
+					found = true
+					break
+				}
+			}
+			if !found {
+				findings = append(findings, K8sClusterFinding{
+					RuleID:    "k8s.app_hardening",
+					Namespace: ns, Kind: "Workload", Name: workloadName + "/" + cname,
+					Severity: entry.severity, CWE: entry.cwe,
+					Title: entry.title, Detail: entry.detail,
+				})
+			}
+		}
+		if entry.forbidEnvPair[0] != "" {
+			if v, ok := envMap[entry.forbidEnvPair[0]]; ok && v == entry.forbidEnvPair[1] {
+				findings = append(findings, K8sClusterFinding{
+					RuleID:    "k8s.app_hardening",
+					Namespace: ns, Kind: "Workload", Name: workloadName + "/" + cname,
+					Severity: entry.severity, CWE: entry.cwe,
+					Title: entry.title, Detail: entry.detail,
+				})
+			}
+		}
+	}
+	return findings
 }

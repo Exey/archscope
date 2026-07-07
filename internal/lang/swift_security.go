@@ -38,12 +38,12 @@ var (
 	reSwiftUnsafePtr     = regexp.MustCompile(`\b(UnsafePointer|UnsafeMutablePointer|UnsafeRawPointer|UnsafeMutableRawPointer|withUnsafeBytes|withUnsafeMutableBytes|withUnsafePointer|withUnsafeMutablePointer)\b`)
 	reSwiftECBMode       = regexp.MustCompile(`kCCOptionECBMode`)
 	// CWE-22: FileManager/Data file-read sinks (path traversal via interpolation)
-	reSwiftFileSink      = regexp.MustCompile(`\bFileManager\.default\b|\bData\s*\(\s*contentsOf\s*:|\bNSData\s*\(\s*contentsOfFile\s*:|\bcontentsOfFile\s*:|\bURL\s*\(\s*fileURLWithPath\s*:`)
+	reSwiftFileSink = regexp.MustCompile(`\bFileManager\.default\b|\bData\s*\(\s*contentsOf\s*:|\bNSData\s*\(\s*contentsOfFile\s*:|\bcontentsOfFile\s*:|\bURL\s*\(\s*fileURLWithPath\s*:`)
 	// CWE-918: URLSession with a string-interpolated URL — attacker can redirect to internal hosts
 	reSwiftURLSessionSink = regexp.MustCompile(`URLSession\b|\.dataTask\s*\(|\.downloadTask\s*\(|\.uploadTask\s*\(`)
 	reSwiftURLInterp      = regexp.MustCompile(`URL\s*\(\s*string\s*:.*\\\(|URLComponents\b.*\\\(`)
 	// CWE-916: fast hash in password context (CryptoKit SHA256/SHA512)
-	reSwiftFastHashSink  = regexp.MustCompile(`\bSHA256\.(hash|init)|SHA512\.(hash|init)|\bSHA384\.(hash|init)|Insecure\.SHA256|Insecure\.SHA512`)
+	reSwiftFastHashSink = regexp.MustCompile(`\bSHA256\.(hash|init)|SHA512\.(hash|init)|\bSHA384\.(hash|init)|Insecure\.SHA256|Insecure\.SHA512`)
 
 	// ── New iOS-specific rules ────────────────────────────────────────────────
 
@@ -72,8 +72,8 @@ var (
 	reSwiftSwizzle = regexp.MustCompile(`\bmethod_exchangeImplementations\s*\(`)
 
 	// CWE-319: URLSessionConfiguration with TLS below 1.2 via tlsMinimumSupportedProtocolVersion
-	reSwiftTLSMin     = regexp.MustCompile(`\btlsMinimumSupportedProtocolVersion\s*=`)
-	reSwiftTLSUnsafe  = regexp.MustCompile(`\.TLSv10\b|\.TLSv11\b|tls_protocol_version_t\.TLSv10|tls_protocol_version_t\.TLSv11`)
+	reSwiftTLSMin    = regexp.MustCompile(`\btlsMinimumSupportedProtocolVersion\s*=`)
+	reSwiftTLSUnsafe = regexp.MustCompile(`\.TLSv10\b|\.TLSv11\b|tls_protocol_version_t\.TLSv10|tls_protocol_version_t\.TLSv11`)
 )
 
 func init() {
@@ -233,37 +233,13 @@ func init() {
 
 	security.Default.RegisterRule(swiftBiometricPasscodeFallbackRule())
 
-	security.Default.RegisterRule(twoReRule(
-		"swift.appstorage_sensitive", "Sensitive Data in @AppStorage (UserDefaults)",
-		"data_exposure", security.SevHigh, swiftLangs,
-		reSwiftAppStorage, reSwiftSensitiveKey,
-		"@AppStorage stores values in UserDefaults — an unencrypted plist file included in "+
-			"iCloud and iTunes backups by default. Using it with a sensitive key (password, token, "+
-			"secret) persists that value in plaintext. Store credentials in the iOS Keychain with "+
-			"kSecAttrAccessibleAfterFirstUnlock instead. (CWE-311)",
-	).WithCWE("311"))
+	security.Default.RegisterRule(swiftAppStorageSensitiveRule())
 
 	security.Default.RegisterRule(swiftRealmNoEncryptionRule())
 
-	security.Default.RegisterRule(twoReRule(
-		"swift.notification_sensitive_content", "Sensitive Data in Push Notification Content",
-		"data_exposure", security.SevMedium, swiftLangs,
-		reSwiftNotifContent, reSwiftNotifSensKey,
-		"UNMutableNotificationContent is configured in a context that references a sensitive value "+
-			"(OTP, PIN, CVV, SSN, verification code). Notification titles and bodies appear on the "+
-			"lock screen and in Notification Center, visible to bystanders. Keep notification payloads "+
-			"generic and load sensitive detail only after the user authenticates. (CWE-312)",
-	).WithCWE("312"))
+	security.Default.RegisterRule(swiftNotificationSensitiveContentRule())
 
-	security.Default.RegisterRule(twoReRule(
-		"swift.device_token_logged", "Push Device Token Written to Log",
-		"data_exposure", security.SevLow, swiftLangs,
-		reSwiftDeviceTokenLog, reSwiftPrintLog,
-		"A push notification device token is passed to print() / NSLog(). Device tokens are "+
-			"persistent device identifiers; leaking them in logs (stored on-device, in crash "+
-			"reporters, and sometimes forwarded to external log aggregators) enables tracking "+
-			"and targeted push abuse. Remove token logging before shipping. (CWE-532)",
-	).WithCWE("532"))
+	security.Default.RegisterRule(swiftDeviceTokenLoggedRule())
 
 	security.Default.RegisterRule(reRule(
 		"swift.method_swizzling", "Runtime Method Swizzling",
@@ -539,6 +515,111 @@ func swiftRealmNoEncryptionRule() security.Rule {
 }
 
 // swiftTLSMinVersionRule fires when tlsMinimumSupportedProtocolVersion is set to TLS 1.0 or 1.1.
+// swiftAppStorageSensitiveRule fires when @AppStorage is declared with a key
+// or variable name that suggests sensitive content. Unlike most sensitive-key
+// checks, this deliberately matches against the raw line (not the
+// strings-blanked form) because the @AppStorage key is itself a quoted string
+// literal — that literal is exactly the persisted UserDefaults key name, so
+// blanking string content would make the check unable to see it at all.
+func swiftAppStorageSensitiveRule() security.Rule {
+	return security.Rule{
+		ID:        "swift.appstorage_sensitive",
+		Name:      "Sensitive Data in @AppStorage (UserDefaults)",
+		Severity:  security.SevHigh,
+		Category:  "data_exposure",
+		CWE:       "311",
+		Languages: swiftLangs,
+		Description: "@AppStorage stores values in UserDefaults — an unencrypted plist file included in " +
+			"iCloud and iTunes backups by default. Using it with a sensitive key (password, token, " +
+			"secret) persists that value in plaintext. Store credentials in the iOS Keychain with " +
+			"kSecAttrAccessibleAfterFirstUnlock instead. (CWE-311)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			var out []security.Finding
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reSwiftAppStorage.MatchString(line) && reSwiftSensitiveKey.MatchString(line) {
+					out = append(out, security.NewFinding(filePath, i, lines))
+				}
+			}
+			return out
+		},
+	}
+}
+
+// swiftNotificationSensitiveContentRule fires when a file configures
+// UNMutableNotificationContent and also references a sensitive keyword
+// (OTP, PIN, CVV, ...) anywhere in the file — the two typically appear a
+// line or two apart (content declared, then .body/.title assigned), so this
+// scans the whole file for both signals rather than requiring one line to
+// contain both. It also matches raw lines: the sensitive keyword usually
+// appears inside the notification body/title string literal itself.
+func swiftNotificationSensitiveContentRule() security.Rule {
+	return security.Rule{
+		ID:        "swift.notification_sensitive_content",
+		Name:      "Sensitive Data in Push Notification Content",
+		Severity:  security.SevMedium,
+		Category:  "data_exposure",
+		CWE:       "312",
+		Languages: swiftLangs,
+		Description: "UNMutableNotificationContent is configured in a context that references a sensitive value " +
+			"(OTP, PIN, CVV, SSN, verification code). Notification titles and bodies appear on the " +
+			"lock screen and in Notification Center, visible to bystanders. Keep notification payloads " +
+			"generic and load sensitive detail only after the user authenticates. (CWE-312)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			contentLine := -1
+			hasSensKey := false
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reSwiftNotifContent.MatchString(line) && contentLine == -1 {
+					contentLine = i
+				}
+				if reSwiftNotifSensKey.MatchString(line) {
+					hasSensKey = true
+				}
+			}
+			if contentLine >= 0 && hasSensKey {
+				return []security.Finding{security.NewFinding(filePath, contentLine, lines)}
+			}
+			return nil
+		},
+	}
+}
+
+// swiftDeviceTokenLoggedRule fires when a push device token is passed to
+// print/debugPrint/NSLog. Matches raw lines since the token identifier
+// typically appears via string interpolation (\(deviceToken)) inside the
+// logged string literal, which a strings-blanked line would hide.
+func swiftDeviceTokenLoggedRule() security.Rule {
+	return security.Rule{
+		ID:        "swift.device_token_logged",
+		Name:      "Push Device Token Written to Log",
+		Severity:  security.SevLow,
+		Category:  "data_exposure",
+		CWE:       "532",
+		Languages: swiftLangs,
+		Description: "A push notification device token is passed to print() / NSLog(). Device tokens are " +
+			"persistent device identifiers; leaking them in logs (stored on-device, in crash " +
+			"reporters, and sometimes forwarded to external log aggregators) enables tracking " +
+			"and targeted push abuse. Remove token logging before shipping. (CWE-532)",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			var out []security.Finding
+			for i, line := range lines {
+				if security.IsComment(line) {
+					continue
+				}
+				if reSwiftDeviceTokenLog.MatchString(line) && reSwiftPrintLog.MatchString(line) {
+					out = append(out, security.NewFinding(filePath, i, lines))
+				}
+			}
+			return out
+		},
+	}
+}
+
 func swiftTLSMinVersionRule() security.Rule {
 	return security.Rule{
 		ID:        "swift.tls_minimum_version",

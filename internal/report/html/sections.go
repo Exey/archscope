@@ -666,8 +666,8 @@ func renderDevOpsSection(res *result.AnalysisResult) string {
 	}
 
 	// Compliance radar, defect-density, and health-score charts.
-	if !lint.Empty() {
-		b.WriteString(renderDevOpsCharts(lint))
+	if !lint.Empty() || !k8s.Empty() {
+		b.WriteString(renderDevOpsCharts(lint, k8s))
 	}
 
 	// Compact static-analysis matrix.
@@ -883,9 +883,9 @@ func renderK8sPodsCard(lint *scanner.K8sLint) string {
 	fmt.Fprintf(&b, `<span class="as-dvo-score as-dvo-score--%s" title="Average check pass rate across %d workload(s) (pass=1, warn=½, fail=0)">%d%% PASSED</span>`,
 		dvoScoreClass(avg), len(lint.Workloads), avg)
 	b.WriteString(`</div>`)
+
 	fmt.Fprintf(&b, `<div class="as-section__sub" style="margin-top:2px">%d workload%s linted from %s — practices inspired by kube-linter (resource limits, security context, probes, image pinning, host access). Sorted by resource footprint (CPU + memory + storage), biggest first.</div>`,
 		len(lint.Workloads), plural(len(lint.Workloads), "", "s"), esc(strings.Join(lint.Files, ", ")))
-
 	for _, kind := range k8sKindOrder {
 		workloads := byKind[kind]
 		if len(workloads) == 0 {
@@ -912,7 +912,170 @@ func renderK8sPodsCard(lint *scanner.K8sLint) string {
 				moreCount, esc(kind), plural(moreCount, "", "s"), k8sMaxCardsPerKind)
 		}
 	}
+
+	b.WriteString(renderK8sClusterFindings(lint.ClusterFindings))
 	b.WriteString(renderK8sClusterStats(lint.Stats))
+	return b.String()
+}
+
+// k8sCFGroup is a deduplicated cluster finding: one shared title/CWE header
+// with all individual affected namespaces/resources listed underneath. The
+// header shows the worst-case severity/tier/detail across its cases, since a
+// single rule (e.g. "NetworkPolicy gap") commonly fires in several namespaces
+// at different risk tiers.
+type k8sCFGroup struct {
+	RuleID   string
+	Title    string
+	Detail   string
+	Severity string
+	Tier     scanner.K8sNamespaceTier
+	CWE      string
+	Cases    []k8sCFCase
+}
+type k8sCFCase struct {
+	Namespace string
+	Kind      string
+	Name      string
+	Detail    string // this case's own Detail text, shown as a hover tooltip
+	File      string // absolute path for VSCode deep link (may be empty)
+	Line      int    // 1-based line within File; 0 = unknown
+}
+
+// k8sCFSevRank orders cluster-finding severities so the group header can show
+// the worst case among its merged findings.
+func k8sCFSevRank(s string) int {
+	switch s {
+	case "critical":
+		return 4
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	}
+	return 0
+}
+
+// renderK8sClusterFindings groups identical findings (same rule, across every
+// namespace it fires in) into deduplicated cards shown in a two-column grid.
+// Each card carries a mitre.org CWE link and per-case VSCode deep links when
+// the source YAML path is known.
+func renderK8sClusterFindings(findings []scanner.K8sClusterFinding) string {
+	if len(findings) == 0 {
+		return ""
+	}
+
+	// Group by (RuleID, Title) — same rule *and* same specific title (some
+	// rules like k8s.secret_in_configmap embed the offending key name in the
+	// title, so those stay distinct) firing across many namespaces is shown
+	// once, with every namespace listed as a case underneath. This is what
+	// collapses e.g. 7 separate "NetworkPolicy gap" cards (one per namespace)
+	// into a single card listing all 7 namespaces as cases.
+	type key struct{ ruleID, title string }
+	order := []key{}
+	groups := map[key]*k8sCFGroup{}
+	for _, f := range findings {
+		k := key{f.RuleID, f.Title}
+		g, exists := groups[k]
+		if !exists {
+			g = &k8sCFGroup{
+				RuleID:   f.RuleID,
+				Title:    f.Title,
+				Detail:   f.Detail,
+				Severity: f.Severity,
+				Tier:     f.Tier,
+				CWE:      f.CWE,
+			}
+			groups[k] = g
+			order = append(order, k)
+		} else if k8sCFSevRank(f.Severity) > k8sCFSevRank(g.Severity) {
+			// A later case is worse than what the header currently shows —
+			// promote the header to reflect the worst case in the group.
+			g.Detail = f.Detail
+			g.Severity = f.Severity
+			g.Tier = f.Tier
+		}
+		g.Cases = append(g.Cases, k8sCFCase{
+			Namespace: f.Namespace, Kind: f.Kind, Name: f.Name,
+			Detail: f.Detail, File: f.File, Line: f.Line,
+		})
+	}
+
+	var b strings.Builder
+	b.WriteString(`<div class="as-k8s-kind-sub" id="as-k8s-cf">⚠️ Weaknesses</div>`)
+	b.WriteString(`<div class="as-k8s-cf-grid">`)
+
+	for _, k := range order {
+		g := groups[k]
+		sevClass := "as-k8s-cf--" + g.Severity
+		sevLabel := strings.ToUpper(g.Severity[:1]) + g.Severity[1:]
+
+		// CWE badge — link to mitre.org when CWE is known.
+		cweHTML := ""
+		if g.CWE != "" {
+			cweHTML = fmt.Sprintf(
+				`<a class="as-k8s-cwe" href="https://cwe.mitre.org/data/definitions/%s.html" target="_blank" rel="noopener">CWE-%s ↗</a>`,
+				esc(g.CWE), esc(g.CWE),
+			)
+		}
+
+		// Tier badge.
+		tierHTML := ""
+		if g.Tier != "" {
+			tierHTML = fmt.Sprintf(`<span class="as-k8s-tier">%s</span>`, esc(string(g.Tier)))
+		}
+
+		fmt.Fprintf(&b,
+			`<div class="as-k8s-cf %s">`+
+				`<div class="as-k8s-cf__head">`+
+				`<span class="as-k8s-cf__sev">%s</span>`+
+				`<span class="as-k8s-cf__title">%s</span>`+
+				`<span class="as-k8s-cf__badges">%s%s</span>`+
+				`</div>`+
+				`<div class="as-k8s-cf__detail">%s</div>`,
+			sevClass,
+			esc(sevLabel), esc(g.Title), tierHTML, cweHTML,
+			esc(g.Detail),
+		)
+
+		// Cases list — one chip per affected namespace/resource, with the
+		// original per-case detail as a native tooltip.
+		if len(g.Cases) > 0 {
+			b.WriteString(`<div class="as-k8s-cf__cases">`)
+			for _, c := range g.Cases {
+				ns := c.Namespace
+				if ns == "" {
+					ns = "cluster"
+				}
+				label := ns + " / " + c.Kind
+				if c.Name != "" {
+					label += " " + c.Name
+				}
+				lineLabel := ""
+				if c.Line > 0 {
+					lineLabel = fmt.Sprintf(" :%d", c.Line)
+				}
+				href := vscodeHref(c.File, c.Line)
+				if href != "" {
+					fmt.Fprintf(&b,
+						`<a class="as-k8s-cf__case" href="%s" title="%s">%s<span class="as-k8s-cf__line">%s</span></a>`,
+						esc(href), esc(c.Detail), esc(label), esc(lineLabel),
+					)
+				} else {
+					fmt.Fprintf(&b,
+						`<span class="as-k8s-cf__case" title="%s">%s<span class="as-k8s-cf__line">%s</span></span>`,
+						esc(c.Detail), esc(label), esc(lineLabel),
+					)
+				}
+			}
+			b.WriteString(`</div>`)
+		}
+
+		b.WriteString(`</div>`) // close as-k8s-cf
+	}
+
+	b.WriteString(`</div>`) // close as-k8s-cf-grid
 	return b.String()
 }
 
@@ -1018,6 +1181,9 @@ func renderK8sClusterStats(s scanner.K8sClusterStats) string {
 		}
 		if s.ClusterRoleBindings > 0 {
 			rows = append(rows, k8sStatRow{"ClusterRoleBindings", strconv.Itoa(s.ClusterRoleBindings), ""})
+			if s.ClusterAdminBindings > 0 {
+				rows = append(rows, k8sStatRow{"...custom SA to cluster-admin", strconv.Itoa(s.ClusterAdminBindings), passWarn(s.ClusterAdminBindings == 0)})
+			}
 		}
 		cards = append(cards, renderK8sStatCard("🔐", "RBAC & Service Accounts", rows))
 	}
@@ -1578,6 +1744,9 @@ func devopsSeverityWeight(sev string) float64 {
 // fail=0; "na" excluded) into the six devopsDomains buckets. has[i] is false
 // when no artifact contributed an evaluable check to that domain.
 func devopsComplianceDomains(lint *scanner.DevOpsLint) (scores [6]int, has [6]bool) {
+	if lint == nil {
+		lint = &scanner.DevOpsLint{}
+	}
 	var pts, n [6]float64
 	for _, a := range []*scanner.DevOpsArtifactLint{lint.Dockerfiles, lint.Compose, lint.Helm} {
 		if a == nil {
@@ -1609,12 +1778,23 @@ func devopsComplianceDomains(lint *scanner.DevOpsLint) (scores [6]int, has [6]bo
 	return
 }
 
+// k8sDefectKind is the synthetic artifact-kind label used to fold Kubernetes
+// workload checks and cross-cutting Weaknesses into the DevOps defect-density
+// and health-score charts alongside Dockerfile/Compose/Helm.
+const k8sDefectKind = "Kubernetes"
+
+var sevIdx = map[string]int{"critical": 0, "high": 1, "medium": 2, "low": 3}
+
 // devopsDefectCounts tallies non-passing (warn/fail) checks by artifact kind
 // and severity, in [critical, high, medium, low] order. Kinds with zero
-// violations are omitted from the returned order.
-func devopsDefectCounts(lint *scanner.DevOpsLint) (order []string, counts map[string][4]int) {
+// violations are omitted from the returned order. Kubernetes workload checks
+// and cross-cutting Weaknesses (NetworkPolicy gaps, RBAC over-grants, ...)
+// are folded into a synthetic "Kubernetes" kind.
+func devopsDefectCounts(lint *scanner.DevOpsLint, k8s *scanner.K8sLint) (order []string, counts map[string][4]int) {
+	if lint == nil {
+		lint = &scanner.DevOpsLint{}
+	}
 	counts = map[string][4]int{}
-	sevIdx := map[string]int{"critical": 0, "high": 1, "medium": 2, "low": 3}
 	for _, a := range []*scanner.DevOpsArtifactLint{lint.Dockerfiles, lint.Compose, lint.Helm} {
 		if a == nil {
 			continue
@@ -1633,14 +1813,41 @@ func devopsDefectCounts(lint *scanner.DevOpsLint) (order []string, counts map[st
 			counts[a.Kind] = c
 		}
 	}
+	if k8s != nil {
+		var c [4]int
+		any := false
+		for _, w := range k8s.Workloads {
+			for _, ch := range w.Checks {
+				if ch.Status != "warn" && ch.Status != "fail" {
+					continue
+				}
+				c[sevIdx[devopsSeverityOf(ch.Metric)]]++
+				any = true
+			}
+		}
+		for _, f := range k8s.ClusterFindings {
+			c[sevIdx[f.Severity]]++
+			any = true
+		}
+		if any {
+			order = append(order, k8sDefectKind)
+			counts[k8sDefectKind] = c
+		}
+	}
 	return
 }
 
 // devopsHealthScore rolls every evaluable check into one severity-weighted
 // 0-100 score (pass=full weight, warn=half, fail=0; "na" excluded), so a
 // mounted docker.sock (critical, weight 10) moves the needle far more than a
-// missing OCI label (low, weight 1).
-func devopsHealthScore(lint *scanner.DevOpsLint) (int, bool) {
+// missing OCI label (low, weight 1). Kubernetes workload checks are folded in
+// the same way; cross-cutting Weaknesses have no "passed" counterpart (a
+// Weakness only exists when something's wrong), so each one only adds its
+// severity weight to the denominator, pulling the score down.
+func devopsHealthScore(lint *scanner.DevOpsLint, k8s *scanner.K8sLint) (int, bool) {
+	if lint == nil {
+		lint = &scanner.DevOpsLint{}
+	}
 	var pts, total float64
 	for _, a := range []*scanner.DevOpsArtifactLint{lint.Dockerfiles, lint.Compose, lint.Helm} {
 		if a == nil {
@@ -1658,6 +1865,26 @@ func devopsHealthScore(lint *scanner.DevOpsLint) (int, bool) {
 			case "warn":
 				pts += w / 2
 			}
+		}
+	}
+	if k8s != nil {
+		for _, wl := range k8s.Workloads {
+			for _, c := range wl.Checks {
+				if c.Status == "na" {
+					continue
+				}
+				w := devopsSeverityWeight(devopsSeverityOf(c.Metric))
+				total += w
+				switch c.Status {
+				case "pass":
+					pts += w
+				case "warn":
+					pts += w / 2
+				}
+			}
+		}
+		for _, f := range k8s.ClusterFindings {
+			total += devopsSeverityWeight(f.Severity)
 		}
 	}
 	if total == 0 {
@@ -1680,10 +1907,12 @@ func gradeColor(score int) string {
 
 // renderDevOpsCharts renders the three compliance charts (radar, defect
 // density, health gauge) shown above the raw static-analysis matrix.
-func renderDevOpsCharts(lint *scanner.DevOpsLint) string {
+// Kubernetes workload checks and cross-cutting Weaknesses feed into the
+// defect-density and health-score charts alongside Dockerfile/Compose/Helm.
+func renderDevOpsCharts(lint *scanner.DevOpsLint, k8s *scanner.K8sLint) string {
 	scores, has := devopsComplianceDomains(lint)
-	kinds, defects := devopsDefectCounts(lint)
-	health, healthOK := devopsHealthScore(lint)
+	kinds, defects := devopsDefectCounts(lint, k8s)
+	health, healthOK := devopsHealthScore(lint, k8s)
 
 	anyDomain := false
 	for _, h := range has {
@@ -1844,8 +2073,12 @@ func renderComplianceDomainList(scores [6]int, has [6]bool) string {
 	return b.String()
 }
 
-// devopsKindIcon maps a DevOpsArtifactLint.Kind to its column icon.
+// devopsKindIcon maps a DevOpsArtifactLint.Kind (or the synthetic
+// k8sDefectKind) to its column icon.
 func devopsKindIcon(lint *scanner.DevOpsLint, kind string) string {
+	if kind == k8sDefectKind {
+		return "☸️"
+	}
 	for _, a := range []*scanner.DevOpsArtifactLint{lint.Dockerfiles, lint.Compose, lint.Helm} {
 		if a != nil && a.Kind == kind {
 			return a.Icon
@@ -1855,19 +2088,13 @@ func devopsKindIcon(lint *scanner.DevOpsLint, kind string) string {
 }
 
 // renderDefectDensityBars renders one stacked horizontal bar per artifact
-// kind: segment width is proportional to that severity's share of the
-// largest kind's total, so both composition (which severities dominate) and
-// relative volume (which artifact type carries the most debt) read at a
-// glance.
+// kind: each bar always fills its full track, segmented by that kind's own
+// severity mix (composition), since artifact kinds can differ by orders of
+// magnitude in raw count (e.g. hundreds of per-workload Kubernetes checks vs.
+// a handful of Dockerfile checks) — sizing segments relative to a shared max
+// would flatten every smaller kind's bar into an unreadable sliver. The
+// absolute count (relative volume) is still shown as a number after the bar.
 func renderDefectDensityBars(lint *scanner.DevOpsLint, order []string, counts map[string][4]int) string {
-	maxTotal := 1
-	for _, k := range order {
-		c := counts[k]
-		total := c[0] + c[1] + c[2] + c[3]
-		if total > maxTotal {
-			maxTotal = total
-		}
-	}
 	sevClass := [4]string{"fill-crit", "fill-bad", "fill-warn", "as-dvo-sev-low"}
 	sevLabel := [4]string{"Critical", "High", "Medium", "Low"}
 
@@ -1883,7 +2110,7 @@ func renderDefectDensityBars(lint *scanner.DevOpsLint, order []string, counts ma
 			if n == 0 {
 				continue
 			}
-			pct := float64(n) / float64(maxTotal) * 100
+			pct := float64(n) / float64(total) * 100
 			fmt.Fprintf(&b, `<div class="as-dvo-defect-seg %s" style="width:%.1f%%" title="%s: %d"></div>`,
 				sevClass[i], pct, sevLabel[i], n)
 		}
@@ -2237,9 +2464,9 @@ func renderTechRadarQuadrantSVG(catChips map[string][]radarChip, dispCats []rada
 	// large the SVG is scaled up to; width tapers from the innermost ring
 	// (thicker) to the outermost (thinner), echoing aoe_technology_radar's
 	// own ring weight.
-	ringStroke := [4]float64{1.6, 1.3, 1, 0.75}
+	ringStroke := [4]float64{2, 2, 2, 2}
 	for i, r := range ringR {
-		fmt.Fprintf(&b, `<circle cx="%g" cy="%g" r="%.1f" fill="none" stroke="var(--border-strong)" stroke-opacity="0.6" stroke-width="%g" vector-effect="non-scaling-stroke"/>`, cx, cy, r, ringStroke[i])
+		fmt.Fprintf(&b, `<circle cx="%g" cy="%g" r="%.1f" fill="none" stroke="var(--border-strong)" stroke-opacity="0.7" stroke-width="%g" vector-effect="non-scaling-stroke"/>`, cx, cy, r, ringStroke[i])
 	}
 	// Cross divider spanning the outer ring's diameter.
 	fmt.Fprintf(&b, `<line x1="%g" y1="%g" x2="%g" y2="%g" stroke="var(--border-strong)" stroke-width="1" vector-effect="non-scaling-stroke"/>`, cx-outerR, cy, cx+outerR, cy)
@@ -2590,9 +2817,10 @@ func renderSecurityIndex(res *result.AnalysisResult) string {
 		}
 	}
 	// ── Security rules / CWE reference ──
-	b.WriteString(renderSecurityRules(res.Security))
+	b.WriteString(renderSecurityRules(res.Security, res.K8sLint))
 
-	if len(platFindings) > 0 {
+	hasK8sCF := res.Scan.K8sLint != nil && len(res.Scan.K8sLint.ClusterFindings) > 0
+	if len(platFindings) > 0 || hasK8sCF {
 		// Mirror the exact sort used in renderTabs so order matches the tab bar.
 		platLOC := map[langspec.Platform]int{}
 		for _, f := range res.Files {
@@ -2643,6 +2871,25 @@ func renderSecurityIndex(res *result.AnalysisResult) string {
 					`</div>`,
 				i, esc(pg.TabLabel()), total, hiHTML)
 		}
+		if hasK8sCF {
+			cf := res.Scan.K8sLint.ClusterFindings
+			critHigh := 0
+			for _, f := range cf {
+				if f.Severity == "critical" || f.Severity == "high" {
+					critHigh++
+				}
+			}
+			hiHTML := ""
+			if critHigh > 0 {
+				hiHTML = fmt.Sprintf(` <span class="as-sev sev-high" style="font-size:10px">%d HIGH</span>`, critHigh)
+			}
+			fmt.Fprintf(&b,
+				`<a class="as-sec-plat-card as-sec-plat-card--link" href="#as-k8s-cf">`+
+					`<div class="as-sec-plat-name">☁️ DevOps</div>`+
+					`<div class="as-sec-plat-count">%d%s</div>`+
+					`</a>`,
+				len(cf), hiHTML)
+		}
 		b.WriteString(`</div>`)
 	}
 
@@ -2683,10 +2930,14 @@ func renderSecurityIndex(res *result.AnalysisResult) string {
 // renderSecurityRules derives the CWE reference grid directly from the live
 // rule set. Each rule's Rule.CWE field provides the primary CWE ID; the grid
 // aggregates counts automatically so it stays in sync when rules are added.
-func renderSecurityRules(results []security.RuleResult) string {
+func renderSecurityRules(results []security.RuleResult, k8sLint *scanner.K8sLint) string {
 	// Display names for known CWE IDs. Unknown IDs fall back to "CWE-NNN".
 	cweNames := map[string]string{
 		"16":   "Security Configuration Errors",
+		"269":  "Improper Privilege Management",
+		"284":  "Improper Access Control",
+		"306":  "Missing Authentication for Critical Function",
+		"312":  "Cleartext Storage of Sensitive Information",
 		"22":   "Path Traversal",
 		"78":   "OS Command Injection",
 		"79":   "Cross-Site Scripting",
@@ -2747,6 +2998,7 @@ func renderSecurityRules(results []security.RuleResult) string {
 		{"python", "as-plat-python", "Python"},
 		{"ts", "as-plat-ts_js", "JS/TS"},
 		{"kotlin", "as-plat-kotlin", "Kotlin"},
+		{"k8s", "as-plat-k8s", "K8s"},
 	}
 
 	// Aggregate per CWE: check count + which language IDs cover it.
@@ -2780,6 +3032,32 @@ func renderSecurityRules(results []security.RuleResult) string {
 		}
 	}
 
+	// Fold in K8s cross-cutting findings (NetworkPolicy gaps, RBAC over-grants,
+	// secrets in manifests, ...) so their CWEs surface here too, not only in
+	// the Weaknesses cards below. Grouped by RuleID so e.g. the
+	// same NetworkPolicy-gap check firing across 7 namespaces counts once.
+	extraChecks := 0
+	if k8sLint != nil {
+		seenRule := map[string]bool{}
+		for _, f := range k8sLint.ClusterFindings {
+			if f.CWE == "" {
+				continue
+			}
+			ci := info[f.CWE]
+			if ci == nil {
+				ci = &cweInfo{langs: map[string]bool{}}
+				info[f.CWE] = ci
+			}
+			ci.langs["k8s"] = true
+			failedCWEs[f.CWE] = true
+			if !seenRule[f.RuleID] {
+				seenRule[f.RuleID] = true
+				ci.n++
+				extraChecks++
+			}
+		}
+	}
+
 	type entry struct {
 		id string
 		ci *cweInfo
@@ -2799,7 +3077,7 @@ func renderSecurityRules(results []security.RuleResult) string {
 		`<div class="as-sub" style="margin-top:18px;margin-bottom:8px">`+
 			`Security Rules <span style="color:var(--text-faint);font-weight:400;text-transform:none;letter-spacing:0">(%d total checks)</span>`+
 			`</div>`,
-		len(results))
+		len(results)+extraChecks)
 	if len(list) == 0 {
 		return b.String()
 	}

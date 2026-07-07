@@ -92,14 +92,15 @@ func Render(res *result.AnalysisResult) string {
 	// Technical Radar: mermaid radar-beta of the detected stack
 	b.WriteString(renderTechRadarSection(res))
 
-	// DevOps: detected tools + Dockerfile/Helm/Compose static-analysis matrix
-	b.WriteString(renderDevOpsSection(res))
-
 	// Global architecture graph (modules + tech nodes)
 	b.WriteString(renderGlobalArchGraph(res))
 
-	// Global security index (gauge + categories)
+	// Global security index (gauge + categories) — before DevOps so the
+	// Danger Index can link into the Weaknesses card below it.
 	b.WriteString(renderSecurityIndex(res))
+
+	// DevOps: detected tools + Dockerfile/Helm/Compose static-analysis matrix
+	b.WriteString(renderDevOpsSection(res))
 
 	// VS Code path editor (global, shown once before the platform tabs)
 	b.WriteString(renderVSCodePathCard(res.RootPath))

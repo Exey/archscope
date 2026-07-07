@@ -7,7 +7,7 @@
 package report
 
 // Version is the tool version surfaced in the report header and SARIF driver.
-const Version = "26.7.3"
+const Version = "26.7.7"
 
 // CSS is the full stylesheet, including dark (default) and light themes and the
 // class vocabulary emitted by report modules (.as-arch__*, .as-dp__*, etc.).
@@ -360,6 +360,8 @@ a.as-chip:hover{opacity:.8}
 .as-sec-plat-row{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px}
 .as-sec-plat-card{background:var(--bg-inset); border:1px solid var(--border); border-radius:var(--radius-sm);
   padding:8px 12px; min-width:100px}
+.as-sec-plat-card--link{display:block;text-decoration:none;color:inherit}
+.as-sec-plat-card--link:hover{border-color:var(--accent)}
 .as-sec-plat-name{font-size:11px; color:var(--text-faint); font-weight:600; text-transform:uppercase; letter-spacing:.04em}
 .as-sec-plat-count{font-size:20px; font-weight:700; font-family:var(--mono); margin-top:2px; display:flex; align-items:center; gap:6px}
 
@@ -431,6 +433,7 @@ a.as-chip:hover{opacity:.8}
 .as-plat-kotlin{background:rgba(127,82,255,.18); color:#7f52ff}
 .as-plat-python{background:rgba(55,118,171,.18); color:#3776ab}
 .as-plat-ts_js{background:rgba(49,120,198,.18); color:#3178c6}
+.as-plat-k8s{background:rgba(50,108,229,.18); color:#326ce5}
 
 /* Prompt card */
 .as-prompt{margin-top:18px}
@@ -643,6 +646,31 @@ a.as-dvo-m--link:hover{color:var(--accent);border-bottom-color:var(--accent)}
 .as-k8s-detail-meta{margin-top:5px;padding-top:5px;border-top:1px dashed var(--border);font-size:10.5px;font-weight:500;color:var(--text);white-space:normal;word-break:break-word;line-height:1.5}
 .as-k8s-detail-meta-label{color:#c3a6ff}
 [data-theme="light"] .as-k8s-detail-meta-label{color:#6a3fc9}
+/* cross-cutting findings — two-column grid, deduplicated */
+.as-k8s-cf-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:8px}
+@media (max-width:860px){.as-k8s-cf-grid{grid-template-columns:1fr}}
+.as-k8s-cf{background:var(--bg-inset);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.as-k8s-cf__head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.as-k8s-cf__sev{flex-shrink:0;font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;letter-spacing:.04em}
+.as-k8s-cf--critical .as-k8s-cf__sev{background:#ff000033;color:#ff6b6b}
+.as-k8s-cf--high     .as-k8s-cf__sev{background:#ff7b0022;color:#ff9f5a}
+.as-k8s-cf--medium   .as-k8s-cf__sev{background:#ffd60022;color:#ffd600}
+.as-k8s-cf--low      .as-k8s-cf__sev{background:#3fb95022;color:#3fb950}
+[data-theme="light"] .as-k8s-cf--critical .as-k8s-cf__sev{background:#ffeeee;color:#cc0000}
+[data-theme="light"] .as-k8s-cf--high     .as-k8s-cf__sev{background:#fff0e6;color:#b05000}
+[data-theme="light"] .as-k8s-cf--medium   .as-k8s-cf__sev{background:#fffbe6;color:#856f00}
+[data-theme="light"] .as-k8s-cf--low      .as-k8s-cf__sev{background:#eef8f0;color:#1a6b30}
+.as-k8s-cf__title{font-size:12.5px;font-weight:600;color:var(--text);flex:1;min-width:0}
+.as-k8s-cf__badges{display:flex;align-items:center;gap:5px;flex-shrink:0}
+.as-k8s-cf__detail{font-size:11.5px;color:var(--text-dim);line-height:1.5;word-break:break-word}
+.as-k8s-cf__cases{display:flex;flex-direction:column;gap:2px;border-top:1px dashed var(--border);padding-top:5px;margin-top:2px}
+.as-k8s-cf__case{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.as-k8s-cf__case+.as-k8s-cf__case{border-top:1px solid var(--border);padding-top:3px}
+a.as-k8s-cf__case:hover{color:var(--accent);text-decoration:underline}
+.as-k8s-cf__line{color:var(--text-faint);opacity:.6;font-size:9.5px;margin-left:3px}
+.as-k8s-tier{font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;background:var(--accent-dim);color:var(--accent)}
+.as-k8s-cwe{font-family:var(--mono);font-size:9.5px;color:var(--text-faint);text-decoration:none}
+a.as-k8s-cwe:hover{color:var(--accent);text-decoration:underline}
 
 /* 📡 Technical Radar (static SVG quadrant radar + tech chips) */
 .as-radar{position:relative;margin-bottom:18px}

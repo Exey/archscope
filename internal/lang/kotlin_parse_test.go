@@ -2,11 +2,11 @@ package lang_test
 
 import (
 	"fmt"
-	"os"
-	"testing"
 	_ "github.com/exey/archscope/internal/lang"
 	"github.com/exey/archscope/internal/langspec"
 	"github.com/exey/archscope/internal/parser"
+	"os"
+	"testing"
 )
 
 func TestKotlinDeclParsing(t *testing.T) {

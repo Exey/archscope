@@ -22,13 +22,13 @@ var (
 	reKtCookieHTTPOnly = regexp.MustCompile(`isHttpOnly\s*=\s*true|\.isHttpOnly\s*\(true\)|httpOnly\s*=\s*true`)
 	// SQL injection helpers
 	reKtSQLSink   = regexp.MustCompile(`\b(rawQuery|execSQL|compileStatement)\s*\(`)
-	reKtSQLConcat  = regexp.MustCompile(`\+\s*["'\w]|["'\w]\s*\+|\$\{|\bString\.format\s*\(|\bStringBuilder\b|\.append\s*\(`)
+	reKtSQLConcat = regexp.MustCompile(`\+\s*["'\w]|["'\w]\s*\+|\$\{|\bString\.format\s*\(|\bStringBuilder\b|\.append\s*\(`)
 	// new coverage
 	reKtFileSink       = regexp.MustCompile(`\bFile\s*\(|\bPaths\.get\s*\(|\bFileInputStream\s*\(`)
 	reKtWebInput       = regexp.MustCompile(`\.getParameter\s*\(|request\.getQueryString\b|request\.getHeader\s*\(`)
 	reKtTrustAll       = regexp.MustCompile(`\bX509TrustManager\b|checkServerTrusted\s*\(`)
 	reKtWeakRandSink   = regexp.MustCompile(`\b(?:new\s+)?(?:java\.util\.)?Random\s*\(\s*\)`)
-	reKtObjInputStream  = regexp.MustCompile(`\bObjectInputStream\s*\(|\.readObject\s*\(\s*\)`)
+	reKtObjInputStream = regexp.MustCompile(`\bObjectInputStream\s*\(|\.readObject\s*\(\s*\)`)
 	reKtLogSink        = regexp.MustCompile(`\b(Log\.(d|e|i|v|w|wtf)|println|System\.out\.print(?:ln)?)\s*\(`)
 	reKtDocBuilderFac  = regexp.MustCompile(`DocumentBuilderFactory\.newInstance\s*\(`)
 	reKtXXESafe        = regexp.MustCompile(`setFeature|FEATURE_SECURE_PROCESSING|setExpandEntityReferences`)
@@ -36,26 +36,26 @@ var (
 	reKtCookieSecure   = regexp.MustCompile(`\.setSecure\s*\(\s*true\s*\)|isSecure\s*=\s*true|secure\s*=\s*true`)
 	reKtHTTPSink       = regexp.MustCompile(`\bURL\s*\(|\bOkHttpClient\b|\bHttpURLConnection\b|\.newCall\s*\(`)
 	// CWE-352: SameSite guard for Spring ResponseCookie and generic cookie APIs
-	reKtSameSite       = regexp.MustCompile(`(?i)\.sameSite\s*\(|sameSite\s*=|SameSite\s*:`)
+	reKtSameSite = regexp.MustCompile(`(?i)\.sameSite\s*\(|sameSite\s*=|SameSite\s*:`)
 	// CWE-434: Spring MultipartFile upload sink and type-validation guard
-	reKtMultipartFile  = regexp.MustCompile(`\bMultipartFile\b|\.getOriginalFilename\s*\(|\.transferTo\s*\(`)
-	reKtFileTypeCheck  = regexp.MustCompile(`(?i)(contentType|mimeType|allowedType|validateFile|allowedExt|getOriginalFilename|fileExtension)`)
+	reKtMultipartFile = regexp.MustCompile(`\bMultipartFile\b|\.getOriginalFilename\s*\(|\.transferTo\s*\(`)
+	reKtFileTypeCheck = regexp.MustCompile(`(?i)(contentType|mimeType|allowedType|validateFile|allowedExt|getOriginalFilename|fileExtension)`)
 	// CWE-601: open redirect sink
-	reKtSendRedirect   = regexp.MustCompile(`\.sendRedirect\s*\(`)
+	reKtSendRedirect = regexp.MustCompile(`\.sendRedirect\s*\(`)
 	// CWE-916: fast hash in password context (MessageDigest with SHA-256+)
-	reKtFastHashSink   = regexp.MustCompile(`MessageDigest\.getInstance\s*\(\s*["'](SHA-256|SHA-512|SHA-384|SHA3)["']`)
+	reKtFastHashSink = regexp.MustCompile(`MessageDigest\.getInstance\s*\(\s*["'](SHA-256|SHA-512|SHA-384|SHA3)["']`)
 	// CWE-347: jjwt parser without signing-key verification
-	reKtJWTParser      = regexp.MustCompile(`\bJwts\.(parser|parserBuilder)\s*\(`)
-	reKtJWTSigningKey  = regexp.MustCompile(`\.setSigningKey\s*\(|\.verifyWith\s*\(`)
+	reKtJWTParser     = regexp.MustCompile(`\bJwts\.(parser|parserBuilder)\s*\(`)
+	reKtJWTSigningKey = regexp.MustCompile(`\.setSigningKey\s*\(|\.verifyWith\s*\(`)
 	// CWE-749: addJavascriptInterface exposes Java objects to WebView JS
 	reKtAddJSInterface = regexp.MustCompile(`\.addJavascriptInterface\s*\(`)
 	// CWE-16: JavaScript enabled in WebView
-	reKtJSEnabled      = regexp.MustCompile(`\.setJavaScriptEnabled\s*\(\s*true\s*\)`)
+	reKtJSEnabled = regexp.MustCompile(`\.setJavaScriptEnabled\s*\(\s*true\s*\)`)
 	// CWE-732: Android world-readable/writable file modes (deprecated constants)
-	reKtWorldMode      = regexp.MustCompile(`MODE_WORLD_READABLE|MODE_WORLD_WRITEABLE`)
+	reKtWorldMode = regexp.MustCompile(`MODE_WORLD_READABLE|MODE_WORLD_WRITEABLE`)
 	// CWE-22 variant: zip-slip via ZipInputStream without path validation
-	reKtZipSink        = regexp.MustCompile(`\bZipInputStream\s*\(|\bZipEntry\b|\.getNextEntry\s*\(`)
-	reKtZipGuard       = regexp.MustCompile(`(?i)(canonicalPath|getCanonicalPath|startsWith|validatePath|allowedPath|normalize)`)
+	reKtZipSink  = regexp.MustCompile(`\bZipInputStream\s*\(|\bZipEntry\b|\.getNextEntry\s*\(`)
+	reKtZipGuard = regexp.MustCompile(`(?i)(canonicalPath|getCanonicalPath|startsWith|validatePath|allowedPath|normalize)`)
 	// Android manifest helpers
 	reManifestComponent = regexp.MustCompile(`<(activity|service|receiver|provider)\b`)
 	reManifestExported  = regexp.MustCompile(`android:exported\s*=\s*"true"`)

@@ -1,16 +1,17 @@
 package lang_test
 
 import (
-	"strings"
-	"testing"
 	_ "github.com/exey/archscope/internal/lang"
 	"github.com/exey/archscope/internal/security"
+	"strings"
+	"testing"
 )
 
 func findRule(id string) *security.Rule {
 	for _, r := range security.Default.Rules() {
 		if r.ID == id {
-			rc := r; return &rc
+			rc := r
+			return &rc
 		}
 	}
 	return nil
@@ -19,17 +20,27 @@ func findRule(id string) *security.Rule {
 func fireCheck(t *testing.T, id, src string) {
 	t.Helper()
 	r := findRule(id)
-	if r == nil { t.Errorf("%s: rule not registered", id); return }
+	if r == nil {
+		t.Errorf("%s: rule not registered", id)
+		return
+	}
 	findings := r.Detect("test.swift", strings.Split(src, "\n"))
-	if len(findings) == 0 { t.Errorf("%s: expected finding, got none", id) }
+	if len(findings) == 0 {
+		t.Errorf("%s: expected finding, got none", id)
+	}
 }
 
 func noFireCheck(t *testing.T, id, src string) {
 	t.Helper()
 	r := findRule(id)
-	if r == nil { t.Errorf("%s: rule not registered", id); return }
+	if r == nil {
+		t.Errorf("%s: rule not registered", id)
+		return
+	}
 	findings := r.Detect("test.swift", strings.Split(src, "\n"))
-	if len(findings) > 0 { t.Errorf("%s: unexpected finding on clean code", id) }
+	if len(findings) > 0 {
+		t.Errorf("%s: unexpected finding on clean code", id)
+	}
 }
 
 func TestNewSwiftRulesFire(t *testing.T) {

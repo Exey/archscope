@@ -33,5 +33,7 @@ go.work.sum
 output
 output2
 goscope
+archscope
 .claude
 .DS_Store
+testdata

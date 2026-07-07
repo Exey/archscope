@@ -73,8 +73,8 @@ var privateKeyHeader = regexp.MustCompile(
 )
 
 func init() {
-	security.Default.RegisterRule(HardcodedSecrets())    // CWE-798 set inside
-	security.Default.RegisterRule(PrivateKeyInSource())  // CWE-321 set inside
+	security.Default.RegisterRule(HardcodedSecrets())       // CWE-798 set inside
+	security.Default.RegisterRule(PrivateKeyInSource())     // CWE-321 set inside
 	security.Default.RegisterRule(SQLStringInterpolation()) // CWE-89 set inside
 }
 

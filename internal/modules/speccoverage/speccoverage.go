@@ -386,5 +386,4 @@ func coverageVerdict(pct, extraCount int) string {
 	}
 }
 
-
 func esc(s string) string { return html.EscapeString(s) }

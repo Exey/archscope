@@ -8,21 +8,22 @@
 //
 //	--open          open the report in the default browser when done
 //	--output, -o    output directory (default: from config, usually "output")
-//	--format        "html" | "sarif" | "both" (default: html)
+//	--format        "html" | "sarif" | "md" (comma-separated for multiple; default: html)
 //	--config        path to .archscope.json (default: .archscope.json in cwd)
 //	--ref           git ref to check out when cloning a remote URL
 //	--depth         clone depth; 0 = full history (default: 0)
+//	--fail-on       exit 2 when findings exist at or above threshold: low|medium|high
 //	--skip-modules  omit the Modules & Microservices section (and its graphs)
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -36,19 +37,81 @@ import (
 	_ "github.com/exey/archscope/internal/modules/oopvspop"
 	_ "github.com/exey/archscope/internal/modules/speccoverage"
 	_ "github.com/exey/archscope/internal/modules/traffic"
-	htmlreport "github.com/exey/archscope/internal/report/html"
-	mdreport "github.com/exey/archscope/internal/report/markdown"
-	"github.com/exey/archscope/internal/report/sarif"
+	"github.com/exey/archscope/internal/report"
+	_ "github.com/exey/archscope/internal/report/html"     // register html emitter
+	_ "github.com/exey/archscope/internal/report/markdown" // register md emitter
+	_ "github.com/exey/archscope/internal/report/sarif"    // register sarif emitter
 	"github.com/exey/archscope/internal/result"
 )
 
+// exitCodeError is returned by run when a specific exit code is required.
+// Exit code 2 signals --fail-on threshold exceeded; 1 is reserved for
+// operational errors (returned as plain errors from run).
+type exitCodeError struct {
+	code int
+	msg  string
+}
+
+func (e *exitCodeError) Error() string { return e.msg }
+
 func main() {
-	// Manual arg parsing so flags work in any position:
-	//   archscope ~/code --open
-	//   archscope --open ~/code
-	//   archscope ~/code --format both --output ./out
+	// Pre-pass: walk os.Args to separate the one positional argument (target
+	// path or URL) from the flag arguments. This lets flags appear in any
+	// position relative to the target:
+	//   archscope ~/repo --open
+	//   archscope --open ~/repo
+	//
+	// valFlags lists flags whose next argument is their value (no '=' inline).
+	valFlags := map[string]bool{
+		"output": true, "o": true,
+		"format":  true,
+		"config":  true,
+		"ref":     true,
+		"depth":   true,
+		"fail-on": true,
+	}
+	rawArgs := os.Args[1:]
+	var target string
+	var flagArgs []string
+	for i := 0; i < len(rawArgs); i++ {
+		a := rawArgs[i]
+		if a == "--" {
+			for _, rest := range rawArgs[i+1:] {
+				if target == "" {
+					target = rest
+				} else {
+					fmt.Fprintf(os.Stderr, "archscope: unexpected argument %q\n", rest)
+					os.Exit(1)
+				}
+			}
+			break
+		}
+		if !strings.HasPrefix(a, "-") {
+			if target == "" {
+				target = a
+			} else {
+				fmt.Fprintf(os.Stderr, "archscope: unexpected argument %q (target already set to %q)\n", a, target)
+				os.Exit(1)
+			}
+			continue
+		}
+		flagArgs = append(flagArgs, a)
+		// For flags that take a separate value arg (not inline with '='),
+		// consume the next raw argument so it doesn't get mis-classified.
+		name := strings.TrimLeft(a, "-")
+		if idx := strings.IndexByte(name, '='); idx < 0 && valFlags[name] {
+			if i+1 < len(rawArgs) {
+				i++
+				flagArgs = append(flagArgs, rawArgs[i])
+			}
+		}
+	}
+
+	fs := flag.NewFlagSet("archscope", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.Usage = printUsage
+
 	var (
-		target      string
 		openFlag    bool
 		outputDir   string
 		format      string
@@ -57,65 +120,25 @@ func main() {
 		depth       int
 		folderAsTab bool
 		skipModules bool
+		failOn      string
 	)
 
-	args := os.Args[1:]
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "--open" || a == "-open":
-			openFlag = true
-		case a == "--output" || a == "-output" || a == "-o":
-			if i+1 < len(args) {
-				i++
-				outputDir = args[i]
-			}
-		case strings.HasPrefix(a, "--output=") || strings.HasPrefix(a, "-o="):
-			outputDir = a[strings.Index(a, "=")+1:]
-		case a == "--format" || a == "-format":
-			if i+1 < len(args) {
-				i++
-				format = args[i]
-			}
-		case strings.HasPrefix(a, "--format=") || strings.HasPrefix(a, "-format="):
-			format = a[strings.Index(a, "=")+1:]
-		case a == "--config" || a == "-config":
-			if i+1 < len(args) {
-				i++
-				cfgPath = args[i]
-			}
-		case strings.HasPrefix(a, "--config=") || strings.HasPrefix(a, "-config="):
-			cfgPath = a[strings.Index(a, "=")+1:]
-		case a == "--ref" || a == "-ref":
-			if i+1 < len(args) {
-				i++
-				ref = args[i]
-			}
-		case strings.HasPrefix(a, "--ref=") || strings.HasPrefix(a, "-ref="):
-			ref = a[strings.Index(a, "=")+1:]
-		case a == "--depth" || a == "-depth":
-			if i+1 < len(args) {
-				i++
-				depth, _ = strconv.Atoi(args[i])
-			}
-		case strings.HasPrefix(a, "--depth=") || strings.HasPrefix(a, "-depth="):
-			depth, _ = strconv.Atoi(a[strings.Index(a, "=")+1:])
-		case a == "--folder-as-tab" || a == "-folder-as-tab":
-			folderAsTab = true
-		case a == "--skip-modules" || a == "-skip-modules":
-			skipModules = true
-		case a == "--help" || a == "-h":
+	fs.BoolVar(&openFlag, "open", false, "open the HTML report in the browser when done")
+	fs.StringVar(&outputDir, "output", "", "output directory (overrides config)")
+	fs.StringVar(&outputDir, "o", "", "output directory (shorthand for --output)")
+	fs.StringVar(&format, "format", "", "output format: html | sarif | md (comma-separated for multiple; overrides config)")
+	fs.StringVar(&cfgPath, "config", "", "path to .archscope.json (default: .archscope.json in cwd)")
+	fs.StringVar(&ref, "ref", "", "git ref for remote URLs (branch/tag/sha)")
+	fs.IntVar(&depth, "depth", 0, "clone depth for remote URLs; 0 = full history")
+	fs.BoolVar(&folderAsTab, "folder-as-tab", false, "show each top-level folder as its own platform tab")
+	fs.BoolVar(&skipModules, "skip-modules", false, "omit the Modules & Microservices section and its CDN-loaded graphs")
+	fs.StringVar(&failOn, "fail-on", "", "exit 2 when findings exist at or above threshold: low | medium | high")
+
+	if err := fs.Parse(flagArgs); err != nil {
+		if err != flag.ErrHelp {
 			printUsage()
-			os.Exit(0)
-		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(os.Stderr, "archscope: unknown flag %q\n", a)
-			printUsage()
-			os.Exit(1)
-		default:
-			if target == "" {
-				target = a
-			}
 		}
+		os.Exit(1)
 	}
 
 	if target == "" {
@@ -123,12 +146,41 @@ func main() {
 		os.Exit(1)
 	}
 
+	switch strings.ToLower(failOn) {
+	case "", "low", "medium", "high":
+	default:
+		fmt.Fprintf(os.Stderr, "archscope: unknown --fail-on %q (want low | medium | high)\n", failOn)
+		os.Exit(1)
+	}
+
+	if err := run(target, ref, depth, cfgPath, outputDir, format, failOn, openFlag, folderAsTab, skipModules); err != nil {
+		if ec, ok := err.(*exitCodeError); ok {
+			if ec.msg != "" {
+				fmt.Fprintln(os.Stderr, ec.msg)
+			}
+			os.Exit(ec.code)
+		}
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// run executes the full analysis. Deferred cleanup (clone temp dir removal)
+// fires on every return path because os.Exit in main would bypass it.
+func run(target, ref string, depth int, cfgPath, outputDir, format, failOn string, openFlag, folderAsTab, skipModules bool) error {
 	cfg := config.Load(cfgPath)
 	if outputDir == "" {
 		outputDir = cfg.Output.Dir
 	}
 	if format == "" {
 		format = cfg.Output.Format
+	}
+	// Wire Fetch config defaults when CLI flags were not provided.
+	if ref == "" {
+		ref = cfg.Fetch.Ref
+	}
+	if depth == 0 && cfg.Fetch.Depth > 0 {
+		depth = cfg.Fetch.Depth
 	}
 	if folderAsTab {
 		cfg.FolderAsTab = true
@@ -140,7 +192,7 @@ func main() {
 	src := fetch.FromArg(target, ref, depth)
 	resolved, err := fetch.Resolve(src)
 	if err != nil {
-		fatalf("archscope: %v\n", err)
+		return fmt.Errorf("archscope: %w", err)
 	}
 	defer resolved.Cleanup() //nolint:errcheck
 
@@ -149,7 +201,7 @@ func main() {
 		fmt.Printf(" → [%5.1fs] %s\n", time.Since(pipelineStart).Seconds(), msg)
 	})
 	if err != nil {
-		fatalf("archscope: analysis failed: %v\n", err)
+		return fmt.Errorf("archscope: analysis failed: %w", err)
 	}
 	if resolved.WasClone {
 		res.IsRemote = true
@@ -159,7 +211,7 @@ func main() {
 	printCapabilityTable(res)
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		fatalf("archscope: cannot create output dir: %v\n", err)
+		return fmt.Errorf("archscope: cannot create output dir: %w", err)
 	}
 
 	name := strings.ReplaceAll(res.ProjectName, string(filepath.Separator), "_")
@@ -167,46 +219,68 @@ func main() {
 		name = "report"
 	}
 
-	var reportPath string
-	switch strings.ToLower(format) {
-	case "sarif":
-		outPath := filepath.Join(outputDir, name+".sarif")
-		if err := sarif.Write(res, outPath); err != nil {
-			fatalf("archscope: sarif write failed: %v\n", err)
-		}
-		fmt.Println("SARIF →", outPath)
-	case "md", "markdown":
-		mdPath := filepath.Join(outputDir, name+".md")
-		if err := mdreport.Write(res, mdPath); err != nil {
-			fatalf("archscope: markdown write failed: %v\n", err)
-		}
-		fmt.Println("MD    →", mdPath)
-		reportPath = mdPath
+	// Normalize format: "both" is a legacy alias for "html,sarif"; empty defaults to "html".
+	fmtStr := strings.ToLower(strings.TrimSpace(format))
+	switch fmtStr {
 	case "both":
-		htmlPath := filepath.Join(outputDir, name+".html")
-		if err := htmlreport.Write(res, htmlPath); err != nil {
-			fatalf("archscope: html write failed: %v\n", err)
+		fmtStr = "html,sarif"
+	case "markdown":
+		fmtStr = "md"
+	case "":
+		fmtStr = "html"
+	}
+
+	var reportPath string
+	for _, id := range strings.Split(fmtStr, ",") {
+		id = strings.TrimSpace(id)
+		em, ok := report.Lookup(id)
+		if !ok {
+			return fmt.Errorf("archscope: unknown format %q (want html, sarif, md)", id)
 		}
-		fmt.Println("HTML  →", htmlPath)
-		sarifPath := filepath.Join(outputDir, name+".sarif")
-		if err := sarif.Write(res, sarifPath); err != nil {
-			fatalf("archscope: sarif write failed: %v\n", err)
+		outPath := filepath.Join(outputDir, name+em.Ext())
+		if err := em.Write(res, outPath); err != nil {
+			return fmt.Errorf("archscope: %s write failed: %w", strings.ToUpper(id), err)
 		}
-		fmt.Println("SARIF →", sarifPath)
-		reportPath = htmlPath
-	default: // "html"
-		htmlPath := filepath.Join(outputDir, name+".html")
-		if err := htmlreport.Write(res, htmlPath); err != nil {
-			fatalf("archscope: html write failed: %v\n", err)
+		fmt.Printf("%-6s→ %s\n", strings.ToUpper(id), outPath)
+		if em.Ext() == ".html" && reportPath == "" {
+			reportPath = outPath
 		}
-		fmt.Println("HTML  →", htmlPath)
-		reportPath = htmlPath
 	}
 
 	if openFlag && reportPath != "" {
 		abs, _ := filepath.Abs(reportPath)
 		openInBrowser(abs)
 	}
+
+	// F11: exit 2 when --fail-on threshold is met.
+	if failOn != "" {
+		threshold := failOnRank(strings.ToLower(failOn))
+		for _, rr := range res.Security {
+			if rr.Passed() {
+				continue
+			}
+			if failOnRank(strings.ToLower(string(rr.Rule.Severity))) >= threshold {
+				return &exitCodeError{
+					code: 2,
+					msg:  fmt.Sprintf("archscope: findings at or above %q threshold — exit 2", failOn),
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// failOnRank maps a lower-case severity name to a comparable integer.
+func failOnRank(s string) int {
+	switch s {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	}
+	return 0
 }
 
 func printUsage() {
@@ -214,15 +288,14 @@ func printUsage() {
 
 Flags:
   --open              open the HTML report in the browser when done
-  --format <fmt>      html | sarif | md | both  (default: from config)
+  --format <fmt>      html | sarif | md (comma-separated for multiple; default: from config)
   --output, -o <dir>  output directory    (default: from config, usually "output")
   --config <file>     path to .archscope.json
   --ref <ref>         git ref for remote URLs (branch/tag/sha)
   --depth <n>         clone depth for remote URLs (0 = full history)
-  --folder-as-tab     show each top-level folder as its own tab (e.g. "pharmen Py", "gptzakaz Go")
-  --skip-modules      omit the Modules & Microservices section (file inventory, declarations, and
-                      its CDN-loaded graph) per platform, plus the global Architecture Graph;
-                      all platforms are unfolded by default when this is set
+  --fail-on <lvl>     exit 2 when findings exist at or above: low | medium | high
+  --folder-as-tab     show each top-level folder as its own tab
+  --skip-modules      omit the Modules & Microservices section (and its CDN-loaded graphs)
 `)
 }
 
@@ -260,11 +333,6 @@ func openInBrowser(path string) {
 	fmt.Println("open: ok")
 }
 
-func fatalf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format, args...)
-	os.Exit(1)
-}
-
 // printCapabilityTable prints a compact per-platform × per-module matrix to
 // stdout showing which analysis cards were produced (✓) or absent (—).
 func printCapabilityTable(res *result.AnalysisResult) {
@@ -273,7 +341,6 @@ func printCapabilityTable(res *result.AnalysisResult) {
 		return
 	}
 
-	// Build column list in canonical order from MetaByID.
 	type col struct{ id, label string }
 	type entry struct {
 		id    string
@@ -289,7 +356,6 @@ func printCapabilityTable(res *result.AnalysisResult) {
 		cols = append(cols, col{e.id, moduleShortLabel(e.id)})
 	}
 
-	// Which module IDs rendered for each platform.
 	platHas := map[string]map[string]bool{}
 	for _, panel := range res.ModulePanels {
 		key := string(panel.Platform)
@@ -299,7 +365,6 @@ func printCapabilityTable(res *result.AnalysisResult) {
 		platHas[key][panel.ModuleID] = true
 	}
 
-	// Column widths.
 	platW := len("Platform")
 	for _, pg := range platforms {
 		if l := len(pg.TabLabel()); l > platW {
@@ -314,23 +379,19 @@ func printCapabilityTable(res *result.AnalysisResult) {
 		}
 	}
 
-	// Header.
 	fmt.Printf("\n Modules per platform:\n")
 	fmt.Printf(" %-*s", platW, "Platform")
 	for i, c := range cols {
 		fmt.Printf("  %-*s", colW[i], c.label)
-		_ = i
 	}
 	fmt.Println()
 
-	// Separator.
 	total := platW + 1
 	for _, w := range colW {
 		total += w + 3
 	}
 	fmt.Println(" " + strings.Repeat("─", total))
 
-	// Rows.
 	for _, pg := range platforms {
 		key := string(pg.Platform)
 		fmt.Printf(" %-*s", platW, pg.TabLabel())
@@ -340,7 +401,6 @@ func printCapabilityTable(res *result.AnalysisResult) {
 				mark = "✓"
 			}
 			fmt.Printf("  %-*s", colW[i], mark)
-			_ = i
 		}
 		fmt.Println()
 	}

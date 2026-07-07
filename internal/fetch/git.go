@@ -26,6 +26,21 @@ type Resolved struct {
 	WasClone bool
 }
 
+// looksLikeSHA reports whether s is plausibly a git commit SHA (7–64 hex chars).
+// git clone --branch rejects SHAs, so we skip --branch for these and rely on
+// the post-clone checkout instead.
+func looksLikeSHA(s string) bool {
+	if len(s) < 7 || len(s) > 64 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
 // IsRemoteURL reports whether arg looks like a git URL rather than a local path.
 func IsRemoteURL(arg string) bool {
 	return strings.HasPrefix(arg, "http://") ||
@@ -58,6 +73,11 @@ func Resolve(src Source) (*Resolved, error) {
 		return nil, fmt.Errorf("fetch: git not found on PATH (required for remote URLs): %w", err)
 	}
 
+	// Reject refs that start with '-': git would interpret them as flags.
+	if src.Ref != "" && strings.HasPrefix(src.Ref, "-") {
+		return nil, fmt.Errorf("fetch: invalid ref %q: must not start with '-'", src.Ref)
+	}
+
 	dir, err := os.MkdirTemp("", "archscope-clone-*")
 	if err != nil {
 		return nil, err
@@ -68,8 +88,8 @@ func Resolve(src Source) (*Resolved, error) {
 	if src.Depth > 0 {
 		args = append(args, "--depth", strconv.Itoa(src.Depth))
 	}
-	if src.Ref != "" {
-		// --branch accepts a branch or tag name (not an arbitrary sha).
+	if src.Ref != "" && !looksLikeSHA(src.Ref) {
+		// --branch works for branch/tag names; skip it for SHA refs (git rejects them).
 		args = append(args, "--branch", src.Ref)
 	}
 	args = append(args, src.RemoteURL, dir)
@@ -81,9 +101,17 @@ func Resolve(src Source) (*Resolved, error) {
 		return nil, fmt.Errorf("fetch: git clone failed: %w", err)
 	}
 
-	// If Ref is a sha (clone --branch can't take one), check it out afterwards.
-	if src.Ref != "" && src.Depth == 0 {
-		_ = exec.Command("git", "-C", dir, "checkout", src.Ref).Run()
+	// Always checkout the requested ref regardless of clone depth.
+	// --branch handles branches/tags on the initial clone; this additionally
+	// handles SHA refs and is a no-op when already on the right commit.
+	// Pass -- so the ref cannot be misinterpreted as a flag.
+	if src.Ref != "" {
+		co := exec.Command("git", "-C", dir, "checkout", "--", src.Ref)
+		co.Stderr = os.Stderr
+		if err := co.Run(); err != nil {
+			_ = cleanup()
+			return nil, fmt.Errorf("fetch: git checkout %q failed: %w", src.Ref, err)
+		}
 	}
 
 	return &Resolved{Path: dir, Cleanup: cleanup, WasClone: true}, nil

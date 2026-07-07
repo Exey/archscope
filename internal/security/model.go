@@ -56,8 +56,9 @@ type Category struct {
 // Finding is one violation located at file:line.
 type Finding struct {
 	RuleID   string `json:"ruleId"`
-	File     string `json:"file"`     // display path
-	FullPath string `json:"fullPath"` // absolute path (for git blame)
+	File     string `json:"file"`     // display path (last 3 segments) — for HTML only
+	RelPath  string `json:"relPath"`  // repo-root-relative path — used in SARIF uris
+	FullPath string `json:"fullPath"` // absolute path — for git blame
 	Line     int    `json:"line"`
 	Snippet  string `json:"snippet"`
 	Author   string `json:"author,omitempty"` // filled by blame enrichment (later)

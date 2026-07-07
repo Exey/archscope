@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/exey/archscope/internal/config"
@@ -23,7 +24,11 @@ import (
 // cachingLoader reads each file's lines once and memoizes them. It satisfies
 // both parser.SourceLoader and security.LineLoader, so the parse phase, the
 // security phase and blame all share a single read per file.
+//
+// Load is safe for concurrent use: the mutex guards the cache map so multiple
+// goroutines (e.g. the security engine's worker pool) can call it in parallel.
 type cachingLoader struct {
+	mu    sync.Mutex
 	base  parser.FileLoader
 	cache map[string][]string
 }
@@ -33,14 +38,21 @@ func newCachingLoader() *cachingLoader {
 }
 
 func (l *cachingLoader) Load(path string) ([]string, error) {
+	l.mu.Lock()
 	if v, ok := l.cache[path]; ok {
+		l.mu.Unlock()
 		return v, nil
 	}
+	l.mu.Unlock()
+
 	lines, err := l.base.Load(path)
 	if err != nil {
 		return nil, err
 	}
+
+	l.mu.Lock()
 	l.cache[path] = lines
+	l.mu.Unlock()
 	return lines, nil
 }
 
@@ -116,6 +128,17 @@ func RunWithProgress(rootPath string, cfg config.Config, progress func(string)) 
 			srcs = append(srcs, security.SourceFile{Path: f.FilePath, LanguageID: f.LanguageID})
 		}
 		results, score = eng.RunWithScore(srcs, loader, rootPath)
+		if scan.K8sLint != nil && len(scan.K8sLint.ClusterFindings) > 0 {
+			// Fold K8s cross-cutting findings (NetworkPolicy gaps, RBAC
+			// over-grants, secrets in manifests, ...) into the Danger Index so
+			// infra misconfigurations count alongside source-level findings.
+			// Kept out of `results`/AnalysisResult.Security itself — these are
+			// synthetic, file-less entries and would confuse SARIF/markdown/the
+			// findings list, which expect real per-file Findings.
+			withK8s := append(append([]security.RuleResult{}, results...),
+				k8sClusterFindingResults(scan.K8sLint.ClusterFindings)...)
+			score = eng.ComputeScore(withK8s, len(files))
+		}
 		if gitBundle.Available {
 			step("Attributing findings via git blame…")
 			enrichWithBlame(results, scan.GitRepos, cfg)
@@ -359,4 +382,71 @@ func toSet(xs []string) map[string]bool {
 		m[x] = true
 	}
 	return m
+}
+
+// k8sClusterFindingResults converts K8s cross-cutting findings into synthetic
+// security.RuleResult entries (grouped by RuleID) so they flow through
+// Engine.ComputeScore the same way per-file language findings do. The
+// resulting entries carry no Findings (they're namespace/cluster-scoped, not
+// file:line) — only Rule metadata and TotalCount, which is all ComputeScore
+// (and the HTML "Security Rules" CWE grid) needs.
+func k8sClusterFindingResults(findings []scanner.K8sClusterFinding) []security.RuleResult {
+	byRule := map[string]*security.RuleResult{}
+	var order []string
+	for _, f := range findings {
+		if f.CWE == "" {
+			continue
+		}
+		rr, ok := byRule[f.RuleID]
+		if !ok {
+			rr = &security.RuleResult{Rule: security.Rule{
+				ID:        f.RuleID,
+				Name:      f.Title,
+				Category:  k8sFindingCategory(f.CWE),
+				Severity:  k8sFindingSeverity(f.Severity),
+				CWE:       f.CWE,
+				Languages: []string{"k8s"},
+			}}
+			byRule[f.RuleID] = rr
+			order = append(order, f.RuleID)
+		}
+		rr.TotalCount++
+	}
+	out := make([]security.RuleResult, 0, len(order))
+	for _, id := range order {
+		out = append(out, *byRule[id])
+	}
+	return out
+}
+
+// k8sFindingSeverity maps a K8sClusterFinding's lowercase severity string
+// onto the security engine's three-level scale; "critical" folds into HIGH
+// since Severity has no separate critical tier.
+func k8sFindingSeverity(s string) security.Severity {
+	switch s {
+	case "critical", "high":
+		return security.SevHigh
+	case "medium":
+		return security.SevMedium
+	default:
+		return security.SevLow
+	}
+}
+
+// k8sFindingCategory maps a K8s cross-cutting finding's CWE onto one of the
+// 14 Danger Index categories, reusing the same CWE→category convention the
+// language rule packages already use for shared CWEs (e.g. 798 and 319).
+func k8sFindingCategory(cwe string) string {
+	switch cwe {
+	case "284", "269", "306": // access control / privilege management / missing auth
+		return "authentication"
+	case "749": // exposed dangerous method (matches kotlin.add_javascript_interface)
+		return "io_validation"
+	case "312", "798": // cleartext/hardcoded secret storage (matches rust.hardcoded_credential)
+		return "insecure_data_storage"
+	case "319": // cleartext transmission (matches javascript.insecure_transport)
+		return "network_security"
+	default:
+		return "platform_config"
+	}
 }

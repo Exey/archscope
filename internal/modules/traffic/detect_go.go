@@ -192,7 +192,7 @@ func ExtractGoTraffic(filePath string, lines []string, imports []string) (inboun
 		// ── Inbound: Telegram bot long-polling ───────────────────────────────
 		if strings.Contains(ln, "tgbotapi.NewBotAPI(") || strings.Contains(ln, "telebot.NewBot(") ||
 			strings.Contains(ln, "bot.StartPolling(") || strings.Contains(ln, "bot.Start(") &&
-				containsAny(imports, "tgbotapi", "telebot") {
+			containsAny(imports, "tgbotapi", "telebot") {
 			addIn(Entry{URI: "Telegram API", Protocol: "Long Polling (HTTPS)", DataFmt: "JSON", Line: no})
 		}
 

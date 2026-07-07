@@ -103,9 +103,9 @@ func init() {
 			"or untested logic. Review whether the item is genuinely needed or can be removed.",
 	).WithCWE("561"))
 
-	_ = reRustExpect         // reserved for future expect-in-lib rule
-	_ = reRustHTTPNoTLS      // reserved for plaintext HTTP server rule
-	_ = reRustCmdInject      // reserved for command injection rule
-	_ = reRustCmdFmt         // reserved for command injection rule
-	_ = reRustTLSConfig      // reserved for TLS builder rule
+	_ = reRustExpect    // reserved for future expect-in-lib rule
+	_ = reRustHTTPNoTLS // reserved for plaintext HTTP server rule
+	_ = reRustCmdInject // reserved for command injection rule
+	_ = reRustCmdFmt    // reserved for command injection rule
+	_ = reRustTLSConfig // reserved for TLS builder rule
 }

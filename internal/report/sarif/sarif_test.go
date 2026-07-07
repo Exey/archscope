@@ -84,3 +84,90 @@ func TestLevelMapping(t *testing.T) {
 		t.Errorf("severity→level mapping incorrect")
 	}
 }
+
+func TestBuildEmptyScanIsSchemaValid(t *testing.T) {
+	// A clean scan must emit results:[] not results:null — null is rejected by
+	// the SARIF schema and GitHub's upload endpoint.
+	log := Build(&result.AnalysisResult{ProjectName: "clean"})
+	b, err := json.Marshal(log)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(b) == "" {
+		t.Fatal("empty output")
+	}
+	// Confirm results is an array literal, not null.
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	runs, _ := raw["runs"].([]any)
+	if len(runs) == 0 {
+		t.Fatal("no runs")
+	}
+	run0, _ := runs[0].(map[string]any)
+	results, ok := run0["results"]
+	if !ok {
+		t.Fatal("results key missing")
+	}
+	if results == nil {
+		t.Fatal("results is null — must be []")
+	}
+}
+
+func TestBuildCWEAndSecuritySeverity(t *testing.T) {
+	res := &result.AnalysisResult{
+		Security: []security.RuleResult{{
+			Rule: security.Rule{
+				ID: "universal.hardcoded_secrets", Name: "Hardcoded Secrets",
+				Severity: security.SevHigh, CWE: "798",
+			},
+			Findings:   []security.Finding{{File: "src/config.go", Line: 5}},
+			TotalCount: 1,
+		}},
+	}
+	log := Build(res)
+	desc := log.Runs[0].Tool.Driver.Rules[0]
+	if desc.DefaultConfiguration == nil || desc.DefaultConfiguration.Level != "error" {
+		t.Errorf("defaultConfiguration.level not set correctly")
+	}
+	props := desc.Properties
+	if props == nil {
+		t.Fatal("properties nil")
+	}
+	if props["security-severity"] != 8.0 {
+		t.Errorf("security-severity = %v, want 8.0", props["security-severity"])
+	}
+	tags, _ := props["tags"].([]string)
+	found := false
+	for _, tag := range tags {
+		if tag == "external/cwe/cwe-798" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("CWE tag not found in tags: %v", tags)
+	}
+}
+
+func TestBuildRelPathURIBaseID(t *testing.T) {
+	res := &result.AnalysisResult{
+		Security: []security.RuleResult{{
+			Rule:       security.Rule{ID: "r1", Name: "R1", Severity: security.SevLow},
+			Findings:   []security.Finding{{RelPath: "internal/foo/bar.go", Line: 1}},
+			TotalCount: 1,
+		}},
+	}
+	log := Build(res)
+	run := log.Runs[0]
+	if run.OriginalURIBaseIDs["SRCROOT"].URI != "./" {
+		t.Errorf("originalUriBaseIds[SRCROOT] = %q, want ./", run.OriginalURIBaseIDs["SRCROOT"].URI)
+	}
+	loc := run.Results[0].Locations[0].PhysicalLocation.ArtifactLocation
+	if loc.URI != "internal/foo/bar.go" {
+		t.Errorf("uri = %q, want internal/foo/bar.go", loc.URI)
+	}
+	if loc.URIBaseID != "SRCROOT" {
+		t.Errorf("uriBaseId = %q, want SRCROOT", loc.URIBaseID)
+	}
+}
