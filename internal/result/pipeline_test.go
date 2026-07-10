@@ -9,7 +9,9 @@ import (
 
 	// Registration side effects: languages, universal rules, report modules.
 	_ "github.com/exey/archscope/internal/lang"
+	_ "github.com/exey/archscope/internal/modules/algorithms"
 	_ "github.com/exey/archscope/internal/modules/arch"
+	_ "github.com/exey/archscope/internal/modules/datastructures"
 	_ "github.com/exey/archscope/internal/modules/dddmodel"
 	_ "github.com/exey/archscope/internal/modules/designpattern"
 	_ "github.com/exey/archscope/internal/modules/oopvspop"

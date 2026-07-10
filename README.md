@@ -62,6 +62,10 @@ go run ./cmd/archscope ~/code --open
 
    - **🧩 Design Patterns** *(all languages)* — GoF pattern detection from naming conventions: Factory, Singleton, Builder, Observer, Strategy, Decorator, Adapter, Facade, Command, and more — grouped by Creational / Structural / Behavioral category.
 
+   - **🌳 Data Structures** *(all languages)* — developer-implemented data structures detected from type-name conventions ([Wikipedia: List of data structures](https://en.wikipedia.org/wiki/List_of_data_structures)): linked lists, stacks, queues, trees (BST, AVL, red–black, B-tree, segment/Fenwick), heaps, tries, hash tables, graphs (adjacency list/matrix, union-find), and specialized structures (LRU cache, bit sets, sparse matrix). Grouped by category, each with a count and VS Code links to every declaration. Standard-library collections (Array, Set, Dictionary, Map) and ordinary domain collections are excluded — only types the developer declares themselves are counted.
+
+   - **🔀 Algorithms** *(all languages)* — well-known algorithms classified against a known catalog from function/type-name conventions, grouped by functionality: **Sorting** (bubble, insertion, merge, quick, heap, counting, radix, …), **Searching & Selection** (binary, linear, interpolation, jump, quickselect), **Graph · Shortest Path · Flow** (Dijkstra, Bellman–Ford, Floyd–Warshall, A\*, BFS/DFS, Kruskal/Prim, Tarjan, Ford–Fulkerson), **String Matching** (KMP, Rabin–Karp, Boyer–Moore, Aho–Corasick, Manacher, Levenshtein), and **Numeric & Classic** (Euclidean GCD, Sieve of Eratosthenes, Newton–Raphson, FFT, Karatsuba, Kadane, Huffman). Each with a count and VS Code links. Detection is token-based (`quickSort` → `[quick, sort]`) so common-word names need their functionality token — `bubbleChart` is not Bubble Sort. Adapts the catalog-classification premise of algorithm-identification research (execution profiling, MOSS, tree/graph-kernel SVMs, CodeBERT) to a static, dependency-free name-signal approach.
+
 12. **🐙 Git Analysis** (repo-wide):
 
    - **Branching model classifier** — scores Gitflow / Trunk-Based / GitHub Flow / GitLab Flow / OneFlow with confidence % and detected signals.
@@ -269,7 +273,9 @@ internal/
   git/         history, blame, branching-model classifier
   fetch/       remote git-URL resolution (clone + cleanup)
   modules/     pluggable report modules
+    algorithms/    universal algorithm detector (sorting/searching/graph/string)
     arch/          architecture: client pattern detection + backend layered view
+    datastructures/ universal custom data-structure detector
     dddmodel/      DDD vs. Anemic Domain Model analyzer (Go · Python · Kotlin · Java)
     designpattern/ universal GoF detector
     oopvspop/      Swift-only OOP↔POP analyzer

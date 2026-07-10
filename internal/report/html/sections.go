@@ -4002,6 +4002,10 @@ func moduleIcon(id string) string {
 		return "🍱"
 	case "speccoverage":
 		return "🧱"
+	case "datastructures":
+		return "🌳"
+	case "algorithms":
+		return "🔀"
 	default:
 		return "📐"
 	}

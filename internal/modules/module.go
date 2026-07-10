@@ -52,12 +52,14 @@ type ModuleMeta struct {
 // MetaByID is the single source of truth for module render order and icons.
 // Modules not listed here sort last (order 99) with a generic icon.
 var MetaByID = map[string]ModuleMeta{
-	"arch":          {Icon: "🏛️", Order: 0},
-	"dddmodel":      {Icon: "🍱", Order: 1},
-	"oopvspop":      {Icon: "⚖️", Order: 1},
-	"traffic":       {Icon: "🛜", Order: 2},
-	"speccoverage":  {Icon: "🧱", Order: 3},
-	"designpattern": {Icon: "🧩", Order: 4},
+	"arch":           {Icon: "🏛️", Order: 0},
+	"dddmodel":       {Icon: "🍱", Order: 1},
+	"oopvspop":       {Icon: "⚖️", Order: 1},
+	"traffic":        {Icon: "🛜", Order: 2},
+	"speccoverage":   {Icon: "🧱", Order: 3},
+	"designpattern":  {Icon: "🧩", Order: 4},
+	"datastructures": {Icon: "🌳", Order: 5},
+	"algorithms":     {Icon: "🔀", Order: 6},
 }
 
 // MetaFor returns the ModuleMeta for id, falling back to a generic entry.
