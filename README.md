@@ -60,13 +60,19 @@ go run ./cmd/archscope ~/code --open
 
    - **📏 Longest Functions** — top 20 non-test functions by line count, with module and VS Code link.
 
+12. **🧠 Programming Methods** *(all languages)* — language-agnostic code-construct detectors (ported from ArchSwiftScope), rendered as subcards grouped right after Domain Model. Each classifies declarations against a known catalog and deep-links every hit to VS Code:
+
    - **🧩 Design Patterns** *(all languages)* — GoF pattern detection from naming conventions: Factory, Singleton, Builder, Observer, Strategy, Decorator, Adapter, Facade, Command, and more — grouped by Creational / Structural / Behavioral category.
 
-   - **🌳 Data Structures** *(all languages)* — developer-implemented data structures detected from type-name conventions ([Wikipedia: List of data structures](https://en.wikipedia.org/wiki/List_of_data_structures)): linked lists, stacks, queues, trees (BST, AVL, red–black, B-tree, segment/Fenwick), heaps, tries, hash tables, graphs (adjacency list/matrix, union-find), and specialized structures (LRU cache, bit sets, sparse matrix). Grouped by category, each with a count and VS Code links to every declaration. Standard-library collections (Array, Set, Dictionary, Map) and ordinary domain collections are excluded — only types the developer declares themselves are counted.
+   - **🌳 Data Structures** *(all languages)* — developer-implemented data structures classified against a large known catalog by type-name conventions: linked lists, stacks, queues, trees (BST, AVL, red–black, B-tree, segment/Fenwick, spatial), heaps, tries, hash-based (bloom/cuckoo filters, HyperLogLog, consistent hashing), graphs (adjacency list/matrix, union-find, DAG), and specialized structures (LRU cache, bit sets, sparse matrix, rope). Grouped by category (each with an icon), with a count and VS Code links to every declaration. Standard-library collections (Array, Set, Dictionary, Map) are excluded, UI-framework look-alikes (SwiftUI `HStack`/`VStack`) are rejected, and generic single-word names (`Stack`, `Queue`, `Tree`, …) are only accepted when the type's body carries the structure's vocabulary (`push`/`pop`, `enqueue`, `heapify`, `adjacency`, …) — so a `TelemetryStack` service is never miscounted. Ported from ArchSwiftScope's construct detectors.
 
    - **🔀 Algorithms** *(all languages)* — well-known algorithms classified against a known catalog from function/type-name conventions, grouped by functionality: **Sorting** (bubble, insertion, merge, quick, heap, counting, radix, …), **Searching & Selection** (binary, linear, interpolation, jump, quickselect), **Graph · Shortest Path · Flow** (Dijkstra, Bellman–Ford, Floyd–Warshall, A\*, BFS/DFS, Kruskal/Prim, Tarjan, Ford–Fulkerson), **String Matching** (KMP, Rabin–Karp, Boyer–Moore, Aho–Corasick, Manacher, Levenshtein), and **Numeric & Classic** (Euclidean GCD, Sieve of Eratosthenes, Newton–Raphson, FFT, Karatsuba, Kadane, Huffman). Each with a count and VS Code links. Detection is token-based (`quickSort` → `[quick, sort]`) so common-word names need their functionality token — `bubbleChart` is not Bubble Sort. Adapts the catalog-classification premise of algorithm-identification research (execution profiling, MOSS, tree/graph-kernel SVMs, CodeBERT) to a static, dependency-free name-signal approach.
 
-12. **🐙 Git Analysis** (repo-wide):
+   - **🧮 Complexity** *(all brace languages)* — heuristic Big-O "health" read from iteration nesting: a function whose deepest simultaneous loop nesting is *N* levels (nested `for`/`while`, nested higher-order closures like `.map`/`.filter`, or a linear collection op such as `.sorted()`/`.contains(where:)` used inside a loop) is charged O(Nⁿ), and anything O(N²) or worse is surfaced as a time hotspot; collections allocated inside a loop are flagged as space hotspots. Shows time/space health scores (share of loop-bearing functions that stay O(N) or better), a collection-usage summary, and each violation's Big-O badge, symbol, reason, and VS Code link. Indentation-only sources (Python) have no braces, so they contribute nothing rather than a false reading. Ported from ArchSwiftScope's ComplexityDetector.
+
+   - **🪄 Magic Constants** *(all languages)* — well-known algorithms identified by the fixed literal values baked into their implementation: hash primes/offsets (FNV-1/1a), checksum polynomials (CRC-16/32/32C/64), cryptographic initialization vectors (MD5/SHA-1/SHA-256, ChaCha/Salsa `"expand 32-byte k"`), PRNG coefficients (Mersenne Twister, xorshift, SplitMix64), and non-cryptographic hashes (MurmurHash2/3, Fibonacci hashing). Grouped by family, each with a count and VS Code links to the enclosing function. Matched by numeric **value**, so `0x01000193`, `0x1000193`, and `16_777_619` all resolve to the same FNV prime; low-entropy values (`0x1021`, `0x8005`) count only when written in hex, so an ordinary decimal port or id is never misread. Ported from ArchSwiftScope's MagicConstantDetector.
+
+13. **🐙 Git Analysis** (repo-wide):
 
    - **Branching model classifier** — scores Gitflow / Trunk-Based / GitHub Flow / GitLab Flow / OneFlow with confidence % and detected signals.
    - **Top contributors** — commits and files touched per author.
@@ -74,9 +80,9 @@ go run ./cmd/archscope ~/code --open
    - **Tags & commits** — semver tag list, commit volume, conventional-commit hygiene.
    - **Branch inventory** — all branches with stale detection.
 
-13. **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
+14. **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
 
-14. **📂 Modules & Microservices** — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, **estimated tokens**, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
+15. **📂 Modules & Microservices** — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, **estimated tokens**, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
 
 ---
 
@@ -275,7 +281,7 @@ internal/
   modules/     pluggable report modules
     algorithms/    universal algorithm detector (sorting/searching/graph/string)
     arch/          architecture: client pattern detection + backend layered view
-    datastructures/ universal custom data-structure detector
+    constructs/    code-construct detectors (data structures, complexity, magic constants; ported from ArchSwiftScope)
     dddmodel/      DDD vs. Anemic Domain Model analyzer (Go · Python · Kotlin · Java)
     designpattern/ universal GoF detector
     oopvspop/      Swift-only OOP↔POP analyzer

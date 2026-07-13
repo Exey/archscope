@@ -33,7 +33,7 @@ import (
 	"github.com/exey/archscope/internal/modules"
 	_ "github.com/exey/archscope/internal/modules/algorithms" // register report modules
 	_ "github.com/exey/archscope/internal/modules/arch"
-	_ "github.com/exey/archscope/internal/modules/datastructures"
+	_ "github.com/exey/archscope/internal/modules/constructs"
 	_ "github.com/exey/archscope/internal/modules/dddmodel"
 	_ "github.com/exey/archscope/internal/modules/designpattern"
 	_ "github.com/exey/archscope/internal/modules/oopvspop"

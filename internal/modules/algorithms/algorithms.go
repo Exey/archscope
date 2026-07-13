@@ -58,6 +58,15 @@ const (
 // categoryOrder fixes the display order.
 var categoryOrder = []category{sorting, searching, graphAlg, strMatch, numeric}
 
+// categoryIcon is the emoji shown before each category's as-sub heading.
+var categoryIcon = map[category]string{
+	sorting:   "🔃",
+	searching: "🔎",
+	graphAlg:  "🕸️",
+	strMatch:  "🔤",
+	numeric:   "🔢",
+}
+
 // rule maps a token signature to a canonical algorithm name and category. A
 // signature matches an identifier when either every token is present as a
 // word token, OR the identifier's joined-lowercase form contains the tokens
@@ -312,7 +321,7 @@ func (Module) RenderHTML(res any) string {
 		if len(ms) == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, `<div class="as-dp__group"><h5 class="as-sub">%s</h5><div class="as-dp__items">`, html.EscapeString(string(cat)))
+		fmt.Fprintf(&b, `<div class="as-dp__group"><h5 class="as-sub">%s %s</h5><div class="as-dp__items">`, categoryIcon[cat], html.EscapeString(string(cat)))
 		for _, m := range ms {
 			fmt.Fprintf(&b, `<div class="as-dp__item"><span class="as-dp__name">%s</span><span class="as-dp__count">×%d</span>`,
 				html.EscapeString(m.Name), m.Count)

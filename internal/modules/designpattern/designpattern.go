@@ -38,6 +38,13 @@ const (
 // categoryOrder fixes the display order.
 var categoryOrder = []category{creational, structural, behavioral}
 
+// categoryIcon is the emoji shown before each category's as-sub heading.
+var categoryIcon = map[category]string{
+	creational: "🏭",
+	structural: "🧱",
+	behavioral: "🎭",
+}
+
 // Match is one detected pattern with its evidence.
 type Match struct {
 	Pattern  string
@@ -221,7 +228,7 @@ func (Module) RenderHTML(res any) string {
 		if len(ms) == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, `<div class="as-dp__group"><h5 class="as-sub">%s</h5><div class="as-dp__items">`, html.EscapeString(string(cat)))
+		fmt.Fprintf(&b, `<div class="as-dp__group"><h5 class="as-sub">%s %s</h5><div class="as-dp__items">`, categoryIcon[cat], html.EscapeString(string(cat)))
 		for _, m := range ms {
 			fmt.Fprintf(&b, `<div class="as-dp__item"><span class="as-dp__name">%s</span><span class="as-dp__count">×%d</span>`,
 				html.EscapeString(m.Pattern), m.Count)

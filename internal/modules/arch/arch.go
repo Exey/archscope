@@ -412,7 +412,7 @@ func (Module) RenderHTML(res any) string {
 		b.WriteString(`</div>`)
 	}
 	if len(r.Components) > 0 {
-		b.WriteString(`<div class="as-arch__components"><h5 class="as-sub">Frameworks &amp; libraries</h5><div class="as-arch__component-grid">`)
+		b.WriteString(`<div class="as-arch__components"><h5 class="as-sub">📚 Frameworks &amp; libraries</h5><div class="as-arch__component-grid">`)
 		for _, c := range r.Components {
 			fmt.Fprintf(&b,
 				`<div class="as-arch__component"><span class="as-arch__component-icon">%s</span><span class="as-arch__component-body"><strong>%s</strong><em>%s</em></span></div>`,
@@ -442,7 +442,7 @@ func renderBackend(r Result) string {
 	b.WriteString(`<div class="as-archcols">`)
 
 	// Layers column.
-	b.WriteString(`<div class="as-archcol"><h5 class="as-sub">Layers</h5><div class="as-layers">`)
+	b.WriteString(`<div class="as-archcol"><h5 class="as-sub">🥞 Layers</h5><div class="as-layers">`)
 	for _, l := range r.Layers {
 		pct := l.LineCount * 100 / maxLines
 		if pct < 4 {
@@ -455,7 +455,7 @@ func renderBackend(r Result) string {
 	b.WriteString(`</div></div>`)
 
 	// Components column.
-	b.WriteString(`<div class="as-archcol"><h5 class="as-sub">Components</h5>`)
+	b.WriteString(`<div class="as-archcol"><h5 class="as-sub">🧩 Components</h5>`)
 	if len(r.Components) == 0 {
 		b.WriteString(`<p class="as-empty">No frameworks detected.</p>`)
 	} else {

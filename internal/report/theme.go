@@ -7,7 +7,7 @@
 package report
 
 // Version is the tool version surfaced in the report header and SARIF driver.
-const Version = "26.7.7"
+const Version = "26.7.12"
 
 // CSS is the full stylesheet, including dark (default) and light themes and the
 // class vocabulary emitted by report modules (.as-arch__*, .as-dp__*, etc.).
@@ -112,6 +112,13 @@ code,.mono{font-family:var(--mono)}
 .as-insights__head .ico{font-size:19px; line-height:1}
 .as-insights-grid{display:flex; flex-direction:column; gap:12px}
 .as-insights-grid .as-section{margin:0}
+
+/* Programming Methods group (design patterns · data structures · algorithms) */
+.as-pm{margin:16px 0}
+.as-pm__head{display:flex; align-items:center; gap:9px; margin-bottom:6px}
+.as-pm__head h3{font-size:16px; font-weight:650; margin:0}
+.as-pm__head .ico{font-size:19px; line-height:1}
+.as-pm .as-modpanel:first-of-type{margin-top:8px}
 .as-empty{color:var(--text-faint); font-size:13px; font-style:italic; margin:4px 0}
 .as-grid2{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px}
 
@@ -231,6 +238,24 @@ code,.mono{font-family:var(--mono)}
 .as-dp__name{font-weight:600; font-size:13px}
 .as-dp__count{font-family:var(--mono); font-size:11.5px; color:var(--accent)}
 .as-dp__ex{grid-column:1/-1; font-family:var(--mono); font-size:10.5px; color:var(--text-faint); word-break:break-word}
+
+/* Complexity module */
+.as-cx__health{display:flex; gap:18px; flex-wrap:wrap; margin-bottom:12px}
+.as-cx__gauge{flex:1; min-width:220px}
+.as-cx__glabel{display:flex; justify-content:space-between; font-size:12px; margin-bottom:5px}
+.as-cx__bar{height:8px; background:var(--bg-inset); border-radius:999px; overflow:hidden}
+.as-cx__fill{height:100%; border-radius:999px; transition:width .3s}
+.as-cx__usage{display:flex; gap:8px; flex-wrap:wrap; margin:0 0 14px}
+.as-cx__chip{font-size:11px; background:var(--bg-elev-2); border:1px solid var(--border);
+  border-radius:999px; padding:2px 10px; color:var(--text-dim)}
+.as-cx__viol-title{font-size:12.5px; font-weight:600; margin:12px 0 6px}
+.as-cx__table td{vertical-align:top}
+.as-cx__more{color:var(--text-faint); font-size:11px}
+.as-cx__bigo{font-family:var(--mono); font-size:11px; font-weight:600; padding:1px 6px;
+  border-radius:var(--radius-sm); white-space:nowrap; background:var(--bg-inset)}
+.as-cx__bigo--2{color:#d08a1a}
+.as-cx__bigo--3{color:#d1590a}
+.as-cx__bigo--4{color:#c0392b}
 
 /* OOP vs POP module */
 .as-pop__verdict{font-size:15px; font-weight:650; margin-bottom:12px}

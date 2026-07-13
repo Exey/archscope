@@ -318,7 +318,7 @@ func (Module) RenderHTML(res any) string {
 			}
 			sort.Strings(specFiles)
 			b.WriteString(`<div>`)
-			b.WriteString(`<div class="as-sub">Spec Locations</div>`)
+			b.WriteString(`<div class="as-sub">📄 Spec Locations</div>`)
 			b.WriteString(`<div style="display:flex;flex-direction:column;gap:4px;margin-top:4px">`)
 			for _, f := range specFiles {
 				fmt.Fprintf(&b,
@@ -334,7 +334,7 @@ func (Module) RenderHTML(res any) string {
 		// Detected generators column.
 		if hasGen {
 			b.WriteString(`<div>`)
-			b.WriteString(`<div class="as-sub">Generators</div>`)
+			b.WriteString(`<div class="as-sub">⚙️ Generators</div>`)
 			b.WriteString(`<div style="display:flex;flex-direction:column;gap:4px;margin-top:4px">`)
 			for _, g := range r.Generators {
 				fmt.Fprintf(&b,

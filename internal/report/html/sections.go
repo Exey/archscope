@@ -488,7 +488,7 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 
 	// Languages row.
 	if len(langSet) > 0 {
-		b.WriteString(`<div class="as-sub">Languages</div><div class="as-tagcloud">`)
+		b.WriteString(`<div class="as-sub">🔤 Languages</div><div class="as-tagcloud">`)
 		for _, l := range sortedKeys(langSet) {
 			fmt.Fprintf(&b, `<span class="as-tag tag-local">%s</span>`, esc(l))
 		}
@@ -566,7 +566,7 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 		}
 		return string(list[i].plat) < string(list[j].plat)
 	})
-	fmt.Fprintf(&b, `<div class="as-sub" style="margin-top:16px">Packages &amp; modules <span style="color:var(--text-faint);font-weight:400;text-transform:none;letter-spacing:0">(%d)</span></div>`, len(list))
+	fmt.Fprintf(&b, `<div class="as-sub" style="margin-top:16px">📦 Packages &amp; modules <span style="color:var(--text-faint);font-weight:400;text-transform:none;letter-spacing:0">(%d)</span></div>`, len(list))
 	if len(list) == 0 {
 		b.WriteString(`<p class="as-empty">No modules detected.</p>`)
 	} else {
@@ -672,7 +672,7 @@ func renderDevOpsSection(res *result.AnalysisResult) string {
 
 	// Compact static-analysis matrix.
 	if !lint.Empty() {
-		b.WriteString(`<div class="as-sub" style="margin-top:14px">Static Analysis <span style="color:var(--text-faint);font-weight:400;text-transform:none;letter-spacing:0">(Hadolint · Dockle · KubeLinter · Checkov-style checks)</span></div>`)
+		b.WriteString(`<div class="as-sub" style="margin-top:14px">🔬 Static Analysis <span style="color:var(--text-faint);font-weight:400;text-transform:none;letter-spacing:0">(Hadolint · Dockle · KubeLinter · Checkov-style checks)</span></div>`)
 		b.WriteString(`<div class="as-dvo-grid">`)
 		for _, a := range []*scanner.DevOpsArtifactLint{lint.Dockerfiles, lint.Helm, lint.Compose} {
 			if a == nil {
@@ -2852,7 +2852,7 @@ func renderSecurityIndex(res *result.AnalysisResult) string {
 				return orderedPlats[i].FileCount > orderedPlats[j].FileCount
 			})
 		}
-		b.WriteString(`<div class="as-sub" style="margin-bottom:8px">Findings by Platform</div>`)
+		b.WriteString(`<div class="as-sub" style="margin-bottom:8px">🛡️ Findings by Platform</div>`)
 		b.WriteString(`<div class="as-sec-plat-row">`)
 		for i, pg := range orderedPlats {
 			total := platFindings[pg.Platform]
@@ -3075,7 +3075,7 @@ func renderSecurityRules(results []security.RuleResult, k8sLint *scanner.K8sLint
 	var b strings.Builder
 	fmt.Fprintf(&b,
 		`<div class="as-sub" style="margin-top:18px;margin-bottom:8px">`+
-			`Security Rules <span style="color:var(--text-faint);font-weight:400;text-transform:none;letter-spacing:0">(%d total checks)</span>`+
+			`📋 Security Rules <span style="color:var(--text-faint);font-weight:400;text-transform:none;letter-spacing:0">(%d total checks)</span>`+
 			`</div>`,
 		len(results)+extraChecks)
 	if len(list) == 0 {
@@ -3256,7 +3256,7 @@ func renderTabs(res *result.AnalysisResult) string {
 
 	var b strings.Builder
 	b.WriteString(`<div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;margin-bottom:8px">`)
-	b.WriteString(`<span class="as-sub">Platforms</span>`)
+	b.WriteString(`<span class="as-sub">🗂️ Platforms</span>`)
 	b.WriteString(`<button class="as-toggle" id="as-plat-unfold" style="font-size:12px;padding:4px 12px">Unfold All</button>`)
 	b.WriteString(`</div>`)
 	b.WriteString(`<div class="as-plat-cards">`)
@@ -3277,10 +3277,18 @@ func renderTabs(res *result.AnalysisResult) string {
 		fmt.Fprintf(&b, `<div class="as-plat-card%s" data-platcard="%d">`, openCls, i)
 
 		// ── Card header (clickable summary row) ────────────────────────────
+		// In folder-as-tab mode the tab IS a folder, so the pill carries the
+		// folder name (the identifier that distinguishes tabs) and the name text
+		// carries the language; otherwise the pill is the language abbreviation
+		// and the name is the platform title.
+		pillText, nameText := abbr, pg.TabLabel()
+		if res.Scan.FolderAsTab && pg.Label != "" {
+			pillText, nameText = pg.Label, langspec.PlatformTitle(lp)
+		}
 		b.WriteString(`<div class="as-plat-card__head">`)
 		b.WriteString(`<div class="as-plat-card__summary">`)
-		fmt.Fprintf(&b, `<span class="as-plat-card__abbr as-plat-%s">%s</span>`, esc(string(lp)), abbr)
-		fmt.Fprintf(&b, `<span class="as-plat-card__name">%s</span>`, esc(pg.TabLabel()))
+		fmt.Fprintf(&b, `<span class="as-plat-card__abbr as-plat-%s">%s</span>`, esc(string(lp)), esc(pillText))
+		fmt.Fprintf(&b, `<span class="as-plat-card__name">%s</span>`, esc(nameText))
 		fmt.Fprintf(&b, `<span class="as-plat-card__loc">%s loc</span>`, fmtLOC(platLOC))
 		fmt.Fprintf(&b, `<span class="as-plat-card__files">%d files</span>`, pg.FileCount)
 		if hs.apiTotal > 0 {
@@ -3345,8 +3353,9 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 	}
 
 	// Split panels: architecture dropped (rendered above), ddd, spec coverage,
-	// traffic, design patterns (move into Module Insights), rest.
-	var dddPanels, specPanels, trafficPanels, designPanels, otherPanels []result.ModulePanel
+	// traffic, the "Programming Methods" constructs (design patterns, data
+	// structures, algorithms — grouped after Domain Model), rest.
+	var dddPanels, specPanels, trafficPanels, constructPanels, otherPanels []result.ModulePanel
 	for _, p := range res.PanelsForPlatform(pg.Platform) {
 		switch p.ModuleID {
 		case "architecture":
@@ -3357,8 +3366,8 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 			specPanels = append(specPanels, p)
 		case "traffic":
 			trafficPanels = append(trafficPanels, p)
-		case "designpattern":
-			designPanels = append(designPanels, p)
+		case "designpattern", "datastructures", "algorithms", "complexity", "magicconstants":
+			constructPanels = append(constructPanels, p)
 		default:
 			otherPanels = append(otherPanels, p)
 		}
@@ -3387,6 +3396,9 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 	// 2. 🎯 Domain Model
 	b.WriteString(renderModulePanels(dddPanels, badge))
 
+	// 2b. 🧠 Programming Methods — design patterns, data structures, algorithms
+	b.WriteString(renderProgrammingMethods(constructPanels, badge))
+
 	// 3. 🧱 Spec Coverage
 	b.WriteString(renderModulePanels(specPanels, badge))
 
@@ -3404,8 +3416,8 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 		b.WriteString(renderModulePanels(trafficPanels, badge))
 	}
 
-	// 5. 💡 Module Insights — Hotspots · Modules · Design Patterns · TODOs · Longest Functions
-	b.WriteString(renderModuleInsights(res, pg, files, designPanels, res.RootPath, badge))
+	// 5. 💡 Module Insights — Hotspots · Modules · TODOs · Longest Functions
+	b.WriteString(renderModuleInsights(res, pg, files, res.RootPath, badge))
 
 	// 7. 🐙 Git Analysis — per-platform churn + contributors
 	b.WriteString(renderPlatformGit(res, pg, files, badge))
@@ -3565,18 +3577,30 @@ func renderMicroservicesSection(pg *scanner.PlatformGroup, files []*parser.Parse
 	return b.String()
 }
 
-// renderModuleInsights groups Dependency Hotspots, Modules, Design Patterns,
-// TODOs & FIXMEs, and Longest Functions under a single "💡 Module Insights" header.
-func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup, files []*parser.ParsedFile, designPanels []result.ModulePanel, rootPath string, headBadge string) string {
+// renderProgrammingMethods groups the language-agnostic "constructs" panels —
+// Design Patterns, Data Structures, Algorithms — under a single "🧠 Programming
+// Methods" header, rendered right after the Domain Model card. Panels arrive in
+// module-Order sequence (designpattern → datastructures → algorithms).
+func renderProgrammingMethods(panels []result.ModulePanel, headBadge string) string {
+	if len(panels) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `<div class="as-pm"><div class="as-pm__head">%s<span class="ico">🧠</span><h3>Programming Methods</h3></div>`, headBadge)
+	b.WriteString(renderModulePanels(panels))
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// renderModuleInsights groups Dependency Hotspots, Modules, TODOs & FIXMEs,
+// and Longest Functions under a single "💡 Module Insights" header.
+func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup, files []*parser.ParsedFile, rootPath string, headBadge string) string {
 	var parts []string
 	if h := renderHotspots(res, pg); h != "" {
 		parts = append(parts, h)
 	}
 	if m := renderMicroservicesSection(pg, files, res.Scan.SkipModules); m != "" {
 		parts = append(parts, m)
-	}
-	if dp := renderModulePanels(designPanels); dp != "" {
-		parts = append(parts, dp)
 	}
 	if t := renderTodosFixmes(files); t != "" {
 		parts = append(parts, t)
@@ -4006,6 +4030,10 @@ func moduleIcon(id string) string {
 		return "🌳"
 	case "algorithms":
 		return "🔀"
+	case "complexity":
+		return "🧮"
+	case "magicconstants":
+		return "🪄"
 	default:
 		return "📐"
 	}
@@ -4254,7 +4282,7 @@ func renderModuleDetailsPlatform(rootPath string, files []*parser.ParsedFile, he
 func renderBranchingModel(bs git.BranchStats) string {
 	m := bs.Model
 	var b strings.Builder
-	b.WriteString(`<div class="as-sub">Branching Model</div>`)
+	b.WriteString(`<div class="as-sub">🌿 Branching Model</div>`)
 	b.WriteString(`<div class="as-model">`)
 	fmt.Fprintf(&b, `<span class="as-model__ico">%s</span><div><div class="as-model__name">%s</div><div class="as-model__detail">%s</div></div>`,
 		m.Model.Icon(), esc(string(m.Model)), esc(m.Model.Detail()))
@@ -4292,7 +4320,7 @@ func renderTeam(authors map[string]*git.AuthorStats) string {
 		rows = rows[:10]
 	}
 	var b strings.Builder
-	b.WriteString(`<div><div class="as-sub">Top Contributors</div>`)
+	b.WriteString(`<div><div class="as-sub">👥 Top Contributors</div>`)
 	if len(rows) == 0 {
 		b.WriteString(`<p class="as-empty">No authors found.</p></div>`)
 		return b.String()
@@ -4307,7 +4335,7 @@ func renderTeam(authors map[string]*git.AuthorStats) string {
 
 func renderChurn(churn []git.FileChurnStat) string {
 	var b strings.Builder
-	b.WriteString(`<div><div class="as-sub">File Churn</div>`)
+	b.WriteString(`<div><div class="as-sub">🔥 File Churn</div>`)
 	if len(churn) == 0 {
 		b.WriteString(`<p class="as-empty">No churn data.</p></div>`)
 		return b.String()
@@ -4325,7 +4353,7 @@ func renderChurn(churn []git.FileChurnStat) string {
 
 func renderTagsCommits(t git.TagStats, c git.CommitStats) string {
 	var b strings.Builder
-	b.WriteString(`<div><div class="as-sub">Releases &amp; Commit Hygiene</div>`)
+	b.WriteString(`<div><div class="as-sub">🏷️ Releases &amp; Commit Hygiene</div>`)
 	fmt.Fprintf(&b, `<p class="as-section__sub">%d tags · %d semver`, t.TotalTags, t.SemverTags)
 	if t.LatestSemver != "" {
 		fmt.Fprintf(&b, ` · latest %s`, esc(t.LatestSemver))
@@ -4368,7 +4396,7 @@ func renderTagsCommits(t git.TagStats, c git.CommitStats) string {
 
 func renderBranches(bs git.BranchStats) string {
 	var b strings.Builder
-	b.WriteString(`<div><div class="as-sub">Branches</div>`)
+	b.WriteString(`<div><div class="as-sub">🌳 Branches</div>`)
 	fmt.Fprintf(&b, `<p class="as-section__sub">%d total`, bs.TotalBranches)
 	if bs.AvgLifetimeDays > 0 {
 		fmt.Fprintf(&b, ` · avg lifetime %.0f days`, bs.AvgLifetimeDays)

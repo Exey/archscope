@@ -659,7 +659,7 @@ func renderArchLayers(files []*parser.ParsedFile) string {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString(`<div class="as-sub" style="margin-top:16px">Architecture Layers</div><div class="arch-layers">`)
+	sb.WriteString(`<div class="as-sub" style="margin-top:16px">🏗️ Architecture Layers</div><div class="arch-layers">`)
 	for _, layer := range layerOrder {
 		b := buckets[layer]
 		if b == nil {
@@ -822,7 +822,7 @@ func renderArchComponents(files []*parser.ParsedFile, techSet map[string]bool) s
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString(`<div class="as-sub" style="margin-top:16px">Components</div><div class="arch-components">`)
+	sb.WriteString(`<div class="as-sub" style="margin-top:16px">🧩 Components</div><div class="arch-components">`)
 	for _, c := range components {
 		fmt.Fprintf(&sb, `<span class="arch-component"><span class="comp-icon">%s</span><span>%s</span></span>`, c.icon, esc(c.summary))
 	}
