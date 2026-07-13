@@ -575,17 +575,26 @@ a.as-dvo-m--link:hover{color:var(--accent);border-bottom-color:var(--accent)}
 /* ☁️ DevOps compliance charts (radar · defect density · health gauge) */
 /* 2-column layout: health gauge + defect density stacked on the left, the
    taller compliance radar spanning both rows on the right. */
-.as-dvo-charts{display:grid;grid-template-columns:1fr 1.15fr;grid-template-rows:auto auto;
-  grid-template-areas:"health radar" "defect radar";gap:14px;margin:14px 0 4px}
+.as-dvo-charts{display:grid;grid-template-columns:1fr 1.15fr;grid-template-rows:auto auto auto;
+  grid-template-areas:"health radar" "defect radar" "kube kube";gap:14px;margin:14px 0 4px}
 .as-dvo-chart--health{grid-area:health}
 .as-dvo-chart--defect{grid-area:defect}
 .as-dvo-chart--radar{grid-area:radar;display:flex;flex-direction:column}
+.as-dvo-chart--kube{grid-area:kube}
 @media (max-width:720px){
-  .as-dvo-charts{grid-template-columns:1fr;grid-template-areas:"radar" "health" "defect"}
+  .as-dvo-charts{grid-template-columns:1fr;grid-template-areas:"radar" "health" "defect" "kube"}
 }
 .as-dvo-chart{background:var(--bg-inset);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px}
 .as-dvo-chart__title{font-size:11.5px;font-weight:600;color:var(--text-faint);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
 .as-dvo-chart__note{font-size:10.5px;color:var(--text-faint);margin-top:12px;line-height:1.4}
+a.as-dvo-chart--kube{display:block;text-decoration:none;color:inherit;transition:border-color .15s}
+a.as-dvo-chart--kube:hover{border-color:var(--accent)}
+.as-dvo-kube-stats{display:flex;flex-wrap:wrap;gap:22px}
+.as-dvo-kube-stat{display:flex;flex-direction:column;gap:1px}
+.as-dvo-kube-stat__val{font-family:var(--mono);font-size:19px;font-weight:700;color:var(--text)}
+.as-dvo-kube-stat__label{font-size:10.5px;color:var(--text-faint)}
+a.as-dvo-defect-row{display:flex;text-decoration:none;color:inherit;border-radius:4px;transition:background .12s}
+a.as-dvo-defect-row:hover{background:var(--bg-elev-2)}
 /* Compliance radar */
 .as-dvo-radar-svg{width:100%;max-width:340px;display:block;margin:0 auto}
 .as-dvo-radar-axis-label{font-size:10px;font-weight:600;font-family:var(--mono)}
@@ -744,6 +753,22 @@ const JS = `
     if(dark){dark.addEventListener('click',function(){setTheme(false);});}
     if(light){light.addEventListener('click',function(){setTheme(true);});}
   })();
+  // Generic "open a specific Infrastructure/Platform card + scroll to it"
+  // link, used by the DevOps Kubernetes summary tile and the Kubernetes
+  // defect-density bar. Falls back to the link's plain href anchor scroll
+  // when there's no single target card to force open (e.g. several
+  // detected clusters — data-platcard-link is omitted in that case).
+  document.addEventListener('click',function(e){
+    var link=e.target.closest('[data-platcard-link]');
+    if(!link)return;
+    var idx=link.getAttribute('data-platcard-link');
+    var platCard=document.querySelector('.as-plat-card[data-platcard="'+idx+'"]');
+    if(!platCard)return;
+    e.preventDefault();
+    document.querySelectorAll('.as-plat-card--open').forEach(function(c){c.classList.remove('as-plat-card--open');});
+    platCard.classList.add('as-plat-card--open');
+    setTimeout(function(){platCard.scrollIntoView({behavior:'smooth',block:'start'});},50);
+  });
   // Security platform card → open accordion + scroll to danger section
   document.addEventListener('click',function(e){
     var card=e.target.closest('.as-sec-plat-card[data-tab]');

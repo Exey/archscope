@@ -82,7 +82,7 @@ go run ./cmd/archscope ~/code --open
 
 14. **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
 
-15. **📂 Modules & Microservices** — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, **estimated tokens**, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
+15. **📂 Modules & Microservices** *(opt-in via `--render-modules`)* — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, **estimated tokens**, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
 
 ---
 
@@ -146,7 +146,7 @@ go build -o archscope ./cmd/archscope
 | `--ref` | git branch/tag/sha to check out (remote URLs only) | default branch |
 | `--depth` | shallow-clone depth (remote URLs only; `0` = full history) | `0` |
 | `--folder-as-tab` | show each top-level folder as its own tab/section (monorepo/few services) | off |
-| `--skip-modules` | omit the Modules & Microservices section (file inventory, declarations, its graph) per platform, plus the global Architecture Graph; all platforms unfold by default | off |
+| `--render-modules` | include the Modules & Microservices section (file inventory, declarations, its graph) per platform, plus the global Architecture Graph — omitted by default | off |
 
 Outputs are written as `<project-name>.html`, `<project-name>.md`, and/or `<project-name>.sarif` inside the output directory.
 

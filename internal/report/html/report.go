@@ -34,10 +34,11 @@ func Render(res *result.AnalysisResult) string {
 	b.WriteString("</style>")
 	// Async loader: loads d3-force then force-graph from CDN. Each graph script
 	// registers [initFn, fallbackFn] in window.__asgq; the loader calls the
-	// right one after load succeeds, fails, or times out (9 s). Skipped
-	// entirely under --skip-modules, since no section will push onto __asgq
-	// and the CDN round-trip (or its 9 s timeout, offline) would be wasted.
-	if !res.Scan.SkipModules {
+	// right one after load succeeds, fails, or times out (9 s). Only loaded
+	// under --render-modules, since otherwise no section will push onto
+	// __asgq and the CDN round-trip (or its 9 s timeout, offline) would be
+	// wasted.
+	if res.Scan.RenderModules {
 		b.WriteString(`<script>(function(){` +
 			`var q=window.__asgq=[],done=false;` +
 			`function run(ok){if(done)return;done=true;` +
@@ -107,6 +108,10 @@ func Render(res *result.AnalysisResult) string {
 
 	// Contribution calendar — one row per platform, 52-week heat map
 	b.WriteString(renderContributionsCard(res))
+
+	// Infrastructure Platforms: one collapsible card per detected Kubernetes
+	// cluster (folded by default), shown above the language Platform cards.
+	b.WriteString(renderInfraPlatforms(res.K8sLint))
 
 	// Platform tabs (Git Analysis + Modules & Microservices are per-platform inside)
 	b.WriteString(renderTabs(res))

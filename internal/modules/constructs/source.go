@@ -93,6 +93,21 @@ func hashComment(fileExt string) bool {
 	return false
 }
 
+// nestingBlockComments reports whether the given language allows /* … */ to
+// nest (a /* inside an already-open block comment opens another level, so it
+// takes two */ to close). Swift, Rust, and Kotlin all specify nested block
+// comments; the C-family languages ArchScope parses (Go, Java, C/C++, JS/TS)
+// do not — there, a stray "/*" inside a comment (e.g. commented-out code that
+// itself had a block comment) is just inert text, and treating it as opening
+// a new level would wrongly require a second "*/" to close.
+func nestingBlockComments(fileExt string) bool {
+	switch fileExt {
+	case ".swift", ".rs", ".kt", ".kts":
+		return true
+	}
+	return false
+}
+
 // readSource blanks comments and string-literal contents from source (so prose
 // in a doc comment or a log message can't read as implementation evidence) and,
 // in the same pass, collects each line's string-literal contents. It handles //
@@ -100,22 +115,54 @@ func hashComment(fileExt string) bool {
 // single/double/backtick string literals. Structure (braces, identifiers) is
 // preserved; only comment/string *content* is removed from the stripped lines.
 // Returns one stripped line and one string-literal list per input line.
+//
+// Block comments, triple-quoted strings ("""/”', Python/Swift docstrings),
+// and backtick strings (Go raw strings, JS/TS template literals) are tracked
+// as state that persists across line boundaries, since all three can
+// legitimately span multiple lines — resetting at every line (as a naive
+// per-line stripper does) would leak a multi-line literal's contents into
+// the "code" every detector past its first line sees, letting prose or an
+// embedded code sample inside it register as real implementation evidence. A
+// single/double-quoted string left unterminated at end-of-line is reset
+// defensively rather than carried forward — it's invalid syntax there in
+// every language this stripper handles, so there's nothing legitimate to
+// carry.
 func readSource(src, fileExt string) (stripped []string, stringLits [][]string) {
 	hashes := hashComment(fileExt)
+	nests := nestingBlockComments(fileExt)
 	rawLines := strings.Split(src, "\n")
 	stripped = make([]string, len(rawLines))
 	stringLits = make([][]string, len(rawLines))
-	inBlock := false // inside a /* … */ that spans lines
+	blockDepth := 0    // nesting depth inside a /* … */ that spans lines; >1 only reachable when nests
+	pendingClose := "" // delimiter that closes a string carried over from a previous line ("`", `"""`, or `'''`); "" = not inside one
 	for idx, line := range rawLines {
 		var b strings.Builder
 		b.Grow(len(line))
 		var lits []string
 		i := 0
+
+		if pendingClose != "" {
+			j := strings.Index(line, pendingClose)
+			if j < 0 {
+				// Still inside the multi-line string for this entire line.
+				stripped[idx] = ""
+				continue
+			}
+			b.WriteString(pendingClose)
+			i = j + len(pendingClose)
+			pendingClose = ""
+		}
+
 		for i < len(line) {
 			c := line[i]
-			if inBlock {
+			if blockDepth > 0 {
 				if c == '*' && i+1 < len(line) && line[i+1] == '/' {
-					inBlock = false
+					blockDepth--
+					i += 2
+					continue
+				}
+				if nests && c == '/' && i+1 < len(line) && line[i+1] == '*' {
+					blockDepth++
 					i += 2
 					continue
 				}
@@ -131,18 +178,50 @@ func readSource(src, fileExt string) (stripped []string, stringLits [][]string) 
 			}
 			// block comment start
 			if c == '/' && i+1 < len(line) && line[i+1] == '*' {
-				inBlock = true
+				blockDepth = 1
 				i += 2
+				continue
+			}
+			// triple-quoted string (Python/Swift docstrings): contents are
+			// never collected into stringLits even when it closes on the
+			// same line — there's no single line to attribute a
+			// multi-line-capable literal's contents to, so every real
+			// caller of stringLits only ever needs the single-line form.
+			if (c == '"' || c == '\'') && i+2 < len(line) && line[i+1] == c && line[i+2] == c {
+				delim := line[i : i+3]
+				if j := strings.Index(line[i+3:], delim); j >= 0 {
+					b.WriteString(delim)
+					i += 3 + j + len(delim)
+					continue
+				}
+				b.WriteString(delim)
+				pendingClose = delim
+				i = len(line)
+				continue
+			}
+			// backtick string — unlike single/double quotes, this can
+			// legitimately span multiple lines, so it's tracked the same
+			// way as a triple-quoted string rather than reset at EOL.
+			if c == '`' {
+				b.WriteByte(c)
+				i++
+				if j := strings.IndexByte(line[i:], '`'); j >= 0 {
+					i += j + 1
+					b.WriteByte('`')
+					continue
+				}
+				pendingClose = "`"
+				i = len(line)
 				continue
 			}
 			// string literals — keep delimiters, blank the content in the
 			// stripped line but collect the raw content for stringLits.
-			if c == '"' || c == '\'' || c == '`' {
+			if c == '"' || c == '\'' {
 				b.WriteByte(c)
 				i++
 				contentStart := i
 				for i < len(line) {
-					if line[i] == '\\' && c != '`' && i+1 < len(line) {
+					if line[i] == '\\' && i+1 < len(line) {
 						i += 2
 						continue
 					}

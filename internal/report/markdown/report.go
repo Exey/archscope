@@ -150,9 +150,9 @@ func renderPlatform(b *strings.Builder, res *result.AnalysisResult, pg *scanner.
 		b.WriteString(s)
 	}
 
-	// Modules & Microservices file inventory (platform-scoped). Omitted
-	// under --skip-modules, matching the HTML report.
-	if !res.Scan.SkipModules {
+	// Modules & Microservices file inventory (platform-scoped). Only
+	// included under --render-modules, matching the HTML report.
+	if res.Scan.RenderModules {
 		if s := renderModuleDetailsMD(res, files); s != "" {
 			b.WriteString(s)
 		}

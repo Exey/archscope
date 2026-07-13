@@ -13,7 +13,7 @@
 //	--ref           git ref to check out when cloning a remote URL
 //	--depth         clone depth; 0 = full history (default: 0)
 //	--fail-on       exit 2 when findings exist at or above threshold: low|medium|high
-//	--skip-modules  omit the Modules & Microservices section (and its graphs)
+//	--render-modules  include the Modules & Microservices section (and its graphs); omitted by default
 package main
 
 import (
@@ -114,15 +114,15 @@ func main() {
 	fs.Usage = printUsage
 
 	var (
-		openFlag    bool
-		outputDir   string
-		format      string
-		cfgPath     string
-		ref         string
-		depth       int
-		folderAsTab bool
-		skipModules bool
-		failOn      string
+		openFlag      bool
+		outputDir     string
+		format        string
+		cfgPath       string
+		ref           string
+		depth         int
+		folderAsTab   bool
+		renderModules bool
+		failOn        string
 	)
 
 	fs.BoolVar(&openFlag, "open", false, "open the HTML report in the browser when done")
@@ -133,7 +133,7 @@ func main() {
 	fs.StringVar(&ref, "ref", "", "git ref for remote URLs (branch/tag/sha)")
 	fs.IntVar(&depth, "depth", 0, "clone depth for remote URLs; 0 = full history")
 	fs.BoolVar(&folderAsTab, "folder-as-tab", false, "show each top-level folder as its own platform tab")
-	fs.BoolVar(&skipModules, "skip-modules", false, "omit the Modules & Microservices section and its CDN-loaded graphs")
+	fs.BoolVar(&renderModules, "render-modules", false, "include the Modules & Microservices section and its CDN-loaded graphs (omitted by default)")
 	fs.StringVar(&failOn, "fail-on", "", "exit 2 when findings exist at or above threshold: low | medium | high")
 
 	if err := fs.Parse(flagArgs); err != nil {
@@ -155,7 +155,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := run(target, ref, depth, cfgPath, outputDir, format, failOn, openFlag, folderAsTab, skipModules); err != nil {
+	if err := run(target, ref, depth, cfgPath, outputDir, format, failOn, openFlag, folderAsTab, renderModules); err != nil {
 		if ec, ok := err.(*exitCodeError); ok {
 			if ec.msg != "" {
 				fmt.Fprintln(os.Stderr, ec.msg)
@@ -169,7 +169,7 @@ func main() {
 
 // run executes the full analysis. Deferred cleanup (clone temp dir removal)
 // fires on every return path because os.Exit in main would bypass it.
-func run(target, ref string, depth int, cfgPath, outputDir, format, failOn string, openFlag, folderAsTab, skipModules bool) error {
+func run(target, ref string, depth int, cfgPath, outputDir, format, failOn string, openFlag, folderAsTab, renderModules bool) error {
 	cfg := config.Load(cfgPath)
 	if outputDir == "" {
 		outputDir = cfg.Output.Dir
@@ -187,8 +187,8 @@ func run(target, ref string, depth int, cfgPath, outputDir, format, failOn strin
 	if folderAsTab {
 		cfg.FolderAsTab = true
 	}
-	if skipModules {
-		cfg.SkipModules = true
+	if renderModules {
+		cfg.RenderModules = true
 	}
 
 	src := fetch.FromArg(target, ref, depth)
@@ -297,7 +297,7 @@ Flags:
   --depth <n>         clone depth for remote URLs (0 = full history)
   --fail-on <lvl>     exit 2 when findings exist at or above: low | medium | high
   --folder-as-tab     show each top-level folder as its own tab
-  --skip-modules      omit the Modules & Microservices section (and its CDN-loaded graphs)
+  --render-modules    include the Modules & Microservices section (and its CDN-loaded graphs); omitted by default
 `)
 }
 

@@ -48,8 +48,8 @@ type Config struct {
 	MaxFilesAnalyze int       `json:"maxFilesAnalyze"`
 	GitCommitLimit  int       `json:"gitCommitLimit"`
 	HotspotCount    int       `json:"hotspotCount"`
-	FolderAsTab     bool      `json:"folderAsTab"` // split per-folder into separate tabs
-	SkipModules     bool      `json:"skipModules"` // omit the Modules & Microservices section
+	FolderAsTab     bool      `json:"folderAsTab"`   // split per-folder into separate tabs
+	RenderModules   bool      `json:"renderModules"` // include the Modules & Microservices section; omitted by default
 	Output          Output    `json:"output"`
 	Languages       Languages `json:"languages"`
 	Security        Security  `json:"security"`

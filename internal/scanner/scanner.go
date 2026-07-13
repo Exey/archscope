@@ -58,7 +58,7 @@ type ScanResult struct {
 	DevOpsLint     *DevOpsLint            // static analysis of Dockerfiles / compose / Helm (nil when none found)
 	K8sLint        *K8sLint               // static analysis of Kubernetes manifests/cluster dumps (nil when none found)
 	FolderAsTab    bool                   // true when --folder-as-tab was used
-	SkipModules    bool                   // true when --skip-modules was used
+	RenderModules  bool                   // true when --render-modules was used
 }
 
 // moduleRoot records a detected module-root directory and the language/project
@@ -199,7 +199,7 @@ func Scan(rootPath string, cfg config.Config, reg *langspec.Registry) (*ScanResu
 	res.DevOpsLint = ScanDevOpsLint(abs)
 	res.K8sLint = ScanK8sLint(abs)
 	res.FolderAsTab = cfg.FolderAsTab
-	res.SkipModules = cfg.SkipModules
+	res.RenderModules = cfg.RenderModules
 
 	return res, nil
 }

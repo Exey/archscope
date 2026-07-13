@@ -44,7 +44,7 @@ func nextGraphID() string {
 // ── Global architecture graph ─────────────────────────────────────────────────
 
 func renderGlobalArchGraph(res *result.AnalysisResult) string {
-	if res.Scan.SkipModules {
+	if !res.Scan.RenderModules {
 		return ""
 	}
 	type modInfo struct {

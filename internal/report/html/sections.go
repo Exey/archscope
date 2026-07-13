@@ -577,9 +577,9 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 				name = "(root)"
 			}
 			// The click-to-scroll target only exists when the Modules &
-			// Microservices section is actually rendered; under
-			// --skip-modules these are plain, non-clickable chips.
-			if res.Scan.SkipModules {
+			// Microservices section is actually rendered; without
+			// --render-modules these are plain, non-clickable chips.
+			if !res.Scan.RenderModules {
 				fmt.Fprintf(&b,
 					`<div class="as-pkg">`+
 						`<span class="as-pkg__name">%s %s</span>`+
@@ -681,12 +681,6 @@ func renderDevOpsSection(res *result.AnalysisResult) string {
 			b.WriteString(renderDevOpsColumn(a))
 		}
 		b.WriteString(`</div>`)
-	}
-
-	// Kubernetes sub-card: workload cards from a kubectl cluster dump
-	// or plain manifest files.
-	if !k8s.Empty() {
-		b.WriteString(renderK8sPodsCard(k8s))
 	}
 
 	b.WriteString(`</div>`)
@@ -862,30 +856,87 @@ const k8sMaxCardsPerKind = 30
 // k8sKindOrder fixes the display order of the per-kind subsections.
 var k8sKindOrder = []string{"StatefulSet", "Pod", "DaemonSet", "Deployment", "Job", "CronJob"}
 
-// renderK8sPodsCard renders the "Kubernetes" DevOps sub-card: an overall
-// pass-rate badge, then one subsection per workload kind (in k8sKindOrder,
-// each titled with its icon and count), holding a responsive grid of small
-// per-workload cards — sorted biggest resource footprint first and capped at
-// k8sMaxCardsPerKind — each showing aggregate container resources and a
-// kube-linter-inspired lint summary.
-func renderK8sPodsCard(lint *scanner.K8sLint) string {
+// renderInfraPlatforms renders the "🗄️ Infrastructure Platforms" section —
+// one collapsible as-plat-card per detected K8sCluster, kept folded by
+// default (unlike the language Platforms cards below it). It reuses the
+// exact same accordion component/JS as those cards, so opening one closes
+// any other open card — language or infrastructure — system-wide. Most
+// repos have exactly one cluster (everything scanned merges together); a
+// repo with several genuine "kubectl get everything" dumps gets one card
+// per detected cluster (see k8sAnchorMinKinds in k8slint.go).
+func renderInfraPlatforms(k8s *scanner.K8sLint) string {
+	if k8s.Empty() {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;margin-bottom:8px">`)
+	b.WriteString(`<span class="as-sub">🗄️ Infrastructure Platforms</span>`)
+	b.WriteString(`</div>`)
+	b.WriteString(`<div class="as-plat-cards" id="as-infra-platforms">`)
+	for i, c := range k8s.Clusters {
+		if len(c.Workloads) == 0 {
+			continue
+		}
+		scoreSum := 0
+		for _, w := range c.Workloads {
+			scoreSum += w.Score
+		}
+		avg := scoreSum / len(c.Workloads)
+		name := c.Name
+		if name == "" {
+			name = "Kubernetes"
+		}
+
+		fmt.Fprintf(&b, `<div class="as-plat-card" data-platcard="k%d">`, i)
+		b.WriteString(`<div class="as-plat-card__head">`)
+		b.WriteString(`<div class="as-plat-card__summary">`)
+		b.WriteString(`<span class="as-plat-card__abbr as-plat-k8s">☸️</span>`)
+		fmt.Fprintf(&b, `<span class="as-plat-card__name">%s</span>`, esc(name))
+		fmt.Fprintf(&b, `<span class="as-plat-card__loc">%d workload%s</span>`, len(c.Workloads), plural(len(c.Workloads), "", "s"))
+		fmt.Fprintf(&b, `<span class="as-plat-card__files">%d file%s</span>`, len(c.Files), plural(len(c.Files), "", "s"))
+		fmt.Fprintf(&b, `<span class="as-plat-card__stat as-plat-card__stat--arch" title="Average check pass rate across %d workload(s) (pass=1, warn=½, fail=0)">%d%% PASSED</span>`, len(c.Workloads), avg)
+		if n := len(c.ClusterFindings); n > 0 {
+			fmt.Fprintf(&b, `<span class="as-plat-card__stat as-plat-card__stat--api">%d finding%s</span>`, n, plural(n, "", "s"))
+		}
+		b.WriteString(`</div>`) // .as-plat-card__summary
+		b.WriteString(`<span class="as-plat-card__chevron">›</span>`)
+		b.WriteString(`</div>`) // .as-plat-card__head
+
+		b.WriteString(`<div class="as-plat-card__body">`)
+		b.WriteString(renderK8sClusterCard(c))
+		b.WriteString(`</div>`) // .as-plat-card__body
+		b.WriteString(`</div>`) // .as-plat-card
+	}
+	b.WriteString(`</div>`) // .as-plat-cards
+	return b.String()
+}
+
+// renderK8sClusterCard renders the full body for one detected K8sCluster: an
+// overall pass-rate badge, then one subsection per workload kind (in
+// k8sKindOrder, each titled with its icon and count), holding a responsive
+// grid of small per-workload cards — sorted biggest resource footprint first
+// and capped at k8sMaxCardsPerKind — each showing aggregate container
+// resources and a kube-linter-inspired lint summary, followed by
+// cross-cutting cluster findings and the Cluster Resources stat cards. This
+// is the body of one 🗄️ Infrastructure Platforms card (renderInfraPlatforms).
+func renderK8sClusterCard(c scanner.K8sCluster) string {
 	scoreSum := 0
 	byKind := map[string][]scanner.K8sWorkload{}
-	for _, w := range lint.Workloads {
+	for _, w := range c.Workloads {
 		scoreSum += w.Score
 		byKind[w.Kind] = append(byKind[w.Kind], w)
 	}
-	avg := scoreSum / len(lint.Workloads)
+	avg := scoreSum / len(c.Workloads)
 
 	var b strings.Builder
 	b.WriteString(`<div class="as-sub as-k8s-sub" style="margin-top:18px">`)
 	b.WriteString(`<span>☸️ Kubernetes</span>`)
 	fmt.Fprintf(&b, `<span class="as-dvo-score as-dvo-score--%s" title="Average check pass rate across %d workload(s) (pass=1, warn=½, fail=0)">%d%% PASSED</span>`,
-		dvoScoreClass(avg), len(lint.Workloads), avg)
+		dvoScoreClass(avg), len(c.Workloads), avg)
 	b.WriteString(`</div>`)
 
 	fmt.Fprintf(&b, `<div class="as-section__sub" style="margin-top:2px">%d workload%s linted from %s — practices inspired by kube-linter (resource limits, security context, probes, image pinning, host access). Sorted by resource footprint (CPU + memory + storage), biggest first.</div>`,
-		len(lint.Workloads), plural(len(lint.Workloads), "", "s"), esc(strings.Join(lint.Files, ", ")))
+		len(c.Workloads), plural(len(c.Workloads), "", "s"), esc(strings.Join(c.Files, ", ")))
 	for _, kind := range k8sKindOrder {
 		workloads := byKind[kind]
 		if len(workloads) == 0 {
@@ -913,8 +964,8 @@ func renderK8sPodsCard(lint *scanner.K8sLint) string {
 		}
 	}
 
-	b.WriteString(renderK8sClusterFindings(lint.ClusterFindings))
-	b.WriteString(renderK8sClusterStats(lint.Stats))
+	b.WriteString(renderK8sClusterFindings(c.ClusterFindings))
+	b.WriteString(renderK8sClusterStats(c.Stats))
 	return b.String()
 }
 
@@ -1936,9 +1987,14 @@ func renderDevOpsCharts(lint *scanner.DevOpsLint, k8s *scanner.K8sLint) string {
 	}
 	b.WriteString(`<div class="as-dvo-chart__note">Severity-weighted rollup of every evaluable check (critical ×10 … low ×1).</div></div>`)
 
+	k8sTab := ""
+	if !k8s.Empty() && len(k8s.Clusters) == 1 {
+		k8sTab = "k0"
+	}
+
 	b.WriteString(`<div class="as-dvo-chart as-dvo-chart--defect"><div class="as-dvo-chart__title">📊 Defect Density by Artifact</div>`)
 	if len(kinds) > 0 {
-		b.WriteString(renderDefectDensityBars(lint, kinds, defects))
+		b.WriteString(renderDefectDensityBars(lint, kinds, defects, k8sTab))
 	} else {
 		b.WriteString(`<p class="as-empty">No failing or warned checks — clean bill of health.</p>`)
 	}
@@ -1949,7 +2005,79 @@ func renderDevOpsCharts(lint *scanner.DevOpsLint, k8s *scanner.K8sLint) string {
 	b.WriteString(renderComplianceDomainList(scores, has))
 	b.WriteString(`<div class="as-dvo-chart__note">Domain average of related checks (pass=100%, warn=50%, fail=0%).</div></div>`)
 
+	b.WriteString(renderK8sSummaryChart(k8s, k8sTab))
+
 	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// renderK8sSummaryChart renders a compact "☸️ Kubernetes" summary tile in
+// the DevOps charts grid — total workload and other-resource counts plus
+// the overall pass rate — as a clickable link into the full breakdown now
+// living in 🗄️ Infrastructure Platforms (the detailed workload/resource
+// cards moved there; this is what stays behind in DevOps).
+func renderK8sSummaryChart(k8s *scanner.K8sLint, k8sTab string) string {
+	if k8s.Empty() {
+		return ""
+	}
+	scoreSum := 0
+	podCount := 0
+	var totalRAM float64
+	for _, w := range k8s.Workloads {
+		scoreSum += w.Score
+		replicas := w.Replicas
+		if replicas <= 0 {
+			replicas = 1 // DaemonSet/Job/CronJob: replica count is unknown, count the template once
+		}
+		podCount += replicas
+		agg := aggregateK8sResources(w)
+		mem := agg.memLim
+		if mem == 0 {
+			mem = agg.memReq
+		}
+		totalRAM += mem * float64(replicas)
+	}
+	avg := scoreSum / len(k8s.Workloads)
+
+	s := k8s.Stats
+	totalResources := s.Services + s.Ingresses + s.NetworkPolicies + s.ConfigMaps + s.PVCs +
+		s.StorageClasses + s.ServiceAccounts + s.Roles + s.RoleBindings + s.ClusterRoles +
+		s.ClusterRoleBindings + s.HPAs + s.PDBs
+	for _, op := range s.Operators {
+		totalResources += op.Count
+	}
+
+	attrs := ""
+	if k8sTab != "" {
+		attrs = fmt.Sprintf(` data-platcard-link="%s"`, esc(k8sTab))
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, `<a class="as-dvo-chart as-dvo-chart--kube" href="#as-infra-platforms"%s>`, attrs)
+	b.WriteString(`<div class="as-dvo-chart__title">☸️ Kubernetes</div>`)
+	b.WriteString(`<div class="as-dvo-kube-stats">`)
+	fmt.Fprintf(&b, `<div class="as-dvo-kube-stat"><span class="as-dvo-kube-stat__val">%d</span><span class="as-dvo-kube-stat__label">workload%s</span></div>`,
+		len(k8s.Workloads), plural(len(k8s.Workloads), "", "s"))
+	fmt.Fprintf(&b, `<div class="as-dvo-kube-stat"><span class="as-dvo-kube-stat__val">%d</span><span class="as-dvo-kube-stat__label">pod%s</span></div>`,
+		podCount, plural(podCount, "", "s"))
+	if totalRAM > 0 {
+		fmt.Fprintf(&b, `<div class="as-dvo-kube-stat"><span class="as-dvo-kube-stat__val">%s</span><span class="as-dvo-kube-stat__label">RAM requested</span></div>`,
+			esc(formatMemBytes(totalRAM)))
+	}
+	if s.PVCs > 0 {
+		fmt.Fprintf(&b, `<div class="as-dvo-kube-stat"><span class="as-dvo-kube-stat__val">%d</span><span class="as-dvo-kube-stat__label">disk%s (PVC)</span></div>`,
+			s.PVCs, plural(s.PVCs, "", "s"))
+	}
+	fmt.Fprintf(&b, `<div class="as-dvo-kube-stat"><span class="as-dvo-kube-stat__val">%d</span><span class="as-dvo-kube-stat__label">other resource%s</span></div>`,
+		totalResources, plural(totalResources, "", "s"))
+	fmt.Fprintf(&b, `<div class="as-dvo-kube-stat"><span class="as-dvo-kube-stat__val" style="color:%s">%d%%</span><span class="as-dvo-kube-stat__label">passed</span></div>`,
+		gradeColor(avg), avg)
+	if n := len(k8s.Clusters); n > 1 {
+		fmt.Fprintf(&b, `<div class="as-dvo-kube-stat"><span class="as-dvo-kube-stat__val">%d</span><span class="as-dvo-kube-stat__label">clusters</span></div>`, n)
+	}
+	b.WriteString(`</div>`)
+	b.WriteString(`<div class="as-dvo-chart__note">Click for the full per-workload breakdown in 🗄️ Infrastructure Platforms.</div>`)
+	b.WriteString(`</a>`)
 	return b.String()
 }
 
@@ -2094,7 +2222,13 @@ func devopsKindIcon(lint *scanner.DevOpsLint, kind string) string {
 // a handful of Dockerfile checks) — sizing segments relative to a shared max
 // would flatten every smaller kind's bar into an unreadable sliver. The
 // absolute count (relative volume) is still shown as a number after the bar.
-func renderDefectDensityBars(lint *scanner.DevOpsLint, order []string, counts map[string][4]int) string {
+// renderDefectDensityBars renders one bar per artifact kind. The Kubernetes
+// row (if present) is a clickable link into 🗄️ Infrastructure Platforms —
+// k8sTab is the target card's data-platcard value ("k0") when there's
+// exactly one detected cluster, or "" when there are zero or several (in
+// which case the link just scrolls to the section instead of forcing one
+// specific card open).
+func renderDefectDensityBars(lint *scanner.DevOpsLint, order []string, counts map[string][4]int, k8sTab string) string {
 	sevClass := [4]string{"fill-crit", "fill-bad", "fill-warn", "as-dvo-sev-low"}
 	sevLabel := [4]string{"Critical", "High", "Medium", "Low"}
 
@@ -2103,9 +2237,18 @@ func renderDefectDensityBars(lint *scanner.DevOpsLint, order []string, counts ma
 	for _, k := range order {
 		c := counts[k]
 		total := c[0] + c[1] + c[2] + c[3]
-		fmt.Fprintf(&b, `<div class="as-dvo-defect-row"><span class="as-dvo-defect-icon">%s</span>`+
+
+		tag, attrs := "div", ""
+		if k == k8sDefectKind {
+			tag = "a"
+			attrs = ` href="#as-infra-platforms"`
+			if k8sTab != "" {
+				attrs += fmt.Sprintf(` data-platcard-link="%s"`, esc(k8sTab))
+			}
+		}
+		fmt.Fprintf(&b, `<%s class="as-dvo-defect-row"%s><span class="as-dvo-defect-icon">%s</span>`+
 			`<span class="as-dvo-defect-name" title="%s">%s</span><div class="as-dvo-defect-track">`,
-			devopsKindIcon(lint, k), esc(k), esc(k))
+			tag, attrs, devopsKindIcon(lint, k), esc(k), esc(k))
 		for i, n := range c {
 			if n == 0 {
 				continue
@@ -2114,7 +2257,7 @@ func renderDefectDensityBars(lint *scanner.DevOpsLint, order []string, counts ma
 			fmt.Fprintf(&b, `<div class="as-dvo-defect-seg %s" style="width:%.1f%%" title="%s: %d"></div>`,
 				sevClass[i], pct, sevLabel[i], n)
 		}
-		fmt.Fprintf(&b, `</div><span class="as-dvo-defect-total">%d</span></div>`, total)
+		fmt.Fprintf(&b, `</div><span class="as-dvo-defect-total">%d</span></%s>`, total, tag)
 	}
 	b.WriteString(`</div>`)
 	b.WriteString(`<div class="as-dvo-defect-legend">`)
@@ -3249,10 +3392,7 @@ func renderTabs(res *result.AnalysisResult) string {
 		headerStats[panel.Platform] = hs
 	}
 
-	// --skip-modules drops the Modules & Microservices section (and its
-	// graphs), so there's no longer a reason to keep platforms collapsed by
-	// default — unfold everything regardless of platform count.
-	autoOpen := len(platforms) <= 2 || res.Scan.SkipModules
+	autoOpen := len(platforms) <= 2
 
 	var b strings.Builder
 	b.WriteString(`<div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;margin-bottom:8px">`)
@@ -3425,10 +3565,10 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 	// 8. 🛡️ Danger Details
 	b.WriteString(renderPlatformSecurity(res, pg.Platform, badge))
 
-	// 9. 📂 Modules & Microservices — per-platform file inventory. Omitted
-	// entirely under --skip-modules (its declaration graph is CDN-loaded,
-	// and the section itself can be large for big platforms).
-	if !res.Scan.SkipModules {
+	// 9. 📂 Modules & Microservices — per-platform file inventory. Only
+	// included under --render-modules (its declaration graph is
+	// CDN-loaded, and the section itself can be large for big platforms).
+	if res.Scan.RenderModules {
 		b.WriteString(renderModuleDetailsPlatform(res.RootPath, files, badge))
 	}
 
@@ -3545,7 +3685,7 @@ func platformFolderSuffix(p langspec.Platform) string {
 }
 
 // renderMicroservicesSection renders the module/package grid card.
-func renderMicroservicesSection(pg *scanner.PlatformGroup, files []*parser.ParsedFile, skipModules bool) string {
+func renderMicroservicesSection(pg *scanner.PlatformGroup, files []*parser.ParsedFile, renderModules bool) string {
 	if len(pg.Modules) == 0 {
 		return ""
 	}
@@ -3565,9 +3705,9 @@ func renderMicroservicesSection(pg *scanner.PlatformGroup, files []*parser.Parse
 			name = "(root)"
 		}
 		// #mod-<name> only exists when Modules & Microservices is actually
-		// rendered; under --skip-modules this is a plain, non-linking card.
+		// rendered; without --render-modules this is a plain, non-linking card.
 		tag, attrs := "a", fmt.Sprintf(` href="#mod-%s"`, esc(anchorID(m)))
-		if skipModules {
+		if !renderModules {
 			tag, attrs = "div", ""
 		}
 		fmt.Fprintf(&b, `<%s class="as-mod"%s><div class="as-mod__name">%s</div><div class="as-mod__meta">%d %s · %s loc</div></%s>`,
@@ -3599,7 +3739,7 @@ func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup,
 	if h := renderHotspots(res, pg); h != "" {
 		parts = append(parts, h)
 	}
-	if m := renderMicroservicesSection(pg, files, res.Scan.SkipModules); m != "" {
+	if m := renderMicroservicesSection(pg, files, res.Scan.RenderModules); m != "" {
 		parts = append(parts, m)
 	}
 	if t := renderTodosFixmes(files); t != "" {

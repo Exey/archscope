@@ -154,8 +154,33 @@ func (s K8sClusterStats) Empty() bool {
 		s.HPAs == 0 && s.PDBs == 0 && len(s.Operators) == 0
 }
 
+// K8sCluster is one logical cluster/environment's worth of scanned
+// resources. Most repos have exactly one — every scanned file merges
+// together, as before k8sAnchorMinKinds existed. A repo with two or more
+// genuine "kubectl get everything" dumps (high resource-kind diversity in
+// one file — the signature of `kubectl get $(api-resources) -o yaml`, as
+// opposed to a single-kind slice like `kubectl get deployments -o yaml`)
+// gets one Cluster per such dump's directory, with every other file's
+// objects attributed to the dump directory with the longest matching path
+// prefix.
+type K8sCluster struct {
+	Name            string // directory-derived label; "" for the (only) default cluster
+	Dir             string // relative directory path from scan root ("." for root)
+	Workloads       []K8sWorkload
+	Stats           K8sClusterStats
+	NamespaceTiers  map[string]K8sNamespaceTier
+	ClusterFindings []K8sClusterFinding
+	Files           []string
+	Truncated       bool
+}
+
 // K8sLint is the full result of scanning one or more cluster dumps.
 type K8sLint struct {
+	Clusters []K8sCluster // one per detected cluster/environment (usually just one)
+
+	// Flat aggregates across every Cluster, for callers that don't need the
+	// per-cluster split: DevOps charts/health-score/defect-density, SARIF
+	// export, and the repo-wide security findings list.
 	Workloads       []K8sWorkload
 	Stats           K8sClusterStats
 	Files           []string
@@ -254,79 +279,254 @@ func ScanK8sLint(rootPath string) *K8sLint {
 		return nil
 	}
 
-	// Pass 1: collect all items, deduplicating across files.
-	var allItems []k8sRawItem
-	var workloadFiles []string
-	seen := make(map[string]bool)
+	// Pass 1: parse every file once, tracking each file's distinct
+	// resource-kind count — the signal used to tell a genuine
+	// "kubectl get everything" dump (many kinds in one file) apart from a
+	// slice file (`kubectl get deployments -o yaml`: one kind, many items).
+	fileItems := map[string][]k8sRawItem{}
+	fileKinds := map[string]map[string]bool{}
 	for _, f := range files {
 		lines, ok := readLarge(f, k8sLintMaxFileSize)
 		if !ok {
 			continue
 		}
-		fileHasWorkload := false
-		for _, raw := range scanDocuments(lines) {
+		items := scanDocuments(lines)
+		if len(items) == 0 {
+			continue
+		}
+		fileItems[f] = items
+		kinds := map[string]bool{}
+		for _, it := range items {
+			kinds[it.Kind] = true
+		}
+		fileKinds[f] = kinds
+	}
+
+	// Anchor files: high kind-diversity → a genuine cluster-dump. Fewer
+	// than two anchors means every file belongs to one cluster (today's
+	// behavior, unchanged — the overwhelmingly common case).
+	var anchorDirs []string
+	seenAnchorDir := map[string]bool{}
+	for _, f := range files {
+		if len(fileKinds[f]) >= k8sAnchorMinKinds {
+			dir := filepath.Dir(f)
+			if !seenAnchorDir[dir] {
+				seenAnchorDir[dir] = true
+				anchorDirs = append(anchorDirs, dir)
+			}
+		}
+	}
+	sort.Strings(anchorDirs)
+
+	fileGroup := map[string]string{}
+	if len(anchorDirs) < 2 {
+		for _, f := range files {
+			fileGroup[f] = ""
+		}
+	} else {
+		// Every file — anchor or not — joins whichever anchor directory
+		// shares the longest path prefix with it, so slice files and loose
+		// manifests scattered around an anchor's subtree still land in the
+		// right cluster; ties fall to the alphabetically-first anchor.
+		for _, f := range files {
+			dir := filepath.Dir(f)
+			best, bestLen := anchorDirs[0], -1
+			for _, a := range anchorDirs {
+				if n := commonPathPrefixLen(dir, a); n > bestLen {
+					best, bestLen = a, n
+				}
+			}
+			fileGroup[f] = best
+		}
+	}
+
+	// Pass 2: dedup + bucket items per group. Dedup MUST be scoped per
+	// group — the same kind/namespace/name in two different clusters are
+	// two different objects, not duplicates of one.
+	groupItems := map[string][]k8sRawItem{}
+	groupFiles := map[string][]string{}
+	groupWorkloadFiles := map[string][]string{}
+	var groupOrder []string
+	seenGroup := map[string]bool{}
+	seen := map[string]bool{}
+	for _, f := range files {
+		items, ok := fileItems[f]
+		if !ok {
+			continue
+		}
+		group := fileGroup[f]
+		fileHasWorkload, fileHasAny := false, false
+		for _, raw := range items {
 			meta := mapField(raw.Item, "metadata")
 			name, _ := strField(meta, "name")
 			ns, _ := strField(meta, "namespace")
 			// A cluster dump split across multiple `kubectl get` invocations
 			// commonly re-exports the same object more than once; keep only
 			// the first occurrence so it isn't double-counted.
-			key := raw.Kind + "/" + ns + "/" + name
+			key := group + "\x00" + raw.Kind + "/" + ns + "/" + name
 			if seen[key] {
 				continue
 			}
 			seen[key] = true
 			raw.File = f // absolute path for VSCode deep links
-			allItems = append(allItems, raw)
+			groupItems[group] = append(groupItems[group], raw)
+			fileHasAny = true
 			if k8sTargetKinds[raw.Kind] {
 				fileHasWorkload = true
 			}
 		}
+		if fileHasAny {
+			if !seenGroup[group] {
+				seenGroup[group] = true
+				groupOrder = append(groupOrder, group)
+			}
+			groupFiles[group] = append(groupFiles[group], f)
+		}
 		if fileHasWorkload {
-			workloadFiles = append(workloadFiles, f)
+			groupWorkloadFiles[group] = append(groupWorkloadFiles[group], f)
 		}
 	}
+	sort.Strings(groupOrder)
 
-	// Pass 2: route items to workloads or cluster stats.
-	var workloads []K8sWorkload
-	var stats K8sClusterStats
-	for _, raw := range allItems {
-		if k8sTargetKinds[raw.Kind] {
-			workloads = append(workloads, workloadsFromItem(raw.Kind, raw.Item)...)
-		} else {
-			statsFromItem(raw.Kind, raw.Item, &stats)
+	// Pass 3: per group, route items to workloads/stats and run the
+	// resource-graph cross-cutting checks.
+	var clusters []K8sCluster
+	for _, group := range groupOrder {
+		items := groupItems[group]
+		var workloads []K8sWorkload
+		var stats K8sClusterStats
+		for _, raw := range items {
+			if k8sTargetKinds[raw.Kind] {
+				workloads = append(workloads, workloadsFromItem(raw.Kind, raw.Item)...)
+			} else {
+				statsFromItem(raw.Kind, raw.Item, &stats)
+			}
 		}
+		if len(workloads) == 0 {
+			continue
+		}
+		graph := buildK8sGraph(items)
+		clusterFindings := runCrossChecks(graph)
+
+		sort.Slice(workloads, func(i, j int) bool {
+			if workloads[i].Score != workloads[j].Score {
+				return workloads[i].Score < workloads[j].Score // worst first
+			}
+			if workloads[i].Namespace != workloads[j].Namespace {
+				return workloads[i].Namespace < workloads[j].Namespace
+			}
+			return workloads[i].Name < workloads[j].Name
+		})
+		truncated := false
+		if len(workloads) > k8sLintMaxWorkloads {
+			workloads = workloads[:k8sLintMaxWorkloads]
+			truncated = true
+		}
+		clusters = append(clusters, K8sCluster{
+			Name:            k8sClusterName(group),
+			Dir:             relDir(rootPath, group),
+			Workloads:       workloads,
+			Stats:           stats,
+			NamespaceTiers:  graph.nsTier,
+			ClusterFindings: clusterFindings,
+			Files:           relPaths(rootPath, groupWorkloadFiles[group]),
+			Truncated:       truncated,
+		})
 	}
-	if len(workloads) == 0 {
+	if len(clusters) == 0 {
 		return nil
 	}
 
-	// Pass 3: build resource graph and run cross-cutting checks.
-	graph := buildK8sGraph(allItems)
-	clusterFindings := runCrossChecks(graph)
+	lint := &K8sLint{Clusters: clusters, NamespaceTiers: map[string]K8sNamespaceTier{}}
+	for _, c := range clusters {
+		lint.Workloads = append(lint.Workloads, c.Workloads...)
+		lint.Files = append(lint.Files, c.Files...)
+		lint.Truncated = lint.Truncated || c.Truncated
+		lint.ClusterFindings = append(lint.ClusterFindings, c.ClusterFindings...)
+		for ns, tier := range c.NamespaceTiers {
+			lint.NamespaceTiers[ns] = tier
+		}
+		lint.Stats = mergeK8sClusterStats(lint.Stats, c.Stats)
+	}
+	return lint
+}
 
-	sort.Slice(workloads, func(i, j int) bool {
-		if workloads[i].Score != workloads[j].Score {
-			return workloads[i].Score < workloads[j].Score // worst first
-		}
-		if workloads[i].Namespace != workloads[j].Namespace {
-			return workloads[i].Namespace < workloads[j].Namespace
-		}
-		return workloads[i].Name < workloads[j].Name
-	})
-	truncated := false
-	if len(workloads) > k8sLintMaxWorkloads {
-		workloads = workloads[:k8sLintMaxWorkloads]
-		truncated = true
+// k8sAnchorMinKinds is the distinct-kind threshold (within one file) that
+// marks it as a genuine "kubectl get everything" cluster dump rather than a
+// single-kind slice file.
+const k8sAnchorMinKinds = 6
+
+// commonPathPrefixLen counts matching leading path segments between two
+// directories, used to attribute a non-anchor file to its nearest anchor.
+func commonPathPrefixLen(a, b string) int {
+	as := strings.Split(filepath.ToSlash(a), "/")
+	bs := strings.Split(filepath.ToSlash(b), "/")
+	n := 0
+	for n < len(as) && n < len(bs) && as[n] == bs[n] {
+		n++
 	}
-	return &K8sLint{
-		Workloads:       workloads,
-		Stats:           stats,
-		Files:           relPaths(rootPath, workloadFiles),
-		Truncated:       truncated,
-		NamespaceTiers:  graph.nsTier,
-		ClusterFindings: clusterFindings,
+	return n
+}
+
+// k8sClusterName derives a display label for a cluster group from its
+// anchor directory; "" (the single-cluster case) keeps the default
+// "Kubernetes" label used by the renderer.
+func k8sClusterName(group string) string {
+	if group == "" || group == "." {
+		return ""
 	}
+	return filepath.Base(group)
+}
+
+// relDir renders dir relative to root for display, falling back to dir
+// itself if it isn't actually inside root.
+func relDir(root, dir string) string {
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		return dir
+	}
+	return rel
+}
+
+// mergeK8sClusterStats sums two cluster-stats snapshots — scalar counts add,
+// detail slices concatenate, and Operators merge by kind.
+func mergeK8sClusterStats(a, b K8sClusterStats) K8sClusterStats {
+	a.Services += b.Services
+	a.ServicesPrivPorts += b.ServicesPrivPorts
+	a.Ingresses += b.Ingresses
+	a.IngressesTLS += b.IngressesTLS
+	a.NetworkPolicies += b.NetworkPolicies
+	a.IngressDetails = append(a.IngressDetails, b.IngressDetails...)
+	a.ServiceDetails = append(a.ServiceDetails, b.ServiceDetails...)
+	a.ConfigMaps += b.ConfigMaps
+	a.PVCs += b.PVCs
+	a.PVCsWithStorageClass += b.PVCsWithStorageClass
+	a.StorageClasses += b.StorageClasses
+	a.ServiceAccounts += b.ServiceAccounts
+	a.Roles += b.Roles
+	a.RolesWildcard += b.RolesWildcard
+	a.RoleBindings += b.RoleBindings
+	a.ClusterRoles += b.ClusterRoles
+	a.ClusterRolesWildcard += b.ClusterRolesWildcard
+	a.ClusterRoleBindings += b.ClusterRoleBindings
+	a.HPAs += b.HPAs
+	a.PDBs += b.PDBs
+	for _, op := range b.Operators {
+		merged := false
+		for i := range a.Operators {
+			if a.Operators[i].Kind == op.Kind {
+				a.Operators[i].Count += op.Count
+				a.Operators[i].AvailableReplicas += op.AvailableReplicas
+				a.Operators[i].HasAvailableReplicas = a.Operators[i].HasAvailableReplicas || op.HasAvailableReplicas
+				merged = true
+				break
+			}
+		}
+		if !merged {
+			a.Operators = append(a.Operators, op)
+		}
+	}
+	return a
 }
 
 // readLarge reads path fully, rejecting files above maxSize, and returns it
