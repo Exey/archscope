@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/exey/archscope/internal/langspec"
+	"github.com/exey/archscope/internal/modules/traffic"
 	"github.com/exey/archscope/internal/parser"
 )
 
@@ -120,6 +121,14 @@ func swiftParseHook(filePath string, lines []string, pfAny any) {
 	setIfNonZero(pf.Extra, "oopGenerics", generics)
 	setIfNonZero(pf.Extra, "oopOverride", overrides)
 	setIfNonZero(pf.Extra, "oopNSObject", nsobject)
+
+	in, out := traffic.ExtractSwiftTraffic(filePath, lines)
+	if len(in) > 0 {
+		pf.Extra["trafficInbound"] = in
+	}
+	if len(out) > 0 {
+		pf.Extra["trafficOutbound"] = out
+	}
 }
 
 var reSwiftGenericFunc = regexp.MustCompile(`\bfunc\s+\w+\s*<`)

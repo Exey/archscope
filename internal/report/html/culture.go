@@ -22,6 +22,7 @@ import (
 	"github.com/exey/archscope/internal/modules/dddmodel"
 	"github.com/exey/archscope/internal/modules/oopvspop"
 	"github.com/exey/archscope/internal/modules/speccoverage"
+	"github.com/exey/archscope/internal/modules/traffic"
 	"github.com/exey/archscope/internal/result"
 	"github.com/exey/archscope/internal/scanner"
 	"github.com/exey/archscope/internal/security"
@@ -131,8 +132,14 @@ type cultureRow struct {
 	csScore, csWeight        int
 	csHasData                bool
 
-	// Security: HIGH/MEDIUM findings out of every rule ArchScope checked.
+	// Security: findings-based score (HIGH/MEDIUM out of every rule ArchScope
+	// checked) + 🩺 Traffic Health, weighted 30% when traffic data exists.
 	high, med, secTotalRules int
+	secFindingsScore         int
+	secFindingsWeight        int
+	trafficHealthScore       int
+	hasTrafficHealth         bool
+	trafficHealthWeight      int
 
 	// Performance.
 	n3, n2 int
@@ -399,6 +406,9 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 	// Module-derived signals.
 	dddOrPopSignal := -1    // DDD or POP score specifically, 0–100
 	archPatternSignal := -1 // client arch-pattern confidence, 0–100
+	var specRes *speccoverage.Result
+	var trafficRes traffic.Result
+	hasTrafficData := false
 	for _, p := range panels {
 		switch v := p.RawResult.(type) {
 		case dddmodel.Result:
@@ -427,6 +437,12 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 			if v.HasData() {
 				r.specReady = v.SpecReady
 				r.hasSpec = true
+			}
+			specRes = &v
+		case traffic.Result:
+			if v.HasData() {
+				trafficRes = v
+				hasTrafficData = true
 			}
 		case constructs.DesignPatternResult:
 			for _, m := range v.Matches {
@@ -567,8 +583,27 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 		(r.lfScore*r.lfWeight+r.ltScore*r.ltWeight+r.dsScore*dsWeightPct+r.algoScore*algoWeightPct+r.csScore*r.csWeight+50)/100,
 		5, 100)
 
-	// Security: absolute HIGH findings dominate (a single HIGH is a flag).
-	r.security = clampInt(100-(r.high*7+r.med*2), 0, 100)
+	// Security (0–100): findings-based score (absolute HIGH findings
+	// dominate — a single HIGH is a flag) + 🩺 Traffic Health, weighted 30%
+	// whenever this platform has traffic data (Traffic Health's own TLS
+	// check was removed to avoid double-counting the same signal here).
+	r.secFindingsScore = clampInt(100-(r.high*7+r.med*2), 0, 100)
+	if hasTrafficData {
+		if th, ok := computeTrafficHealth(trafficRes, specRes, langspec.Default.IsClientPlatform(pg.Platform)); ok {
+			r.trafficHealthScore = th.overall
+			r.hasTrafficHealth = true
+		}
+	}
+	if r.hasTrafficHealth {
+		r.secFindingsWeight = 70
+		r.trafficHealthWeight = 30
+	} else {
+		r.secFindingsWeight = 100
+		r.trafficHealthWeight = 0
+	}
+	r.security = clampInt(
+		(r.secFindingsScore*r.secFindingsWeight+r.trafficHealthScore*r.trafficHealthWeight+50)/100,
+		0, 100)
 
 	// Performance: Big-O health, with an extra dent per O(N³)+ hotspot.
 	perf := r.perf
@@ -649,24 +684,24 @@ func designTip(r cultureRow) string {
 	var base string
 	switch {
 	case r.dddScore > 0:
-		base = fmt.Sprintf("DDD %d%%", r.dddScore)
+		base = fmt.Sprintf("%d%% DDD", r.dddScore)
 	case r.popScore > 0:
-		base = fmt.Sprintf("POP %d%%", r.popScore)
+		base = fmt.Sprintf("%d%% POP", r.popScore)
 	case r.hasLangRichness && r.langRichnessWeight == 0:
 		// No DDD/POP: 🎖️ Language Richness replaces Base entirely.
-		base = fmt.Sprintf("🎖️ Richness %d%%", r.langRichness)
+		base = fmt.Sprintf("🎖️ %d%% Richness", r.langRichness)
 	case r.hasDesign:
 		base = "arch confidence"
 	default:
 		base = "no signal"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "<div>Base %d%% (%s → %d%% W)</div>", r.designBase, base, r.designBaseWeight)
+	fmt.Fprintf(&b, "<div>🍱 %s (%d%% W)</div>", base, r.designBaseWeight)
 	if r.langRichnessWeight > 0 {
-		fmt.Fprintf(&b, "<div>🎖️ Richness %d%% (%d%% raw → %d%% W)</div>", r.langRichnessScore, r.langRichness, r.langRichnessWeight)
+		fmt.Fprintf(&b, "<div>🎖️ %d%% Richness (%d%% W)</div>", r.langRichnessScore, r.langRichnessWeight)
 	}
-	fmt.Fprintf(&b, "<div>Arch Layers %d%% (%d layer(s) → %d%% W)</div>", r.archLayerScore, r.archLayers, archWeightPct)
-	fmt.Fprintf(&b, "<div>Design Patterns %d%% (%d pattern(s) → %d%% W).</div>", r.patternScore, r.patternCount, patternWeightPct)
+	fmt.Fprintf(&b, "<div>🏗️ %d%% Arch Layers (%d%% W)</div>", r.archLayerScore, archWeightPct)
+	fmt.Fprintf(&b, "<div>🧩 %d%% Patterns (%d%% W).</div>", r.patternScore, patternWeightPct)
 	return b.String()
 }
 
@@ -675,26 +710,31 @@ func qualityTip(r cultureRow) string {
 		return "<div>DevOps: static-analysis pass rate across Dockerfile/Compose/Helm.</div>"
 	}
 	return fmt.Sprintf(
-		"<div>Long Func %d%% (%d god func), %d TODO/FIXME → %d%% W</div>"+
-			"<div>Long Types %d%% (%d big type(s), longest %d lines → %d%% W)</div>"+
-			"<div>Data Structures %d%% (%s → %d%% W)</div>"+
-			"<div>Algorithms %d%% (%s → %d%% W)</div>"+
-			"<div>Code Structure %d%% → %d%% W).</div>",
-		r.lfScore, r.godFuncs, r.todos, r.lfWeight,
-		r.ltScore, r.bigTypes, r.maxType, r.ltWeight,
-		r.dsScore, boolWord(r.hasDataStructures, "≥1", "none"), dsWeightPct,
-		r.algoScore, boolWord(r.hasAlgorithms, "≥1", "none"), algoWeightPct,
-		r.csScore, r.csWeight)
+		"<div>💻 %d%% Code Structure (%d%% W).</div>"+
+			"<div>🌳 %d%% Data Structures (%d%% W)</div>"+
+			"<div>🔀 %d%% Algorithms (%d%% W)</div>"+
+			"<div>📐 %d%% Big Types (%d%% W)</div>"+
+			"<div>📏 %d%% Long Func (%d%% W)</div>",
+		r.csScore, r.csWeight,
+		r.dsScore, dsWeightPct,
+		r.algoScore, algoWeightPct,
+		r.ltScore, r.ltWeight,
+		r.lfScore, r.lfWeight,
+	)
 }
 
 func securityTip(r cultureRow) string {
 	if r.isDevOps {
 		return "<div>DevOps: security-context / privilege checks from the DevOps Health Score.</div>"
 	}
-	return fmt.Sprintf(
-		"<div>%d/%d HIGH+MEDIUM findings out of every rule checked</div><div>(%d HIGH, %d MEDIUM)</div>"+
-			"<div>A single HIGH is a red flag; 10+ suggests no SAST in CI.</div>",
-		r.high+r.med, r.secTotalRules, r.high, r.med)
+	var b strings.Builder
+	fmt.Fprintf(&b,
+		"<div>🛡️ %d/%d Dangers %d%% (%d%% W)</div>",
+		r.high+r.med, r.secTotalRules, r.secFindingsScore, r.secFindingsWeight)
+	if r.hasTrafficHealth {
+		fmt.Fprintf(&b, "<div>🛜 %d%% Traffic (%d%% W)</div>", r.trafficHealthScore, r.trafficHealthWeight)
+	}
+	return b.String()
 }
 
 func perfTip(r cultureRow) string {
@@ -702,8 +742,7 @@ func perfTip(r cultureRow) string {
 		return "<div>DevOps: resource limits / budgets (neutral proxy).</div>"
 	}
 	return fmt.Sprintf(
-		"<div>Big-O health, %d O(N³)+ and %d O(N²) hotspot(s)</div>"+
-			"<div>Nested loops over large data suggest brute-force over hashing/indexing.</div>",
+		"<div>🅾️ %d O(N³)+ / %d O(N²)</div>",
 		r.n3, r.n2)
 }
 

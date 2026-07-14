@@ -2,6 +2,7 @@ package lang
 
 import (
 	"github.com/exey/archscope/internal/langspec"
+	"github.com/exey/archscope/internal/modules/traffic"
 	"github.com/exey/archscope/internal/parser"
 )
 
@@ -46,5 +47,28 @@ func init() {
 				"enum class": string(parser.DeclEnum),
 			},
 		},
+
+		ParseHook: kotlinParseHook,
 	})
+}
+
+// kotlinParseHook runs traffic detection (Ktor/Spring routes, Retrofit calls,
+// URL literals) and stores results in Extra["trafficInbound"]/["trafficOutbound"].
+func kotlinParseHook(filePath string, lines []string, pfAny any) {
+	pf, ok := pfAny.(*parser.ParsedFile)
+	if !ok {
+		return
+	}
+	in, out := traffic.ExtractKotlinTraffic(filePath, lines)
+	if len(in) > 0 || len(out) > 0 {
+		if pf.Extra == nil {
+			pf.Extra = map[string]any{}
+		}
+		if len(in) > 0 {
+			pf.Extra["trafficInbound"] = in
+		}
+		if len(out) > 0 {
+			pf.Extra["trafficOutbound"] = out
+		}
+	}
 }

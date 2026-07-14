@@ -292,6 +292,22 @@ code,.mono{font-family:var(--mono)}
 .as-cx__bigo--3{color:#d1590a}
 .as-cx__bigo--4{color:#c0392b}
 
+/* Traffic Health summary */
+.as-th{margin:0 0 16px; padding:12px 14px; background:var(--bg-elev-2); border:1px solid var(--border); border-radius:var(--radius-sm)}
+.as-th__head{display:flex; align-items:baseline; gap:10px; margin-bottom:10px}
+.as-th__score{font-size:22px; font-weight:700; font-family:var(--mono)}
+.as-th__label{font-size:13px; font-weight:600; color:var(--text-dim)}
+.as-th__grid{display:grid; grid-template-columns:repeat(3,1fr); gap:10px 16px}
+@media (max-width:640px){.as-th__grid{grid-template-columns:1fr}}
+.as-th__cat{min-width:0}
+.as-th__cat-head{display:flex; justify-content:space-between; font-size:11.5px; margin-bottom:4px}
+.as-th__cat-val{font-family:var(--mono); font-weight:600}
+.as-th__bar{height:6px; background:var(--bg-inset); border-radius:999px; overflow:hidden}
+.as-th__fill{height:100%; border-radius:999px}
+.as-th__notes{margin-top:12px; padding-top:10px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:5px}
+.as-th__note{font-size:11.5px; color:var(--text-dim); line-height:1.5}
+.as-th__note b{color:var(--text)}
+
 /* Language Richness module */
 .as-lr{display:flex; flex-direction:column; gap:10px}
 .as-lr__row{display:flex; align-items:center; gap:10px}

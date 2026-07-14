@@ -1,12 +1,14 @@
-// Package traffic detects inbound and outbound connection signals in Go and
-// Python source files: HTTP routes, gRPC services, WebSocket, GraphQL,
-// Redis, Kafka, NATS, and AMQP endpoints — from string literals only.
+// Package traffic detects inbound and outbound connection signals in Go,
+// Python, Java, Swift, Kotlin, and TypeScript/JavaScript source files: HTTP
+// routes, gRPC services, WebSocket, GraphQL, Redis, Kafka, NATS, AMQP, and
+// (Swift only, ported from ArchSwiftScope's TrafficScanner) raw-TCP endpoints
+// — from string literals only.
 //
 // Detection is a two-stage pipeline:
 //
-//  1. ParseHooks in internal/lang/golang.go and internal/lang/python.go scan
-//     raw source lines and store results in pf.Extra["trafficInbound"] and
-//     pf.Extra["trafficOutbound"] as []Entry.
+//  1. ParseHooks in internal/lang/{golang,python,java,swift,kotlin,typescript}.go
+//     scan raw source lines and store results in pf.Extra["trafficInbound"]
+//     and pf.Extra["trafficOutbound"] as []Entry.
 //
 //  2. This module's Analyze reads those slices from every ParsedFile, deduplicates
 //     by (URI, Protocol), and returns a Result with sorted Inbound and Outbound slices.
@@ -32,9 +34,15 @@ func init() { modules.Default.Register(Module{}) }
 // Module is the self-registering traffic analyser.
 type Module struct{}
 
-func (Module) ID() string              { return "traffic" }
-func (Module) Title() string           { return "Traffic" }
-func (Module) AppliesTo(l string) bool { return l == "go" || l == "python" || l == "java" }
+func (Module) ID() string    { return "traffic" }
+func (Module) Title() string { return "Traffic" }
+func (Module) AppliesTo(l string) bool {
+	switch l {
+	case "go", "python", "java", "swift", "kotlin", "ts":
+		return true
+	}
+	return false
+}
 
 // Entry is one detected inbound or outbound connection signal.
 type Entry struct {

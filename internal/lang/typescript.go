@@ -2,6 +2,7 @@ package lang
 
 import (
 	"github.com/exey/archscope/internal/langspec"
+	"github.com/exey/archscope/internal/modules/traffic"
 	"github.com/exey/archscope/internal/parser"
 )
 
@@ -47,5 +48,28 @@ func init() {
 				"type":      string(parser.DeclType),
 			},
 		},
+
+		ParseHook: tsParseHook,
 	})
+}
+
+// tsParseHook runs traffic detection (Express/Fastify routes, URL literals)
+// and stores results in Extra["trafficInbound"]/["trafficOutbound"].
+func tsParseHook(filePath string, lines []string, pfAny any) {
+	pf, ok := pfAny.(*parser.ParsedFile)
+	if !ok {
+		return
+	}
+	in, out := traffic.ExtractTypeScriptTraffic(filePath, lines)
+	if len(in) > 0 || len(out) > 0 {
+		if pf.Extra == nil {
+			pf.Extra = map[string]any{}
+		}
+		if len(in) > 0 {
+			pf.Extra["trafficInbound"] = in
+		}
+		if len(out) > 0 {
+			pf.Extra["trafficOutbound"] = out
+		}
+	}
 }

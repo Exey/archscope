@@ -3608,10 +3608,8 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 			break
 		}
 	}
-	if specRes != nil && len(trafficPanels) > 0 {
-		b.WriteString(renderTrafficWithSpec(trafficPanels, specRes, badge))
-	} else {
-		b.WriteString(renderModulePanels(trafficPanels, badge))
+	if len(trafficPanels) > 0 {
+		b.WriteString(renderTrafficWithSpec(trafficPanels, specRes, badge, langspec.Default.IsClientPlatform(pg.Platform)))
 	}
 
 	// 5. 💡 Module Insights — Hotspots · Modules · TODOs · Longest Functions
@@ -4110,20 +4108,26 @@ func normSpecURI(uri string) string {
 	return strings.ToLower(uri)
 }
 
-// renderTrafficWithSpec renders the traffic panels with an extra SPEC COV
-// column (✅ in spec · ❓ undocumented) on inbound routes.
-func renderTrafficWithSpec(panels []result.ModulePanel, spec *speccoverage.Result, badge string) string {
+// renderTrafficWithSpec renders the traffic panels with a 🩺 Traffic Health
+// summary on top and, when spec is available, an extra SPEC COV column (✅ in
+// spec · ❓ undocumented) on inbound routes. spec may be nil (no spec files
+// found) — the SPEC COV column and Traffic Health's Documentation sub-score
+// are simply omitted in that case.
+func renderTrafficWithSpec(panels []result.ModulePanel, spec *speccoverage.Result, badge string, isClientPlatform bool) string {
 	// Build a set of normalised paths for spec-covered operations.
-	coveredPaths := map[string]bool{}
-	for _, op := range spec.Covered {
-		coveredPaths[normSpecURI(op.Path)] = true
+	var coveredPaths map[string]bool
+	if spec != nil {
+		coveredPaths = map[string]bool{}
+		for _, op := range spec.Covered {
+			coveredPaths[normSpecURI(op.Path)] = true
+		}
 	}
 
 	var b strings.Builder
 	for _, p := range panels {
 		tr, ok := p.RawResult.(traffic.Result)
 		if !ok {
-			// Fallback: render without SPEC COV column.
+			// Fallback: render without SPEC COV column or Traffic Health.
 			b.WriteString(`<div class="as-section as-modpanel">`)
 			b.WriteString(`<div class="as-modpanel__head">`)
 			fmt.Fprintf(&b, `%s<span class="ico">🛜</span><h4>%s</h4>`, badge, esc(p.Title))
@@ -4150,8 +4154,11 @@ func renderTrafficWithSpec(panels []result.ModulePanel, spec *speccoverage.Resul
 			len(tr.Inbound), len(tr.Outbound),
 		)
 
-		// Inbound with SPEC COV column.
-		renderSpecTrafficTable(&b, "📥 Inbound", tr.Inbound, coveredPaths, true)
+		th, thOK := computeTrafficHealth(tr, spec, isClientPlatform)
+		b.WriteString(renderTrafficHealthBlock(th, thOK))
+
+		// Inbound with SPEC COV column when spec data is available.
+		renderSpecTrafficTable(&b, "📥 Inbound", tr.Inbound, coveredPaths, spec != nil)
 		// Outbound has no spec ops to compare (outbound = external calls).
 		renderSpecTrafficTable(&b, "📤 Outbound", tr.Outbound, nil, false)
 
@@ -4272,7 +4279,7 @@ func moduleIcon(id string) string {
 	case "algorithms":
 		return "🔀"
 	case "complexity":
-		return "🧮"
+		return "🅾️"
 	case "magicconstants":
 		return "🪄"
 	default:
