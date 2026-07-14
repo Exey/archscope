@@ -14,6 +14,7 @@
 //	--depth         clone depth; 0 = full history (default: 0)
 //	--fail-on       exit 2 when findings exist at or above threshold: low|medium|high
 //	--render-modules  include the Modules & Microservices section (and its graphs); omitted by default
+//	--lang-platforms  group all files of a language into one platform tab (default: one tab per top-level folder)
 package main
 
 import (
@@ -31,11 +32,9 @@ import (
 	"github.com/exey/archscope/internal/fetch"
 	_ "github.com/exey/archscope/internal/lang" // register language specs
 	"github.com/exey/archscope/internal/modules"
-	_ "github.com/exey/archscope/internal/modules/algorithms" // register report modules
-	_ "github.com/exey/archscope/internal/modules/arch"
+	_ "github.com/exey/archscope/internal/modules/arch" // register report modules
 	_ "github.com/exey/archscope/internal/modules/constructs"
 	_ "github.com/exey/archscope/internal/modules/dddmodel"
-	_ "github.com/exey/archscope/internal/modules/designpattern"
 	_ "github.com/exey/archscope/internal/modules/oopvspop"
 	_ "github.com/exey/archscope/internal/modules/speccoverage"
 	_ "github.com/exey/archscope/internal/modules/traffic"
@@ -120,7 +119,7 @@ func main() {
 		cfgPath       string
 		ref           string
 		depth         int
-		folderAsTab   bool
+		langPlatforms bool
 		renderModules bool
 		failOn        string
 	)
@@ -132,7 +131,7 @@ func main() {
 	fs.StringVar(&cfgPath, "config", "", "path to .archscope.json (default: .archscope.json in cwd)")
 	fs.StringVar(&ref, "ref", "", "git ref for remote URLs (branch/tag/sha)")
 	fs.IntVar(&depth, "depth", 0, "clone depth for remote URLs; 0 = full history")
-	fs.BoolVar(&folderAsTab, "folder-as-tab", false, "show each top-level folder as its own platform tab")
+	fs.BoolVar(&langPlatforms, "lang-platforms", false, "group all files of a language into one platform tab (default: one tab per top-level folder)")
 	fs.BoolVar(&renderModules, "render-modules", false, "include the Modules & Microservices section and its CDN-loaded graphs (omitted by default)")
 	fs.StringVar(&failOn, "fail-on", "", "exit 2 when findings exist at or above threshold: low | medium | high")
 
@@ -155,7 +154,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := run(target, ref, depth, cfgPath, outputDir, format, failOn, openFlag, folderAsTab, renderModules); err != nil {
+	if err := run(target, ref, depth, cfgPath, outputDir, format, failOn, openFlag, langPlatforms, renderModules); err != nil {
 		if ec, ok := err.(*exitCodeError); ok {
 			if ec.msg != "" {
 				fmt.Fprintln(os.Stderr, ec.msg)
@@ -169,7 +168,7 @@ func main() {
 
 // run executes the full analysis. Deferred cleanup (clone temp dir removal)
 // fires on every return path because os.Exit in main would bypass it.
-func run(target, ref string, depth int, cfgPath, outputDir, format, failOn string, openFlag, folderAsTab, renderModules bool) error {
+func run(target, ref string, depth int, cfgPath, outputDir, format, failOn string, openFlag, langPlatforms, renderModules bool) error {
 	cfg := config.Load(cfgPath)
 	if outputDir == "" {
 		outputDir = cfg.Output.Dir
@@ -184,8 +183,10 @@ func run(target, ref string, depth int, cfgPath, outputDir, format, failOn strin
 	if depth == 0 && cfg.Fetch.Depth > 0 {
 		depth = cfg.Fetch.Depth
 	}
-	if folderAsTab {
-		cfg.FolderAsTab = true
+	// --lang-platforms opts OUT of the default per-folder tab split, grouping
+	// every file of a language back into one platform tab.
+	if langPlatforms {
+		cfg.FolderAsTab = false
 	}
 	if renderModules {
 		cfg.RenderModules = true
@@ -296,7 +297,7 @@ Flags:
   --ref <ref>         git ref for remote URLs (branch/tag/sha)
   --depth <n>         clone depth for remote URLs (0 = full history)
   --fail-on <lvl>     exit 2 when findings exist at or above: low | medium | high
-  --folder-as-tab     show each top-level folder as its own tab
+  --lang-platforms    group all files of a language into one platform tab (default: one tab per top-level folder)
   --render-modules    include the Modules & Microservices section (and its CDN-loaded graphs); omitted by default
 `)
 }

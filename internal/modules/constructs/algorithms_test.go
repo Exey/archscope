@@ -1,4 +1,4 @@
-package algorithms
+package constructs
 
 import (
 	"reflect"
@@ -8,15 +8,12 @@ import (
 	"github.com/exey/archscope/internal/parser"
 )
 
-func file(name string, decls ...parser.Declaration) *parser.ParsedFile {
-	return &parser.ParsedFile{FilePath: name, Declarations: decls}
-}
 func fn(name string) parser.Declaration {
 	return parser.Declaration{Name: name, Kind: parser.DeclFunc, Line: 1}
 }
 
 func detected(files []*parser.ParsedFile) map[string]int {
-	res := (Module{}).Analyze(files).(Result)
+	res := (Algorithms{}).Analyze(files).(AlgorithmsResult)
 	got := map[string]int{}
 	for _, m := range res.Matches {
 		got[m.Name] = m.Count
@@ -84,8 +81,8 @@ func TestRequiresFunctionalityToken(t *testing.T) {
 		fn("bubbleChart"), fn("heapView"), fn("mergeAccounts"),
 		fn("selectionRange"), fn("insertionPoint"),
 	)}
-	if (Module{}).Analyze(files).(Result).HasDetection() {
-		t.Errorf("expected no detections, got %+v", (Module{}).Analyze(files).(Result).Matches)
+	if (Algorithms{}).Analyze(files).(AlgorithmsResult).HasDetection() {
+		t.Errorf("expected no detections, got %+v", (Algorithms{}).Analyze(files).(AlgorithmsResult).Matches)
 	}
 }
 
@@ -96,8 +93,8 @@ func TestAvoidsProperNounFalsePositives(t *testing.T) {
 		fn("primaryKey"), fn("createPrimitive"), fn("euclideanDistance"),
 		fn("starRating"), fn("aStarRating"),
 	)}
-	if (Module{}).Analyze(files).(Result).HasDetection() {
-		t.Errorf("expected no detections, got %+v", (Module{}).Analyze(files).(Result).Matches)
+	if (Algorithms{}).Analyze(files).(AlgorithmsResult).HasDetection() {
+		t.Errorf("expected no detections, got %+v", (Algorithms{}).Analyze(files).(AlgorithmsResult).Matches)
 	}
 }
 
@@ -107,11 +104,11 @@ func TestCountsAndVscodeLink(t *testing.T) {
 			parser.Declaration{Name: "quickSort", Kind: parser.DeclFunc, Line: 10},
 			parser.Declaration{Name: "quicksortPartition", Kind: parser.DeclFunc, Line: 25}),
 	}
-	res := (Module{}).Analyze(files)
+	res := (Algorithms{}).Analyze(files)
 	if got := detected([]*parser.ParsedFile{files[0]})["Quicksort"]; got != 2 {
 		t.Errorf("expected Quicksort ×2, got %d", got)
 	}
-	out := (Module{}).RenderHTML(res)
+	out := (Algorithms{}).RenderHTML(res)
 	if !strings.Contains(out, "Quicksort") || !strings.Contains(out, "×2") {
 		t.Errorf("render missing name/count: %s", out)
 	}

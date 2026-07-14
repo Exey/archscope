@@ -1,6 +1,6 @@
-// Package algorithms is a universal detector for well-known algorithms
-// implemented in a codebase — sorting, searching, graph/shortest-path, string
-// matching, and classic numeric routines.
+// algorithms.go is a universal detector for well-known algorithms implemented
+// in a codebase — sorting, searching, graph/shortest-path, string matching,
+// and classic numeric routines.
 //
 // Method. It adapts the central idea of the "Algorithm Identification in Source
 // Code" project (~/algorithm-identification): classify a piece of code against a
@@ -10,7 +10,7 @@
 // CodeBERT/GraphCodeBERT — none of which fit ArchScope's dependency-free, static,
 // single-pass design. So the catalog-classification premise is kept while the
 // signal is switched to the static, low-false-positive name convention used by
-// the sibling designpattern/datastructures modules: a function or type named
+// the sibling designpattern/datastructures detectors: a function or type named
 // `bubbleSort`, `dijkstra`, `binarySearch`, `kmpSearch`, … is almost always an
 // implementation of that algorithm.
 //
@@ -21,7 +21,7 @@
 // too ({bubble, sort}, not bare "bubble") so `bubbleChart` is never mistaken for
 // Bubble Sort; only distinctive proper-noun algorithms (dijkstra, kruskal, …)
 // match on a single token.
-package algorithms
+package constructs
 
 import (
 	"fmt"
@@ -34,32 +34,32 @@ import (
 	"github.com/exey/archscope/internal/parser"
 )
 
-func init() { modules.Default.Register(Module{}) }
+func init() { modules.Default.Register(Algorithms{}) }
 
-// Module is the universal algorithm detector.
-type Module struct{}
+// Algorithms is the universal algorithm detector.
+type Algorithms struct{}
 
-func (Module) ID() string                       { return "algorithms" }
-func (Module) Title() string                    { return "Algorithms" }
-func (Module) AppliesTo(languageID string) bool { return true } // universal
+func (Algorithms) ID() string                       { return "algorithms" }
+func (Algorithms) Title() string                    { return "Algorithms" }
+func (Algorithms) AppliesTo(languageID string) bool { return true } // universal
 
-// category groups detected algorithms by the functionality they implement,
+// algoCategory groups detected algorithms by the functionality they implement,
 // mirroring the reference project's sorting / searching / shortest-path split.
-type category string
+type algoCategory string
 
 const (
-	sorting   category = "Sorting"
-	searching category = "Searching & Selection"
-	graphAlg  category = "Graph · Shortest Path · Flow"
-	strMatch  category = "String Matching"
-	numeric   category = "Numeric & Classic"
+	sorting   algoCategory = "Sorting"
+	searching algoCategory = "Searching & Selection"
+	graphAlg  algoCategory = "Graph · Shortest Path · Flow"
+	strMatch  algoCategory = "String Matching"
+	numeric   algoCategory = "Numeric & Classic"
 )
 
-// categoryOrder fixes the display order.
-var categoryOrder = []category{sorting, searching, graphAlg, strMatch, numeric}
+// algoCategoryOrder fixes the display order.
+var algoCategoryOrder = []algoCategory{sorting, searching, graphAlg, strMatch, numeric}
 
-// categoryIcon is the emoji shown before each category's as-sub heading.
-var categoryIcon = map[category]string{
+// algoCategoryIcon is the emoji shown before each category's as-sub heading.
+var algoCategoryIcon = map[algoCategory]string{
 	sorting:   "🔃",
 	searching: "🔎",
 	graphAlg:  "🕸️",
@@ -67,20 +67,20 @@ var categoryIcon = map[category]string{
 	numeric:   "🔢",
 }
 
-// rule maps a token signature to a canonical algorithm name and category. A
+// algoRule maps a token signature to a canonical algorithm name and category. A
 // signature matches an identifier when either every token is present as a
 // word token, OR the identifier's joined-lowercase form contains the tokens
 // concatenated (so "aStarSearch", "astar_search" and "AStarSearch" all match
 // {astar, search}). Rules are ranked most-specific-first (most tokens) in
 // init() so "fibonacciSearch" resolves to Fibonacci Search, not Fibonacci.
-type rule struct {
+type algoRule struct {
 	tokens   []string
 	joined   string // precomputed strings.Join(tokens, "")
 	name     string
-	category category
+	category algoCategory
 }
 
-var rules = []rule{
+var algoRules = []algoRule{
 	// ── Sorting ─────────────────────────────────────────────────────────────
 	{tokens: []string{"bubble", "sort"}, name: "Bubble Sort", category: sorting},
 	{tokens: []string{"insertion", "sort"}, name: "Insertion Sort", category: sorting},
@@ -167,41 +167,41 @@ var rules = []rule{
 }
 
 func init() {
-	for i := range rules {
-		rules[i].joined = strings.Join(rules[i].tokens, "")
+	for i := range algoRules {
+		algoRules[i].joined = strings.Join(algoRules[i].tokens, "")
 	}
 	// Most-specific first: more tokens, then longer joined form, wins.
-	sort.SliceStable(rules, func(i, j int) bool {
-		if len(rules[i].tokens) != len(rules[j].tokens) {
-			return len(rules[i].tokens) > len(rules[j].tokens)
+	sort.SliceStable(algoRules, func(i, j int) bool {
+		if len(algoRules[i].tokens) != len(algoRules[j].tokens) {
+			return len(algoRules[i].tokens) > len(algoRules[j].tokens)
 		}
-		return len(rules[i].joined) > len(rules[j].joined)
+		return len(algoRules[i].joined) > len(algoRules[j].joined)
 	})
 }
 
-// Occurrence is one detected algorithm declaration with its location, used to
-// build a vscode:// deep link in the report.
-type Occurrence struct {
+// AlgoOccurrence is one detected algorithm declaration with its location, used
+// to build a vscode:// deep link in the report.
+type AlgoOccurrence struct {
 	Symbol   string // the declaration name, e.g. "quickSort"
 	FilePath string // absolute path, for the vscode:// link
 	Line     int
 }
 
-// Match is one canonical algorithm with all its occurrences.
-type Match struct {
+// AlgoMatch is one canonical algorithm with all its occurrences.
+type AlgoMatch struct {
 	Name        string
-	Category    category
+	Category    algoCategory
 	Count       int
-	Occurrences []Occurrence
+	Occurrences []AlgoOccurrence
 }
 
-// Result is the module output.
-type Result struct {
-	Matches []Match
+// AlgorithmsResult is the module output.
+type AlgorithmsResult struct {
+	Matches []AlgoMatch
 }
 
 // HasDetection reports whether any algorithm was found.
-func (r Result) HasDetection() bool { return len(r.Matches) > 0 }
+func (r AlgorithmsResult) HasDetection() bool { return len(r.Matches) > 0 }
 
 // isCandidateKind reports whether a declaration kind can name an algorithm: a
 // function/method (the usual case) or a type acting as an algorithm object
@@ -217,10 +217,10 @@ func isCandidateKind(k parser.DeclKind) bool {
 
 // Analyze scans function and type declarations and classifies them against the
 // algorithm catalog.
-func (Module) Analyze(files []*parser.ParsedFile) any {
+func (Algorithms) Analyze(files []*parser.ParsedFile) any {
 	type agg struct {
-		category category
-		occ      []Occurrence
+		category algoCategory
+		occ      []AlgoOccurrence
 	}
 	found := map[string]*agg{}
 
@@ -229,7 +229,7 @@ func (Module) Analyze(files []*parser.ParsedFile) any {
 			if !isCandidateKind(d.Kind) {
 				continue
 			}
-			r, ok := matchRule(d.Name)
+			r, ok := matchAlgoRule(d.Name)
 			if !ok {
 				continue
 			}
@@ -238,18 +238,18 @@ func (Module) Analyze(files []*parser.ParsedFile) any {
 				a = &agg{category: r.category}
 				found[r.name] = a
 			}
-			a.occ = append(a.occ, Occurrence{Symbol: d.Name, FilePath: f.FilePath, Line: d.Line})
+			a.occ = append(a.occ, AlgoOccurrence{Symbol: d.Name, FilePath: f.FilePath, Line: d.Line})
 		}
 	}
 
-	var matches []Match
+	var matches []AlgoMatch
 	for name, a := range found {
-		matches = append(matches, Match{
+		matches = append(matches, AlgoMatch{
 			Name: name, Category: a.category, Count: len(a.occ), Occurrences: a.occ,
 		})
 	}
 	sort.SliceStable(matches, func(i, j int) bool {
-		ci, cj := categoryRank(matches[i].Category), categoryRank(matches[j].Category)
+		ci, cj := algoCategoryRank(matches[i].Category), algoCategoryRank(matches[j].Category)
 		if ci != cj {
 			return ci < cj
 		}
@@ -258,12 +258,12 @@ func (Module) Analyze(files []*parser.ParsedFile) any {
 		}
 		return matches[i].Name < matches[j].Name
 	})
-	return Result{Matches: matches}
+	return AlgorithmsResult{Matches: matches}
 }
 
 // SummaryCards surfaces the number of distinct algorithms detected.
-func (Module) SummaryCards(res any) []modules.SummaryCard {
-	r, ok := res.(Result)
+func (Algorithms) SummaryCards(res any) []modules.SummaryCard {
+	r, ok := res.(AlgorithmsResult)
 	if !ok || !r.HasDetection() {
 		return nil
 	}
@@ -273,8 +273,8 @@ func (Module) SummaryCards(res any) []modules.SummaryCard {
 }
 
 // RenderMarkdown renders detected algorithms as a markdown table.
-func (Module) RenderMarkdown(res any) string {
-	r, ok := res.(Result)
+func (Algorithms) RenderMarkdown(res any) string {
+	r, ok := res.(AlgorithmsResult)
 	if !ok || !r.HasDetection() {
 		return ""
 	}
@@ -302,26 +302,26 @@ const maxLinksPerAlgo = 12
 
 // RenderHTML renders the algorithms grouped by category, each with its count
 // and vscode:// deep links to every declaration.
-func (Module) RenderHTML(res any) string {
-	r, ok := res.(Result)
+func (Algorithms) RenderHTML(res any) string {
+	r, ok := res.(AlgorithmsResult)
 	if !ok {
 		return ""
 	}
 	if !r.HasDetection() {
 		return `<p class="as-empty">No well-known algorithms detected from naming conventions.</p>`
 	}
-	byCat := map[category][]Match{}
+	byCat := map[algoCategory][]AlgoMatch{}
 	for _, m := range r.Matches {
 		byCat[m.Category] = append(byCat[m.Category], m)
 	}
 	var b strings.Builder
 	b.WriteString(`<div class="as-dp">`)
-	for _, cat := range categoryOrder {
+	for _, cat := range algoCategoryOrder {
 		ms := byCat[cat]
 		if len(ms) == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, `<div class="as-dp__group"><h5 class="as-sub">%s %s</h5><div class="as-dp__items">`, categoryIcon[cat], html.EscapeString(string(cat)))
+		fmt.Fprintf(&b, `<div class="as-dp__group"><h5 class="as-sub">%s %s</h5><div class="as-dp__items">`, algoCategoryIcon[cat], html.EscapeString(string(cat)))
 		for _, m := range ms {
 			fmt.Fprintf(&b, `<div class="as-dp__item"><span class="as-dp__name">%s</span><span class="as-dp__count">×%d</span>`,
 				html.EscapeString(m.Name), m.Count)
@@ -334,7 +334,7 @@ func (Module) RenderHTML(res any) string {
 				if i > 0 {
 					b.WriteString(` · `)
 				}
-				b.WriteString(occurrenceLink(o))
+				b.WriteString(occurrenceLink(o.Symbol, o.FilePath, o.Line))
 			}
 			b.WriteString(`</span></div>`)
 		}
@@ -346,26 +346,27 @@ func (Module) RenderHTML(res any) string {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// matchRule returns the most-specific rule matching name. Because rules is
-// sorted by token count descending, the first hit is the most specific.
-func matchRule(name string) (rule, bool) {
+// matchAlgoRule returns the most-specific rule matching name. Because
+// algoRules is sorted by token count descending, the first hit is the most
+// specific.
+func matchAlgoRule(name string) (algoRule, bool) {
 	tokens, joined := tokenize(name)
 	set := make(map[string]bool, len(tokens))
 	for _, t := range tokens {
 		set[t] = true
 	}
-	for _, r := range rules {
+	for _, r := range algoRules {
 		if r.matches(set, joined) {
 			return r, true
 		}
 	}
-	return rule{}, false
+	return algoRule{}, false
 }
 
 // matches reports whether the signature is satisfied: every token present as a
 // word token, or the concatenated tokens present as a substring of the joined
 // identifier (handling run-together spellings like "aStarSearch").
-func (r rule) matches(set map[string]bool, joined string) bool {
+func (r algoRule) matches(set map[string]bool, joined string) bool {
 	all := true
 	for _, t := range r.tokens {
 		if !set[t] {
@@ -401,7 +402,7 @@ func tokenize(name string) (tokens []string, joined string) {
 			flush()
 			continue
 		}
-		jb.WriteRune(toLower(r))
+		jb.WriteRune(toLowerRune(r))
 		if len(cur) > 0 {
 			prev := cur[len(cur)-1]
 			switch {
@@ -419,59 +420,18 @@ func tokenize(name string) (tokens []string, joined string) {
 	return tokens, jb.String()
 }
 
-func toLower(r rune) rune {
+func toLowerRune(r rune) rune {
 	if r >= 'A' && r <= 'Z' {
 		return r + ('a' - 'A')
 	}
 	return r
 }
 
-func occurrenceLink(o Occurrence) string {
-	href := vscodeHref(o.FilePath, o.Line)
-	if href == "" {
-		return html.EscapeString(o.Symbol)
-	}
-	return fmt.Sprintf(`<a class="as-vs" href="%s" title="%s:%d">%s</a>`,
-		html.EscapeString(href), html.EscapeString(baseName(o.FilePath)), o.Line, html.EscapeString(o.Symbol))
-}
-
-// vscodeHref builds a vscode:// deep link for an absolute path + line, mirroring
-// the html report's own helper. Returns "" for non-absolute paths (deep links
-// would be unreliable), in which case callers fall back to plain text.
-func vscodeHref(absPath string, line int) string {
-	if absPath == "" {
-		return ""
-	}
-	p := strings.ReplaceAll(absPath, "\\", "/")
-	if !strings.HasPrefix(p, "/") {
-		return ""
-	}
-	h := "vscode://file" + p
-	if line > 0 {
-		h += ":" + strconv.Itoa(line)
-	}
-	return h
-}
-
-func baseName(path string) string {
-	if i := strings.LastIndexAny(path, "/\\"); i >= 0 {
-		return path[i+1:]
-	}
-	return path
-}
-
-func categoryRank(c category) int {
-	for i, x := range categoryOrder {
+func algoCategoryRank(c algoCategory) int {
+	for i, x := range algoCategoryOrder {
 		if x == c {
 			return i
 		}
 	}
-	return len(categoryOrder)
-}
-
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return one
-	}
-	return many
+	return len(algoCategoryOrder)
 }

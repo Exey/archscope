@@ -678,6 +678,31 @@ func renderArchLayers(files []*parser.ParsedFile) string {
 	return sb.String()
 }
 
+// archLayerKeys are the "real" architectural layers — layerOrder minus Tests
+// and Other, which are catch-alls rather than a deliberate separation of
+// concerns.
+var archLayerKeys = []string{
+	layerAPI, layerModels, layerServices, layerPersist, layerAuth,
+	layerTasks, layerConfig, layerCLI, layerInfra,
+}
+
+// countArchLayers returns how many distinct architectural layers (API,
+// Models, Services, Persistence, Auth, …) have at least one file — the
+// Programming Culture Design dimension's "layer separation" signal.
+func countArchLayers(files []*parser.ParsedFile) int {
+	present := map[string]bool{}
+	for _, f := range files {
+		l := classifyFile(f)
+		for _, k := range archLayerKeys {
+			if l == k {
+				present[l] = true
+				break
+			}
+		}
+	}
+	return len(present)
+}
+
 // ── Tech components ───────────────────────────────────────────────────────────
 
 type archComponent struct{ icon, summary string }

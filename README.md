@@ -21,25 +21,27 @@ go run ./cmd/archscope ~/code --open
 
 ![ArchScope](https://exey.github.io/ArchScopeDocs/as_summary.svg)
 
-2. **🧰 Tech Stack & Modules** — repo-wide tag cloud: languages present + frameworks auto-detected from imports (SwiftUI, Combine, React, Next.js, Django, FastAPI, gRPC, GORM, …) and from config files (docker-compose, go.mod, Makefile). Below it: a package grid sized by LOC with per-language badges.
+2. **🔰 Programming Culture** — a heuristic developer-seniority read per language platform (and DevOps), leading the report as the highest-level summary. One table row per platform, each scored across four dimensions — 🏛️ Design/Architecture (DDD/OOP↔POP score, arch-pattern confidence), 🧹 Code Quality (god functions, longest function, TODO/FIXME density), 🛡️ Security (HIGH/MEDIUM findings), ⚡ Performance (Big-O complexity health) — and mapped onto a 10-rung ladder: Trainee → Junior− (Entry-Level) → Junior (Core) → Junior+/Middle− → Middle → Middle+/Senior− → Senior → Senior+/Lead− → Lead → Architect. Rows sort by level, highest first. From Senior upward every level is *gated*, not just averaged: Senior requires all four dimensions above 60, Senior+/Lead− requires all four ≥ 70, Lead requires all four ≥ 75, and Architect requires all four ≥ 99 — so one weak dimension (a security HIGH, a god function, a stray O(N³)) can't be averaged away by three excellent ones. A collapsible legend explains what each underlying metric measures and its pitfalls. Below the table, a **🔎 Priority Issues** list pulls the worst signals from the Programming Methods detectors — algorithmic complexity hotspots (O(N³) first, then O(N²)) and credential/database security findings — each a clickable VS Code deep link tagged with its platform. Explicitly a conversation starter, not a verdict.
 
-3. **📡 Technical Radar** — four cross-divided quadrants (**Tools**, **Languages & Frameworks**, **Platforms & Operations**, **Methods & Patterns**) with concentric Adopt → Trial → Assess → Hold rings. Every detected technology (plus GoF design patterns picked up repo-wide) is plotted as a labeled blip in its quadrant at its ring, with the same chips listed underneath grouped by quadrant for full legibility.
+3. **🧰 Tech Stack & Modules** — repo-wide tag cloud: languages present + frameworks auto-detected from imports (SwiftUI, Combine, React, Next.js, Django, FastAPI, gRPC, GORM, …) and from config files (docker-compose, go.mod, Makefile). Below it: a package grid sized by LOC with per-language badges.
 
-4. **☁️ DevOps** — detected CI/CD, container, and IaC tooling as chips, followed by three compliance charts: a **Security & Compliance Radar** (6-domain spider chart — Image Hygiene, Best Practices, Privilege & Isolation, Runtime Security, Resource Protection, Network Exposure), a **Defect Density by Artifact** stacked bar (non-passing checks per Dockerfile/Compose/Helm, by severity), and a severity-weighted **DevOps Health Score** gauge. Below the charts: a dependency-free static-analysis matrix (Hadolint / Dockle / KubeLinter / Checkov-style checks) for Dockerfiles, docker-compose files, and Helm charts, and a **☸️ Kubernetes** sub-card — one small card per Pod/Deployment/StatefulSet/DaemonSet/Job/CronJob found in a `kubectl -o yaml` cluster dump or plain manifest files, each showing aggregate container CPU/memory requests↔limits and a kube-linter-inspired pass/warn/fail lint summary (resource limits, security context, probes, image pinning, host access), followed by **Cluster Resources** stat cards — Networking & Exposure, Configuration & Storage, RBAC & Service Accounts, Autoscaling & Budgets, and Operators — summarizing Services/Ingresses/NetworkPolicies, ConfigMaps/PVCs/StorageClasses, ServiceAccounts/Roles/ClusterRoles (with a wildcard-rule count), HPAs/PDBs, and any Prometheus/Vault/gateway operator CRDs found in the same dump. See [Kubernetes cluster linting](#kubernetes-cluster-linting) for how to feed it a cluster dump.
+4. **📡 Technical Radar** — four cross-divided quadrants (**Tools**, **Languages & Frameworks**, **Platforms & Operations**, **Methods & Patterns**) with concentric Adopt → Trial → Assess → Hold rings. Every detected technology (plus GoF design patterns picked up repo-wide) is plotted as a labeled blip in its quadrant at its ring, with the same chips listed underneath grouped by quadrant for full legibility.
 
-5. **🛡️ Danger Index** — weighted security score (0 = hardened → 100% = critical) across **14 categories**, each with its own weight and a saturating violation-density curve. Risk band: Hardened / Minor exposure / Elevated risk / Critical exposure. Backed by **187+ security rules** across all languages plus universal cross-language checks.
+5. **☁️ DevOps** — detected CI/CD, container, and IaC tooling as chips, followed by three compliance charts: a **Security & Compliance Radar** (6-domain spider chart — Image Hygiene, Best Practices, Privilege & Isolation, Runtime Security, Resource Protection, Network Exposure), a **Defect Density by Artifact** stacked bar (non-passing checks per Dockerfile/Compose/Helm, by severity), and a severity-weighted **DevOps Health Score** gauge. Below the charts: a dependency-free static-analysis matrix (Hadolint / Dockle / KubeLinter / Checkov-style checks) for Dockerfiles, docker-compose files, and Helm charts, and a **☸️ Kubernetes** sub-card — one small card per Pod/Deployment/StatefulSet/DaemonSet/Job/CronJob found in a `kubectl -o yaml` cluster dump or plain manifest files, each showing aggregate container CPU/memory requests↔limits and a kube-linter-inspired pass/warn/fail lint summary (resource limits, security context, probes, image pinning, host access), followed by **Cluster Resources** stat cards — Networking & Exposure, Configuration & Storage, RBAC & Service Accounts, Autoscaling & Budgets, and Operators — summarizing Services/Ingresses/NetworkPolicies, ConfigMaps/PVCs/StorageClasses, ServiceAccounts/Roles/ClusterRoles (with a wildcard-rule count), HPAs/PDBs, and any Prometheus/Vault/gateway operator CRDs found in the same dump. See [Kubernetes cluster linting](#kubernetes-cluster-linting) for how to feed it a cluster dump.
+
+6. **🛡️ Danger Index** — weighted security score (0 = hardened → 100% = critical) across **14 categories**, each with its own weight and a saturating violation-density curve. Risk band: Hardened / Minor exposure / Elevated risk / Critical exposure. Backed by **187+ security rules** across all languages plus universal cross-language checks.
 
 ![ArchScope](https://exey.github.io/ArchScopeDocs/as_danger.svg)
 
-6. **📅 Contribution Calendar** — GitHub-style 14-month heat-map of commit activity. One row per git repository (sorted most-active first), with month labels and a colour scale from no-activity to high-activity. Anomalous weeks (unusually high or low relative to the author's own baseline) are flagged with a dot overlay. Hover any cell to see the exact date, commit count and anomaly note.
+7. **📅 Contribution Calendar** — GitHub-style 14-month heat-map of commit activity. One row per git repository (sorted most-active first), with month labels and a colour scale from no-activity to high-activity. Anomalous weeks (unusually high or low relative to the author's own baseline) are flagged with a dot overlay. Hover any cell to see the exact date, commit count and anomaly note.
 
-7. **Per-platform tabs** — one tab per language (auto-expands when only 1–2 platforms detected), each containing:
+8. **Per-platform tabs** — one tab per language (auto-expands when only 1–2 platforms detected), each containing:
 
    **🏛️ Architecture** — *client* languages (Swift/ObjC, Kotlin, TS/JS) get **app-architecture pattern detection**: MVC, MVVM (and variants), VIPER, VIP, RIBs, Clean, Redux, TCA, MVP, MV — scored by role conventions and weighted signals. *Backend* languages (Go, Python, Java) get a **layered architecture view**: API / Models / Services / Persistence / Auth / Config / CLI / Infra / Tests bars + detected component chips.
 
 ![ArchScope](https://exey.github.io/ArchScopeDocs/as_platform.svg)
 
-8. **🍱 Domain Model** *(Go · Python · Kotlin · Java)* — spectrum from **Anemic Domain Model** (DAO/DTO/Manager-heavy service layer) to **Rich Domain Model** (DDD tactical patterns). Scored across three weighted dimensions:
+9. **🍱 Domain Model** *(Go · Python · Kotlin · Java)* — spectrum from **Anemic Domain Model** (DAO/DTO/Manager-heavy service layer) to **Rich Domain Model** (DDD tactical patterns). Scored across three weighted dimensions:
      - *Rich Domain Types* (40%) — Entities, Value Objects, Aggregates (×2) vs. DAO/DTO/Manager/BO/DO/PO. Detects both **Java/Kotlin-style suffixes** (`*Entity`, `*Repository`) and **Go/Python-style directory conventions** (`aggregate/`, `entity/`, `valueobject/`).
      - *Tactical DDD Patterns* (35%) — Repository, Domain Event, Domain Service, Specification, Use Case, Factory, Event Handler. 5 of 7 = full score.
      - *Layer Separation* (25%) — presence of `/domain/`, `/infrastructure/`, `/application/`, hex-arch port/adapter paths vs. anemic `/dao/` structure. Supports Go monorepo layouts (`/pkg/domain/`, `/internal/domain/`).
@@ -48,11 +50,11 @@ go run ./cmd/archscope ~/code --open
 
    - **⚖️ OOP vs POP** *(Swift)* — protocol-oriented vs. object-oriented signal across five categories (Type System, Abstraction, Composition, Behavior, Architecture), with a spectrum bar and per-category breakdown. Appears in place of Domain Model for Swift platforms.
 
-9. **🧱 Spec Coverage** *(Go · Python · Java · Kotlin · TypeScript)* — measures **code→spec coverage**: what percentage of detected code routes have a matching entry in a spec file. Scans the project tree for OpenAPI / Swagger (YAML + JSON), gRPC (`.proto`), and GraphQL (`.graphql` / `.gql`) specs and cross-references them against route handlers extracted from source. *Main metric bar* — `code→spec` percentage: `(code routes with a spec entry) / (total code routes)`.
+10. **🧱 Spec Coverage** *(Go · Python · Java · Kotlin · TypeScript)* — measures **code→spec coverage**: what percentage of detected code routes have a matching entry in a spec file. Scans the project tree for OpenAPI / Swagger (YAML + JSON), gRPC (`.proto`), and GraphQL (`.graphql` / `.gql`) specs and cross-references them against route handlers extracted from source. *Main metric bar* — `code→spec` percentage: `(code routes with a spec entry) / (total code routes)`.
 
-10. **🛜 Traffic** *(Go · Python · Java)* — detected inbound and outbound connection signals: HTTP/gRPC endpoints, listener ports, external service calls, and data formats (JSON, Protobuf, …). Shown as two tables — 📥 Inbound and 📤 Outbound — with protocol, URI/pattern, data format, source file, and module. Each inbound route gets a **Spec** column (✅ / ❓) when spec files are found.
+11. **🛜 Traffic** *(Go · Python · Java)* — detected inbound and outbound connection signals: HTTP/gRPC endpoints, listener ports, external service calls, and data formats (JSON, Protobuf, …). Shown as two tables — 📥 Inbound and 📤 Outbound — with protocol, URI/pattern, data format, source file, and module. Each inbound route gets a **Spec** column (✅ / ❓) when spec files are found.
 
-11. **💡 Module Insights** — four sub-sections in a responsive grid:
+12. **💡 Module Insights** — four sub-sections in a responsive grid:
      - **🕸️ Dependency Hotspots** — modules ranked by in-degree (how many others depend on them), with Lines & Decl. Backend tabs also include an inline **SVG dependency graph** (node radius ∝ dependents).
      - **🔧 Microservices** *(Go)* / **📦 Packages & Modules** *(other languages)* — clickable module grid with file count and LOC.
      - **🔗 Module Penetration** — modules imported by the most other modules (highest shared-dependency risk).
@@ -60,9 +62,11 @@ go run ./cmd/archscope ~/code --open
 
    - **📏 Longest Functions** — top 20 non-test functions by line count, with module and VS Code link.
 
-12. **🧠 Programming Methods** *(all languages)* — language-agnostic code-construct detectors (ported from ArchSwiftScope), rendered as subcards grouped right after Domain Model. Each classifies declarations against a known catalog and deep-links every hit to VS Code:
+13. **🧠 Programming Methods** *(all languages)* — language-agnostic code-construct detectors (ported from ArchSwiftScope), rendered as subcards grouped right after Domain Model. Each classifies declarations against a known catalog and deep-links every hit to VS Code:
 
-   - **🧩 Design Patterns** *(all languages)* — GoF pattern detection from naming conventions: Factory, Singleton, Builder, Observer, Strategy, Decorator, Adapter, Facade, Command, and more — grouped by Creational / Structural / Behavioral category.
+   - **🧩 Design Patterns** *(all languages)* — GoF pattern detection from naming conventions: Factory, Singleton, Builder, Observer, Strategy, Decorator, Adapter, Facade, Command, and more — grouped by Creational / Structural / Behavioral / **Concurrency** category. Two additions on top of the classic GoF set:
+     - **Feature Flag** *(all languages)* — a runtime behavior-switch pattern, detected from name suffixes (`*FeatureFlag`/`*FeatureToggle`/`*FeatureGate`) and from known flagging-SDK imports (LaunchDarkly, Split, Unleash, ConfigCat, Flagsmith, Statsig, GrowthBook, Optimizely, Firebase Remote Config).
+     - **Swift language-feature idioms**, ported from ArchSwiftScope's DesignPatternDetector — constructs Swift built straight into the language, rendered as a distinct, muted "language idiom" row so they don't inflate the pattern count the way a deliberate Factory/Observer/Command choice does: **Extension** (adding behavior without subclassing), **Monitor Object** (`actor` — compiler-enforced mutual exclusion), and **Lazy Initialization** (`lazy var`). Alongside them, GCD/OperationQueue concurrency idioms and other Swift-specific signals that *are* deliberate choices (not idioms): **Read–Write Lock** (`DispatchQueue` + `.barrier`), **Double-Checked Locking** (`os_unfair_lock` + repeated nil-check), **Thread Pool** (`OperationQueue` with bounded `maxConcurrentOperationCount`), **Fluent Interface** (≥2 `-> Self` methods per file), **Multiton** (static keyed-instance dictionaries), **Dependency Injection** (`import Swinject`), and **Observer** via Combine (`@Published`/`ObservableObject`/`import Combine`, folded into the same Observer count as the naming-convention signals).
 
    - **🌳 Data Structures** *(all languages)* — developer-implemented data structures classified against a large known catalog by type-name conventions: linked lists, stacks, queues, trees (BST, AVL, red–black, B-tree, segment/Fenwick, spatial), heaps, tries, hash-based (bloom/cuckoo filters, HyperLogLog, consistent hashing), graphs (adjacency list/matrix, union-find, DAG), and specialized structures (LRU cache, bit sets, sparse matrix, rope). Grouped by category (each with an icon), with a count and VS Code links to every declaration. Standard-library collections (Array, Set, Dictionary, Map) are excluded, UI-framework look-alikes (SwiftUI `HStack`/`VStack`) are rejected, and generic single-word names (`Stack`, `Queue`, `Tree`, …) are only accepted when the type's body carries the structure's vocabulary (`push`/`pop`, `enqueue`, `heapify`, `adjacency`, …) — so a `TelemetryStack` service is never miscounted. Ported from ArchSwiftScope's construct detectors.
 
@@ -72,7 +76,7 @@ go run ./cmd/archscope ~/code --open
 
    - **🪄 Magic Constants** *(all languages)* — well-known algorithms identified by the fixed literal values baked into their implementation: hash primes/offsets (FNV-1/1a), checksum polynomials (CRC-16/32/32C/64), cryptographic initialization vectors (MD5/SHA-1/SHA-256, ChaCha/Salsa `"expand 32-byte k"`), PRNG coefficients (Mersenne Twister, xorshift, SplitMix64), and non-cryptographic hashes (MurmurHash2/3, Fibonacci hashing). Grouped by family, each with a count and VS Code links to the enclosing function. Matched by numeric **value**, so `0x01000193`, `0x1000193`, and `16_777_619` all resolve to the same FNV prime; low-entropy values (`0x1021`, `0x8005`) count only when written in hex, so an ordinary decimal port or id is never misread. Ported from ArchSwiftScope's MagicConstantDetector.
 
-13. **🐙 Git Analysis** (repo-wide):
+14. **🐙 Git Analysis** (repo-wide):
 
    - **Branching model classifier** — scores Gitflow / Trunk-Based / GitHub Flow / GitLab Flow / OneFlow with confidence % and detected signals.
    - **Top contributors** — commits and files touched per author.
@@ -80,9 +84,9 @@ go run ./cmd/archscope ~/code --open
    - **Tags & commits** — semver tag list, commit volume, conventional-commit hygiene.
    - **Branch inventory** — all branches with stale detection.
 
-14. **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
+15. **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
 
-15. **📂 Modules & Microservices** *(opt-in via `--render-modules`)* — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, **estimated tokens**, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
+16. **📂 Modules & Microservices** *(opt-in via `--render-modules`)* — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, **estimated tokens**, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
 
 ---
 
@@ -118,11 +122,12 @@ go run ./cmd/archscope ~/code --format both --output ./reports
 # Write a Markdown report (no CSS/JS — ideal for wikis, CI artefacts, LLM input)
 go run ./cmd/archscope ~/code --format md --output ./reports
 
-# Monorepo: show each top-level folder as its own tab / section
-go run ./cmd/archscope ~/code --folder-as-tab --open
+# Monorepo: each top-level folder gets its own tab/section — the default
+go run ./cmd/archscope ~/code --open
 
-# Monorepo: Markdown report with one section per folder
-go run ./cmd/archscope ~/code --folder-as-tab --format md --output ./reports
+# Single-language monorepo (or just don't want the folder split): group every
+# file of a language back into one platform tab
+go run ./cmd/archscope ~/code --lang-platforms --open
 
 # Analyze a remote repository (cloned to a temp dir; full history for git insights)
 go run ./cmd/archscope https://github.com/owner/repo --open
@@ -145,14 +150,16 @@ go build -o archscope ./cmd/archscope
 | `--config` | path to an `.archscope.json` override file | `.archscope.json` |
 | `--ref` | git branch/tag/sha to check out (remote URLs only) | default branch |
 | `--depth` | shallow-clone depth (remote URLs only; `0` = full history) | `0` |
-| `--folder-as-tab` | show each top-level folder as its own tab/section (monorepo/few services) | off |
+| `--lang-platforms` | group all files of a language into one platform tab, disabling the default per-folder split | off (folder split is on by default) |
 | `--render-modules` | include the Modules & Microservices section (file inventory, declarations, its graph) per platform, plus the global Architecture Graph — omitted by default | off |
 
 Outputs are written as `<project-name>.html`, `<project-name>.md`, and/or `<project-name>.sarif` inside the output directory.
 
-#### `--folder-as-tab`
+#### Per-folder platform tabs (default) / `--lang-platforms`
 
-When several services share a language. `--folder-as-tab` splits them by top-level folder, producing tabs. Short language labels are used: `Go`, `Py`, `TS`, `Kt`, `Swift`. Tabs for the same folder are kept visually adjacent with a separator. The Markdown report mirrors this — each folder+language combination becomes its own `##` section. Progress is printed per stage:
+When several services share a language, ArchScope splits them by top-level folder by default, producing one tab per (language, folder) pair — no flag needed. Short language labels are used: `Go`, `Py`, `TS`, `Kt`, `Swift`. Tabs for the same folder are kept visually adjacent with a separator. The Markdown report mirrors this — each folder+language combination becomes its own `##` section.
+
+Pass `--lang-platforms` to opt back out and group every file of a language into a single tab regardless of which folder it's in — useful for a single-service repo laid out in subfolders, or when the per-folder split is just noise. Progress is printed per stage:
 
 ```text
  → Scanning source tree…

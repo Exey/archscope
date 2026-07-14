@@ -92,6 +92,8 @@ type ParsePatterns struct {
 	DeclKindMap map[string]string
 	// BigFunctionMinLines is the threshold for BigFunctions; 0 means use default.
 	BigFunctionMinLines int
+	// BigTypeMinLines is the threshold for BigTypes; 0 means use default.
+	BigTypeMinLines int
 }
 
 // LanguageSpec is the single source of truth for one language.

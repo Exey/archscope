@@ -12,6 +12,11 @@ import (
 // when a spec doesn't override it.
 const defaultBigFunctionMinLines = 25
 
+// defaultBigTypeMinLines is the threshold for flagging a "big" type when a
+// spec doesn't override it. Types run larger than functions before becoming
+// unwieldy, hence the higher default.
+const defaultBigTypeMinLines = 300
+
 // SourceLoader reads a file into lines once. It is the single I/O choke point
 // reused by the parser and (later) by security rules, so a file is read at most
 // once per phase and both operate on the same []string.
@@ -60,6 +65,10 @@ func ParseUniversal(filePath string, lines []string, spec *langspec.LanguageSpec
 	bigMin := spec.Patterns.BigFunctionMinLines
 	if bigMin <= 0 {
 		bigMin = defaultBigFunctionMinLines
+	}
+	bigTypeMin := spec.Patterns.BigTypeMinLines
+	if bigTypeMin <= 0 {
+		bigTypeMin = defaultBigTypeMinLines
 	}
 
 	var (
@@ -178,6 +187,12 @@ func ParseUniversal(filePath string, lines []string, spec *langspec.LanguageSpec
 						Name: curTypeName, Kind: curTypeKind, LineCount: length,
 						FilePath: filePath, StartLine: typeStart,
 					}
+				}
+				if length >= bigTypeMin {
+					pf.BigTypes = append(pf.BigTypes, TypeInfo{
+						Name: curTypeName, Kind: curTypeKind, LineCount: length,
+						FilePath: filePath, StartLine: typeStart,
+					})
 				}
 				inType = false
 				curTypeName = ""

@@ -145,6 +145,10 @@ func isSafeArg(arg ast.Expr) bool {
 				if e.Sel.Name == "color" {
 					return true
 				}
+			case "lv": // devLevel entries (devLevels table) — color is a hex literal
+				if e.Sel.Name == "color" {
+					return true
+				}
 			case "lm": // langOrder entries — cls/label are hardcoded per-language
 				if e.Sel.Name == "cls" || e.Sel.Name == "label" {
 					return true

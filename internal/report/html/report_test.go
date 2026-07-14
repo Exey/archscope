@@ -28,8 +28,10 @@ func minimalResult() *result.AnalysisResult {
 		RootPath:    "/x",
 		Scan:        scan,
 		Files: []*parser.ParsedFile{
+			// >= minCultureLOC so the platform still gets a 🗂️ Platforms card
+			// and a 🔰 Programming Culture row in tests.
 			{FilePath: "/x/main.go", LanguageID: "go", Platform: string(langspec.PlatformGo),
-				ModuleName: "app", LineCount: 10},
+				ModuleName: "app", LineCount: 12000},
 		},
 		SecurityScore: score,
 	}

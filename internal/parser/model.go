@@ -86,6 +86,7 @@ type ParsedFile struct {
 	LongestFunc  *FunctionInfo  `json:"longestFunction,omitempty"`
 	BigFunctions []FunctionInfo `json:"bigFunctions,omitempty"`
 	LongestType  *TypeInfo      `json:"longestType,omitempty"`
+	BigTypes     []TypeInfo     `json:"bigTypes,omitempty"`
 	GitMeta      GitMetadata    `json:"gitMetadata"`
 	// Extra is a free-form bag for language hooks (e.g. Swift sceneGroup) so the
 	// core model stays stable while hooks add language-specific data.

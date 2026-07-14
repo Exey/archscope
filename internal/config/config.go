@@ -48,7 +48,7 @@ type Config struct {
 	MaxFilesAnalyze int       `json:"maxFilesAnalyze"`
 	GitCommitLimit  int       `json:"gitCommitLimit"`
 	HotspotCount    int       `json:"hotspotCount"`
-	FolderAsTab     bool      `json:"folderAsTab"`   // split per-folder into separate tabs
+	FolderAsTab     bool      `json:"folderAsTab"`   // split per-folder into separate tabs (default true; --lang-platforms disables)
 	RenderModules   bool      `json:"renderModules"` // include the Modules & Microservices section; omitted by default
 	Output          Output    `json:"output"`
 	Languages       Languages `json:"languages"`
@@ -68,6 +68,7 @@ func Default() Config {
 		MaxFilesAnalyze: 50000,
 		GitCommitLimit:  1000,
 		HotspotCount:    15,
+		FolderAsTab:     true, // one platform tab per top-level folder by default; --lang-platforms opts out
 		Output:          Output{Format: "html", Dir: "output"},
 		Languages:       Languages{},
 		Security: Security{

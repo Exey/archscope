@@ -18,9 +18,11 @@ import (
 // name match) rather than being read.
 const maxSourceBytes = 2 << 20 // 2 MiB
 
-// fileSource is one file read once: its comment/string-stripped lines and, per
-// line, the raw contents of any string literals that appeared on it.
+// fileSource is one file read once: its raw lines, its comment/string-stripped
+// lines, and, per line, the raw contents of any string literals that appeared
+// on it.
 type fileSource struct {
+	raw      []string
 	stripped []string
 	strings  [][]string // per-line string-literal contents (parallel to stripped)
 	ok       bool
@@ -48,12 +50,22 @@ func (c *sourceCache) get(filePath string) *fileSource {
 	fi, err := os.Stat(filePath)
 	if err == nil && fi.Size() <= maxSourceBytes {
 		if data, err := os.ReadFile(filePath); err == nil {
+			s.raw = strings.Split(string(data), "\n")
 			s.stripped, s.strings = readSource(string(data), ext(filePath))
 			s.ok = true
 		}
 	}
 	c.files[filePath] = s
 	return s
+}
+
+// rawLines returns the file's original (unstripped) lines, or nil when the
+// file is unreadable or too large.
+func (c *sourceCache) rawLines(filePath string) []string {
+	if s := c.get(filePath); s.ok {
+		return s.raw
+	}
+	return nil
 }
 
 // lines returns the file's comment/string-stripped lines, or nil when the file

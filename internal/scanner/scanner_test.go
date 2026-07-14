@@ -12,7 +12,15 @@ import (
 
 func TestScanMultiLanguage(t *testing.T) {
 	root := filepath.Join("..", "..", "testdata", "multi")
-	res, err := scanner.Scan(root, config.Default(), langspec.Default)
+	// This test is about per-language grouping, module attribution, and
+	// project-type detection — not the per-folder tab split — so it opts out
+	// of the (now-default) FolderAsTab to keep plain per-language platform
+	// keys; testdata/multi's files each sit in their own subfolder
+	// (web/backend/ios/android), which would otherwise produce synthetic
+	// "go:backend"-style keys instead of the plain "go" this test expects.
+	cfg := config.Default()
+	cfg.FolderAsTab = false
+	res, err := scanner.Scan(root, cfg, langspec.Default)
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}

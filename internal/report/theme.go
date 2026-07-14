@@ -238,6 +238,41 @@ code,.mono{font-family:var(--mono)}
 .as-dp__name{font-weight:600; font-size:13px}
 .as-dp__count{font-family:var(--mono); font-size:11.5px; color:var(--accent)}
 .as-dp__ex{grid-column:1/-1; font-family:var(--mono); font-size:10.5px; color:var(--text-faint); word-break:break-word}
+.as-dp__item--idiom{opacity:.6; border-style:dashed}
+.as-dp__idiom-badge{font-size:9.5px; font-weight:500; text-transform:uppercase; letter-spacing:.03em;
+  color:var(--text-faint); background:var(--bg-inset); border-radius:999px; padding:1px 7px; margin-left:4px}
+
+/* Programming Culture card */
+.as-cult-badge{margin-left:10px;font-size:12px;font-weight:700;padding:2px 10px;border-radius:999px;border:1px solid}
+.as-cult-scroll{overflow-x:auto}
+.as-cult-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:6px}
+.as-cult-table th{text-align:left;font-weight:600;color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:.03em;padding:6px 10px;border-bottom:1px solid var(--border)}
+.as-cult-table td{padding:8px 10px;border-bottom:1px solid var(--border)}
+.as-cult-plat{white-space:nowrap}
+.as-cult-name{margin-left:7px;font-weight:600}
+.as-cult-namelink{color:inherit;text-decoration:none}
+.as-cult-namelink:hover{text-decoration:underline;color:var(--accent)}
+.as-cult-lvl{display:inline-block;font-size:11.5px;font-weight:700;padding:2px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
+.as-cult-dim{min-width:110px;vertical-align:top}
+.as-cult-dimfold{display:inline-block}
+.as-cult-dimfold summary{cursor:pointer;list-style:none}
+.as-cult-dimfold summary::-webkit-details-marker{display:none}
+.as-cult-dimbar{display:inline-block;width:70px;height:7px;background:var(--bg-inset);border-radius:999px;overflow:hidden;vertical-align:middle}
+.as-cult-dimfill{height:100%;border-radius:999px}
+.as-cult-dimval{margin-left:7px;font-family:var(--mono);font-size:11px;color:var(--text-dim)}
+.as-cult-dimdetail{margin-top:6px;max-width:190px;font-size:10.5px;line-height:1.5;color:var(--text-dim);background:var(--bg-elev-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px}
+.as-cult-dimdetail>div{margin-bottom:4px}
+.as-cult-dimdetail>div:last-child{margin-bottom:0}
+.as-cult-issues{margin-top:16px}
+.as-cult-issues__head{font-size:13px;font-weight:650;margin-bottom:8px}
+.as-cult-issuelist{display:flex;flex-direction:column;gap:5px}
+.as-cult-io{display:flex;align-items:center;gap:9px;flex-wrap:wrap;background:var(--bg-elev-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px}
+.as-cult-io-badge{font-family:var(--mono);font-size:11px;font-weight:700;padding:1px 7px;border-radius:var(--radius-sm);white-space:nowrap}
+.as-cult-io--perf{background:#d1590a22;color:#d1590a}
+.as-cult-io--sec{background:#c0392b22;color:#e0685a}
+.as-cult-io-desc{flex:1;min-width:140px}
+.as-cult-io-loc{font-family:var(--mono);font-size:11px;color:var(--text-faint)}
+.as-cult-more{color:var(--text-faint);font-size:11.5px;padding:4px 2px}
 
 /* Complexity module */
 .as-cx__health{display:flex; gap:18px; flex-wrap:wrap; margin-bottom:12px}
@@ -256,6 +291,26 @@ code,.mono{font-family:var(--mono)}
 .as-cx__bigo--2{color:#d08a1a}
 .as-cx__bigo--3{color:#d1590a}
 .as-cx__bigo--4{color:#c0392b}
+
+/* Language Richness module */
+.as-lr{display:flex; flex-direction:column; gap:10px}
+.as-lr__row{display:flex; align-items:center; gap:10px}
+.as-lr__label{flex:0 0 170px; font-size:12.5px; font-weight:600}
+.as-lr__frac{font-weight:400; color:var(--text-faint); font-size:11px}
+.as-lr__bar{flex:1; height:8px; background:var(--bg-inset); border-radius:999px; overflow:hidden}
+.as-lr__fill{height:100%; border-radius:999px; transition:width .3s}
+.as-lr__pct{font-family:var(--mono); font-size:12px; font-weight:600; width:38px; text-align:right}
+
+/* Code Structure module */
+.as-cs__stats{display:flex; gap:18px; flex-wrap:wrap; margin-bottom:10px}
+.as-cs__stat{display:flex; flex-direction:column; align-items:flex-start; min-width:90px}
+.as-cs__stat-val{font-size:18px; font-weight:700; font-family:var(--mono)}
+.as-cs__stat-label{font-size:11px; color:var(--text-faint)}
+.as-cs__viol-title{font-size:12.5px; font-weight:600; margin:12px 0 6px}
+.as-cs__table td{vertical-align:top}
+.as-cs__more{color:var(--text-faint); font-size:11px}
+.as-cs__folders{margin:0; padding-left:18px; font-size:12.5px; color:var(--text-dim)}
+.as-cs__folders li{margin:3px 0}
 
 /* OOP vs POP module */
 .as-pop__verdict{font-size:15px; font-weight:650; margin-bottom:12px}
@@ -753,6 +808,20 @@ const JS = `
     if(dark){dark.addEventListener('click',function(){setTheme(false);});}
     if(light){light.addEventListener('click',function(){setTheme(true);});}
   })();
+  // Programming Culture dimension bars: opening (or closing) one of the four
+  // per-row <details> unfolds (or folds) all four together, so "how is this
+  // computed" always reads as one row, not four independent toggles. The
+  // native 'toggle' event doesn't bubble, so this must listen on the capture
+  // phase to catch it via delegation.
+  document.addEventListener('toggle',function(e){
+    var d=e.target;
+    if(!d.classList||!d.classList.contains('as-cult-dimfold'))return;
+    var row=d.closest('tr');
+    if(!row)return;
+    row.querySelectorAll('.as-cult-dimfold').forEach(function(other){
+      if(other!==d)other.open=d.open;
+    });
+  },true);
   // Generic "open a specific Infrastructure/Platform card + scroll to it"
   // link, used by the DevOps Kubernetes summary tile and the Kubernetes
   // defect-density bar. Falls back to the link's plain href anchor scroll

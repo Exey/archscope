@@ -87,6 +87,10 @@ func Render(res *result.AnalysisResult) string {
 	// Global cards
 	b.WriteString(renderGlobalCards(res))
 
+	// Programming Culture: per-language seniority read + priority issues —
+	// leads the report, ahead of the tech stack, as the highest-level summary.
+	b.WriteString(renderProgrammingCulture(res))
+
 	// Tech stack + packages & modules (repo-wide)
 	b.WriteString(renderStackAndModules(res))
 

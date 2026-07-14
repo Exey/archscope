@@ -15,8 +15,8 @@ import (
 	"github.com/exey/archscope/internal/langspec"
 	"github.com/exey/archscope/internal/modules"
 	"github.com/exey/archscope/internal/modules/arch"
+	"github.com/exey/archscope/internal/modules/constructs"
 	"github.com/exey/archscope/internal/modules/dddmodel"
-	"github.com/exey/archscope/internal/modules/designpattern"
 	"github.com/exey/archscope/internal/modules/speccoverage"
 	"github.com/exey/archscope/internal/modules/traffic"
 	"github.com/exey/archscope/internal/parser"
@@ -2411,7 +2411,7 @@ func techPatternMatches(res *result.AnalysisResult) []radarChip {
 		if p.ModuleID != "designpattern" {
 			continue
 		}
-		r, ok := p.RawResult.(designpattern.Result)
+		r, ok := p.RawResult.(constructs.DesignPatternResult)
 		if !ok {
 			continue
 		}
@@ -3317,17 +3317,32 @@ func platAbbr(p langspec.Platform) string {
 // renderTabs renders platforms as a vertical accordion of switchable cards.
 // Each card header shows language, name, LOC, file count, and module summary
 // stats. Clicking a header expands that card and collapses others.
-func renderTabs(res *result.AnalysisResult) string {
-	platforms := res.Scan.PlatformsOrdered()
-	if len(platforms) == 0 {
-		return `<p class="as-empty">No source files matched any registered language.</p>`
+// orderedPlatformTabs returns the platform groups that get a dedicated card in
+// "🗂️ Platforms" — those with at least minCultureLOC lines, the same
+// threshold that gates a 🔰 Programming Culture row, since a handful of files
+// don't carry enough signal for either — in the exact display order renderTabs
+// renders them. Exposed so other sections (Programming Culture) can link a
+// platform to its tab index consistently.
+func orderedPlatformTabs(res *result.AnalysisResult) []*scanner.PlatformGroup {
+	all := res.Scan.PlatformsOrdered()
+	if len(all) == 0 {
+		return nil
 	}
 
 	loc := map[langspec.Platform]int{}
 	for _, f := range res.Files {
 		loc[langspec.Platform(f.Platform)] += f.LineCount
 	}
-	platforms = append([]*scanner.PlatformGroup(nil), platforms...)
+
+	platforms := make([]*scanner.PlatformGroup, 0, len(all))
+	for _, pg := range all {
+		if loc[pg.Platform] >= minCultureLOC {
+			platforms = append(platforms, pg)
+		}
+	}
+	if len(platforms) == 0 {
+		return nil
+	}
 
 	if res.Scan.FolderAsTab {
 		folderLOC := map[string]int{}
@@ -3354,6 +3369,33 @@ func renderTabs(res *result.AnalysisResult) string {
 			return platforms[i].FileCount > platforms[j].FileCount
 		})
 	}
+	return platforms
+}
+
+// platformCardIndex maps each platform tab's key to its data-platcard index,
+// so other sections can deep-link into a specific 🗂️ Platforms card.
+func platformCardIndex(res *result.AnalysisResult) map[langspec.Platform]int {
+	platforms := orderedPlatformTabs(res)
+	idx := make(map[langspec.Platform]int, len(platforms))
+	for i, pg := range platforms {
+		idx[pg.Platform] = i
+	}
+	return idx
+}
+
+func renderTabs(res *result.AnalysisResult) string {
+	platforms := orderedPlatformTabs(res)
+	if len(platforms) == 0 {
+		return `<p class="as-empty">No platform has enough code (&ge; 1,000 LOC) for a dedicated view.</p>`
+	}
+
+	loc := map[langspec.Platform]int{}
+	for _, f := range res.Files {
+		loc[langspec.Platform(f.Platform)] += f.LineCount
+	}
+
+	// Programming Culture level per platform, badged next to each card's stats.
+	cultLevels := platformCultureLevels(res)
 
 	// Collect summary cards from module panels for each platform.
 	platCards := map[langspec.Platform][]modules.SummaryCard{}
@@ -3362,10 +3404,16 @@ func renderTabs(res *result.AnalysisResult) string {
 	}
 
 	// Pre-compute per-platform stats shown in card headers: API count and
-	// the dominant architecture signal (DDD score or top client pattern).
+	// the dominant architecture signal. A detected client pattern (MVVM, MVI,
+	// VIPER, …) is the most specific signal a platform can show, so it wins
+	// over DDD% whenever both exist — e.g. Kotlin/Android has dddmodel data
+	// (Domain Model covers Go/Python/Kotlin/Java) but its MVVM/MVI pattern is
+	// the more informative headline, same as iOS/Swift (which has no
+	// dddmodel at all) showing its client pattern today.
 	type platHeaderStat struct {
-		apiTotal  int    // -1 = no traffic data
-		archLabel string // e.g. "78% DDD" or "90% VIPER"
+		apiTotal     int    // -1 = no traffic data
+		dddLabel     string // e.g. "78% DDD"
+		patternLabel string // e.g. "90% VIPER" — a detected client arch pattern
 	}
 	headerStats := map[langspec.Platform]platHeaderStat{}
 	for _, panel := range res.ModulePanels {
@@ -3379,13 +3427,13 @@ func renderTabs(res *result.AnalysisResult) string {
 				}
 			}
 		case "dddmodel":
-			if r, ok := panel.RawResult.(dddmodel.Result); ok && r.HasData() && hs.archLabel == "" {
-				hs.archLabel = fmt.Sprintf("%d%% DDD", r.DDDScore)
+			if r, ok := panel.RawResult.(dddmodel.Result); ok && r.HasData() && hs.dddLabel == "" {
+				hs.dddLabel = fmt.Sprintf("%d%% DDD", r.DDDScore)
 			}
 		case "architecture":
-			if r, ok := panel.RawResult.(arch.Result); ok && r.HasDetection() && hs.archLabel == "" {
+			if r, ok := panel.RawResult.(arch.Result); ok && r.HasDetection() && hs.patternLabel == "" {
 				if r.Mode == "client" && len(r.Patterns) > 0 {
-					hs.archLabel = fmt.Sprintf("%d%% %s", int(r.Patterns[0].Confidence*100+0.5), r.Patterns[0].Name)
+					hs.patternLabel = fmt.Sprintf("%d%% %s", int(r.Patterns[0].Confidence*100+0.5), r.Patterns[0].Name)
 				}
 			}
 		}
@@ -3434,8 +3482,16 @@ func renderTabs(res *result.AnalysisResult) string {
 		if hs.apiTotal > 0 {
 			fmt.Fprintf(&b, `<span class="as-plat-card__stat as-plat-card__stat--api">%d APIs</span>`, hs.apiTotal)
 		}
-		if hs.archLabel != "" {
-			fmt.Fprintf(&b, `<span class="as-plat-card__stat as-plat-card__stat--arch">%s</span>`, esc(hs.archLabel))
+		archLabel := hs.patternLabel
+		if archLabel == "" {
+			archLabel = hs.dddLabel
+		}
+		if archLabel != "" {
+			fmt.Fprintf(&b, `<span class="as-plat-card__stat as-plat-card__stat--arch">%s</span>`, esc(archLabel))
+		}
+		if lv, ok := cultLevels[pg.Platform]; ok {
+			fmt.Fprintf(&b, `<span class="as-cult-lvl" style="background:%s22;color:%s;border-color:%s55" title="🔰 Programming Culture level">%s</span>`,
+				lv.color, lv.color, lv.color, esc(lv.name))
 		}
 		b.WriteString(`</div>`) // .as-plat-card__summary
 		b.WriteString(`<span class="as-plat-card__chevron">›</span>`)
@@ -3500,6 +3556,8 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 		switch p.ModuleID {
 		case "architecture":
 			// rendered in the dedicated Architecture section above; skip
+		case "codestructure", "langrichness":
+			// rendered as their own subcards in 💡 Module Insights; skip
 		case "dddmodel", "oopvspop":
 			dddPanels = append(dddPanels, p)
 		case "speccoverage":
@@ -3742,6 +3800,12 @@ func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup,
 	if m := renderMicroservicesSection(pg, files, res.Scan.RenderModules); m != "" {
 		parts = append(parts, m)
 	}
+	if lr := renderLanguageRichnessInsight(res, pg); lr != "" {
+		parts = append(parts, lr)
+	}
+	if cs := renderCodeStructureInsight(res, pg); cs != "" {
+		parts = append(parts, cs)
+	}
 	if t := renderTodosFixmes(files); t != "" {
 		parts = append(parts, t)
 	}
@@ -3762,6 +3826,43 @@ func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup,
 	}
 	b.WriteString(`</div></div>`)
 	return b.String()
+}
+
+// renderLanguageRichnessInsight renders the 🎖️ Language Richness module's
+// panel — a simple keyword-coverage bar per language — as a Module Insights
+// subcard, right before 💻 Code Structure.
+func renderLanguageRichnessInsight(res *result.AnalysisResult, pg *scanner.PlatformGroup) string {
+	for _, p := range res.PanelsForPlatform(pg.Platform) {
+		if p.ModuleID != "langrichness" || strings.TrimSpace(p.HTML) == "" {
+			continue
+		}
+		var b strings.Builder
+		b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">🎖️</span><h3>Language Richness</h3></div>`)
+		b.WriteString(p.HTML)
+		b.WriteString(`</div>`)
+		return b.String()
+	}
+	return ""
+}
+
+// renderCodeStructureInsight renders the 💻 Code Structure module's panel (low-
+// level function/folder shape signals — parameter count, nesting depth,
+// comment density, folder-layout smells) as a Module Insights subcard, right
+// after 📦 Modules. Rendered here rather than through the generic per-platform
+// module-panel walk (like Programming Methods) because Module Insights is
+// hand-assembled to a fixed order.
+func renderCodeStructureInsight(res *result.AnalysisResult, pg *scanner.PlatformGroup) string {
+	for _, p := range res.PanelsForPlatform(pg.Platform) {
+		if p.ModuleID != "codestructure" || strings.TrimSpace(p.HTML) == "" {
+			continue
+		}
+		var b strings.Builder
+		b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">💻</span><h3>Code Structure</h3></div>`)
+		b.WriteString(p.HTML)
+		b.WriteString(`</div>`)
+		return b.String()
+	}
+	return ""
 }
 
 // renderModuleGraphSVG draws a compact, self-contained circular dependency
