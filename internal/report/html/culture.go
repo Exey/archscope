@@ -734,8 +734,8 @@ func securityTip(r cultureRow) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b,
-		"<div>🛡️ %d/%d Dangers %d%% (%d%% W)</div>",
-		r.high+r.med, r.secTotalRules, r.secFindingsScore, r.secFindingsWeight)
+		"<div>🛡️ %d Dangers %d%% (%d%% W)</div>",
+		r.high+r.med, r.secFindingsScore, r.secFindingsWeight)
 	if r.hasTrafficHealth {
 		fmt.Fprintf(&b, "<div>🛜 %d%% Traffic (%d%% W)</div>", r.trafficHealthScore, r.trafficHealthWeight)
 	}
