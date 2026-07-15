@@ -72,7 +72,7 @@ go run ./cmd/archscope ~/code --open
 
    - **🔀 Algorithms** *(all languages)* — well-known algorithms classified against a known catalog from function/type-name conventions, grouped by functionality: **Sorting** (bubble, insertion, merge, quick, heap, counting, radix, …), **Searching & Selection** (binary, linear, interpolation, jump, quickselect), **Graph · Shortest Path · Flow** (Dijkstra, Bellman–Ford, Floyd–Warshall, A\*, BFS/DFS, Kruskal/Prim, Tarjan, Ford–Fulkerson), **String Matching** (KMP, Rabin–Karp, Boyer–Moore, Aho–Corasick, Manacher, Levenshtein), and **Numeric & Classic** (Euclidean GCD, Sieve of Eratosthenes, Newton–Raphson, FFT, Karatsuba, Kadane, Huffman). Each with a count and VS Code links. Detection is token-based (`quickSort` → `[quick, sort]`) so common-word names need their functionality token — `bubbleChart` is not Bubble Sort. Adapts the catalog-classification premise of algorithm-identification research (execution profiling, MOSS, tree/graph-kernel SVMs, CodeBERT) to a static, dependency-free name-signal approach.
 
-   - **🧮 Complexity** *(all brace languages)* — heuristic Big-O "health" read from iteration nesting: a function whose deepest simultaneous loop nesting is *N* levels (nested `for`/`while`, nested higher-order closures like `.map`/`.filter`, or a linear collection op such as `.sorted()`/`.contains(where:)` used inside a loop) is charged O(Nⁿ), and anything O(N²) or worse is surfaced as a time hotspot; collections allocated inside a loop are flagged as space hotspots. Shows time/space health scores (share of loop-bearing functions that stay O(N) or better), a collection-usage summary, and each violation's Big-O badge, symbol, reason, and VS Code link. Indentation-only sources (Python) have no braces, so they contribute nothing rather than a false reading. Ported from ArchSwiftScope's ComplexityDetector.
+   - **🅾️ Complexity** *(all brace languages)* — heuristic Big-O "health" read from iteration nesting: a function whose deepest simultaneous loop nesting is *N* levels (nested `for`/`while`, nested higher-order closures like `.map`/`.filter`, or a linear collection op such as `.sorted()`/`.contains(where:)` used inside a loop) is charged O(Nⁿ), and anything O(N²) or worse is surfaced as a time hotspot; collections allocated inside a loop are flagged as space hotspots. Shows time/space health scores (share of loop-bearing functions that stay O(N) or better), a collection-usage summary, and each violation's Big-O badge, symbol, reason, and VS Code link. Indentation-only sources (Python) have no braces, so they contribute nothing rather than a false reading. Ported from ArchSwiftScope's ComplexityDetector.
 
    - **🪄 Magic Constants** *(all languages)* — well-known algorithms identified by the fixed literal values baked into their implementation: hash primes/offsets (FNV-1/1a), checksum polynomials (CRC-16/32/32C/64), cryptographic initialization vectors (MD5/SHA-1/SHA-256, ChaCha/Salsa `"expand 32-byte k"`), PRNG coefficients (Mersenne Twister, xorshift, SplitMix64), and non-cryptographic hashes (MurmurHash2/3, Fibonacci hashing). Grouped by family, each with a count and VS Code links to the enclosing function. Matched by numeric **value**, so `0x01000193`, `0x1000193`, and `16_777_619` all resolve to the same FNV prime; low-entropy values (`0x1021`, `0x8005`) count only when written in hex, so an ordinary decimal port or id is never misread. Ported from ArchSwiftScope's MagicConstantDetector.
 
@@ -150,16 +150,32 @@ go build -o archscope ./cmd/archscope
 | `--config` | path to an `.archscope.json` override file | `.archscope.json` |
 | `--ref` | git branch/tag/sha to check out (remote URLs only) | default branch |
 | `--depth` | shallow-clone depth (remote URLs only; `0` = full history) | `0` |
-| `--lang-platforms` | group all files of a language into one platform tab, disabling the default per-folder split | off (folder split is on by default) |
+| `--lang-platforms` | group all files of a language into one platform tab (shorthand for `--group-by=language`) | off |
+| `--group-by` | how to group platform tabs: `language` \| `folder` \| `gitrepo` | auto-detected (see below) |
 | `--render-modules` | include the Modules & Microservices section (file inventory, declarations, its graph) per platform, plus the global Architecture Graph — omitted by default | off |
+| `--scan-all-files` | also scan git-submodule (third-party/vendored) directories | off — submodules are skipped by default |
 
 Outputs are written as `<project-name>.html`, `<project-name>.md`, and/or `<project-name>.sarif` inside the output directory.
 
-#### Per-folder platform tabs (default) / `--lang-platforms`
+#### Platform tab grouping: auto-detected, or `--group-by`
 
-When several services share a language, ArchScope splits them by top-level folder by default, producing one tab per (language, folder) pair — no flag needed. Short language labels are used: `Go`, `Py`, `TS`, `Kt`, `Swift`. Tabs for the same folder are kept visually adjacent with a separator. The Markdown report mirrors this — each folder+language combination becomes its own `##` section.
+ArchScope decides how to split platform tabs from how many `.git` repositories it finds under the scanned path — no flag needed for the common cases:
 
-Pass `--lang-platforms` to opt back out and group every file of a language into a single tab regardless of which folder it's in — useful for a single-service repo laid out in subfolders, or when the per-folder split is just noise. Progress is printed per stage:
+- **0 or 1 repo** — this is one project, not a monorepo of independent services, even if it has several languages or subfolders (like ArchScope's own `cmd/`/`internal/` split). Tabs are grouped **by language** regardless of folder layout.
+- **2+ repos** — genuinely ambiguous, so ArchScope asks interactively (when stdin is a terminal):
+  1. **By Languages** — one tab per language, regardless of folder or repo (`--group-by=language`)
+  2. **By first-level folders** — one tab per top-level folder (`--group-by=folder`, the long-standing default)
+  3. **By folders with `.git`** — one tab per detected git repository, however deep it's nested (`--group-by=gitrepo`)
+
+  In a non-interactive shell (CI, piped input) it skips the prompt and falls back to option 2.
+
+Pass `--group-by` (or its `--lang-platforms` shorthand for `language`) to skip the detection/prompt entirely and pick a mode up front — useful for scripted/CI runs. With `--group-by=folder` or `gitrepo`, short language labels are used in tab names: `Go`, `Py`, `TS`, `Kt`, `Swift`. Tabs for the same folder/repo are kept visually adjacent with a separator, and the Markdown report mirrors the split — each folder/repo+language combination becomes its own `##` section. When language grouping puts every file of a language in one card regardless of folder, the card names up to 3 of the busiest top-level folders it draws from (e.g. `Swift + ObjC (Telegram, TelegramUI, …)`) so a huge monorepo card still hints at where its files live.
+
+#### Third-party code: skipped by default, `--scan-all-files` to include it
+
+The default exclude list covers the standard `vendor`/`node_modules`/`Pods`/`.build`/`DerivedData`/`Carthage`/`bower_components`/… directories, plus conventionally-named non-product folders even in monorepos that don't use any package manager for them — `third-party`/`ThirdParty` (vendored external libraries), `build-system`/`BuildSystem` (build tooling, code generators), `scripts`/`Scripts`, and `fastlane`. On top of that static list, ArchScope reads `.gitmodules` at the scan root and skips every git submodule it finds too — the cleanest signal for "this directory is someone else's externally-owned repository checked out inside mine," regardless of what the submodule happens to be named (catches vendored code the name-based list above doesn't anticipate). Pass `--scan-all-files` to scan git submodules too (useful if you specifically want their code included); the static exclude list is still controllable the normal way, via `excludePaths` in `.archscope.json`.
+
+Progress is printed per stage:
 
 ```text
  → Scanning source tree…

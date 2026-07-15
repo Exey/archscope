@@ -44,15 +44,25 @@ func (Module) AppliesTo(l string) bool {
 	return false
 }
 
+// Location is one file:line occurrence of an Entry, beyond its primary
+// FilePath/Line — used when the same URI/pattern is registered in more than
+// one file (a shared route constant, a re-exported client, …), so that
+// information isn't silently dropped by cross-file deduplication.
+type Location struct {
+	FilePath string
+	Line     int
+}
+
 // Entry is one detected inbound or outbound connection signal.
 type Entry struct {
 	URI      string // route path, URL, host:port, service name
 	Port     string // extracted port, or ""
 	Protocol string // REST, gRPC, WebSocket, GraphQL, Redis, Kafka, NATS, AMQP
 	DataFmt  string // JSON, Protobuf, XML, or ""
-	FilePath string // absolute path for vscode:// link
-	Line     int    // approximate source line number
+	FilePath string // absolute path of the first occurrence, for vscode:// link
+	Line     int    // approximate source line number of the first occurrence
 	Module   string // module/microservice name the entry belongs to
+	Extra    []Location
 }
 
 // Result aggregates traffic signals from all analysed files.
@@ -65,8 +75,12 @@ func (r Result) HasData() bool { return len(r.Inbound) > 0 || len(r.Outbound) > 
 
 func (Module) Analyze(files []*parser.ParsedFile) any {
 	var r Result
-	seenIn := map[string]bool{}
-	seenOut := map[string]bool{}
+	// Maps a (URI, Protocol, Module) key to its index in r.Inbound/r.Outbound
+	// — a repeat key doesn't get dropped, its file:line is folded into that
+	// entry's Extra instead, so "the same route registered in N files" stays
+	// visible rather than silently collapsing to whichever file was seen first.
+	seenIn := map[string]int{}
+	seenOut := map[string]int{}
 
 	for _, f := range files {
 		if f.Extra == nil {
@@ -80,8 +94,10 @@ func (Module) Analyze(files []*parser.ParsedFile) any {
 			for _, e := range in {
 				e.Module = mod
 				k := e.URI + "|" + e.Protocol + "|" + mod
-				if !seenIn[k] {
-					seenIn[k] = true
+				if idx, ok := seenIn[k]; ok {
+					r.Inbound[idx].Extra = append(r.Inbound[idx].Extra, Location{e.FilePath, e.Line})
+				} else {
+					seenIn[k] = len(r.Inbound)
 					r.Inbound = append(r.Inbound, e)
 				}
 			}
@@ -90,8 +106,10 @@ func (Module) Analyze(files []*parser.ParsedFile) any {
 			for _, e := range out {
 				e.Module = mod
 				k := e.URI + "|" + e.Protocol + "|" + mod
-				if !seenOut[k] {
-					seenOut[k] = true
+				if idx, ok := seenOut[k]; ok {
+					r.Outbound[idx].Extra = append(r.Outbound[idx].Extra, Location{e.FilePath, e.Line})
+				} else {
+					seenOut[k] = len(r.Outbound)
 					r.Outbound = append(r.Outbound, e)
 				}
 			}
@@ -144,16 +162,12 @@ func (Module) RenderMarkdown(res any) string {
 			if e.Port != "" && !strings.Contains(uri, e.Port) {
 				uri = uri + ":" + e.Port
 			}
-			file := filepath.Base(e.FilePath)
-			if e.Line > 0 {
-				file = fmt.Sprintf("%s:%d", file, e.Line)
-			}
 			mod := e.Module
 			if mod == "" {
 				mod = "root"
 			}
 			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n",
-				mdCell(uri), mdCell(e.Protocol), mdCell(e.DataFmt), mdCell(mod), mdCell(file))
+				mdCell(uri), mdCell(e.Protocol), mdCell(e.DataFmt), mdCell(mod), mdCell(fileCellMD(e)))
 		}
 		b.WriteString("\n")
 	}
@@ -219,7 +233,7 @@ func renderTable(b *strings.Builder, heading string, entries []Entry) {
 		}
 		fmt.Fprintf(b,
 			`<tr><td>%s</td><td class="mono">%s</td><td class="mono">%s</td><td class="mono">%s</td><td class="mono">%s</td></tr>`,
-			protoTag(e.Protocol), esc(uri), esc(dataCell), fileLink(e.FilePath, e.Line), esc(mod),
+			protoTag(e.Protocol), esc(uri), esc(dataCell), fileLinksFor(e), esc(mod),
 		)
 	}
 	b.WriteString(`</tbody></table>`)
@@ -267,6 +281,52 @@ func fileLink(filePath string, line int) string {
 		name += ":" + strconv.Itoa(line)
 	}
 	return fmt.Sprintf(`<a href="%s">%s</a>`, html.EscapeString(href), html.EscapeString(name))
+}
+
+// maxFileLinksShown caps how many file:line locations are rendered for one
+// entry before collapsing the rest into "+N more" — a URI shared across
+// dozens of files shouldn't blow out the table row.
+const maxFileLinksShown = 4
+
+// fileLinksFor renders every location a deduplicated Entry was seen at (its
+// primary FilePath/Line plus any Extra occurrences) as a comma-separated list
+// of vscode:// links, capped at maxFileLinksShown.
+func fileLinksFor(e Entry) string {
+	if e.FilePath == "" {
+		return "—"
+	}
+	total := 1 + len(e.Extra)
+	shown := min(total, maxFileLinksShown)
+	links := make([]string, 0, shown)
+	links = append(links, fileLink(e.FilePath, e.Line))
+	for i := 0; i < len(e.Extra) && len(links) < shown; i++ {
+		links = append(links, fileLink(e.Extra[i].FilePath, e.Extra[i].Line))
+	}
+	out := strings.Join(links, ", ")
+	if total > shown {
+		out += fmt.Sprintf(` <span style="color:var(--text-faint)">+%d more</span>`, total-shown)
+	}
+	return out
+}
+
+// fileCellMD renders the same locations as fileLinksFor, but as plain
+// "name:line" text (no HTML) for the Markdown report.
+func fileCellMD(e Entry) string {
+	if e.FilePath == "" {
+		return ""
+	}
+	locs := make([]Location, 0, 1+len(e.Extra))
+	locs = append(locs, Location{e.FilePath, e.Line})
+	locs = append(locs, e.Extra...)
+	parts := make([]string, 0, len(locs))
+	for _, l := range locs {
+		name := filepath.Base(l.FilePath)
+		if l.Line > 0 {
+			name = fmt.Sprintf("%s:%d", name, l.Line)
+		}
+		parts = append(parts, name)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func esc(s string) string { return html.EscapeString(s) }

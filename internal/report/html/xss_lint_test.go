@@ -44,9 +44,10 @@ var safeCallees = map[string]bool{
 	"domainValueSuffix": true,
 	// Pre-escape their own dynamic parts internally with esc() and return an
 	// already-safe HTML fragment (verified by reading their bodies).
-	"trafficProtoTag": true,
-	"trafficFileLink": true,
-	"declTags":        true,
+	"trafficProtoTag":     true,
+	"trafficFileLink":     true,
+	"trafficFileLinksFor": true, // builds a list of trafficFileLink() calls (already safe) plus a %d-only "+N more" suffix
+	"declTags":            true,
 }
 
 // safeVarSuffixes are identifier-name suffixes that indicate a pre-built HTML

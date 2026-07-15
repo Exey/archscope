@@ -49,6 +49,8 @@ type Config struct {
 	GitCommitLimit  int       `json:"gitCommitLimit"`
 	HotspotCount    int       `json:"hotspotCount"`
 	FolderAsTab     bool      `json:"folderAsTab"`   // split per-folder into separate tabs (default true; --lang-platforms disables)
+	GitRepoAsTab    bool      `json:"gitRepoAsTab"`  // split per-git-repository into separate tabs (overrides FolderAsTab when set)
+	ScanAllFiles    bool      `json:"scanAllFiles"`  // scan git-submodule (third-party) directories too (default false; --scan-all-files enables)
 	RenderModules   bool      `json:"renderModules"` // include the Modules & Microservices section; omitted by default
 	Output          Output    `json:"output"`
 	Languages       Languages `json:"languages"`
@@ -64,6 +66,17 @@ func Default() Config {
 			".git", ".build", "node_modules", "vendor", "dist", "build",
 			".idea", ".vscode", "__pycache__", ".cache", "DerivedData",
 			"Pods", "target", ".venv", "venv", "env", "site-packages",
+			"Carthage", ".swiftpm", "bower_components",
+			// Vendored/external code and build tooling checked directly into a
+			// repo (not necessarily as a git submodule — see ParseGitSubmodules
+			// for that separate signal) under conventional names: a top-level
+			// "third-party" (or "ThirdParty") folder of forked/vendored external
+			// libraries, a "build-system"/"BuildSystem" folder of build tooling
+			// (code generators, project-file generators, …), and a "scripts"/
+			// "Scripts" folder of CI/debugging/automation helpers — none of it
+			// product code, all of it noise in per-language metrics otherwise.
+			"third-party", "ThirdParty", "build-system", "BuildSystem",
+			"scripts", "Scripts", "fastlane",
 		},
 		MaxFilesAnalyze: 50000,
 		GitCommitLimit:  1000,

@@ -360,9 +360,9 @@ const (
 // between these bounds. Whatever weight is left over comes from 💻 Code
 // Structure (comments, nesting, parameters, folder layout).
 const (
-	dsWeightPct              = 12
-	algoWeightPct            = 8
-	lfWeightMin, lfWeightMax = 10, 30
+	dsWeightPct              = 17
+	algoWeightPct            = 13
+	lfWeightMin, lfWeightMax = 10, 20
 	ltWeightMin, ltWeightMax = 5, 15
 )
 
@@ -650,7 +650,12 @@ func overallScore(design, quality, sec, perf int) int {
 func computeDevOpsRow(res *result.AnalysisResult) (cultureRow, bool) {
 	lint := res.DevOpsLint
 	k8s := res.K8sLint
-	if (lint == nil || lint.Empty()) && (k8s == nil || k8s.Empty()) {
+	// A single lone Dockerfile with nothing else isn't enough evidence of a
+	// real DevOps setup to score — mirrors renderDevOpsSection's gate.
+	if !lint.HasEnoughSignal() {
+		lint = nil
+	}
+	if lint.Empty() && (k8s == nil || k8s.Empty()) {
 		return cultureRow{}, false
 	}
 	health, ok := devopsHealthScore(lint, k8s)
@@ -701,7 +706,7 @@ func designTip(r cultureRow) string {
 		fmt.Fprintf(&b, "<div>🎖️ %d%% Richness (%d%% W)</div>", r.langRichnessScore, r.langRichnessWeight)
 	}
 	fmt.Fprintf(&b, "<div>🏗️ %d%% Arch Layers (%d%% W)</div>", r.archLayerScore, archWeightPct)
-	fmt.Fprintf(&b, "<div>🧩 %d%% Patterns (%d%% W).</div>", r.patternScore, patternWeightPct)
+	fmt.Fprintf(&b, "<div>🧩 %d%% Patterns (%d%% W)</div>", r.patternScore, patternWeightPct)
 	return b.String()
 }
 
@@ -710,7 +715,7 @@ func qualityTip(r cultureRow) string {
 		return "<div>DevOps: static-analysis pass rate across Dockerfile/Compose/Helm.</div>"
 	}
 	return fmt.Sprintf(
-		"<div>💻 %d%% Code Structure (%d%% W).</div>"+
+		"<div>💻 %d%% Code Structure (%d%% W)</div>"+
 			"<div>🌳 %d%% Data Structures (%d%% W)</div>"+
 			"<div>🔀 %d%% Algorithms (%d%% W)</div>"+
 			"<div>📐 %d%% Big Types (%d%% W)</div>"+
@@ -742,7 +747,7 @@ func perfTip(r cultureRow) string {
 		return "<div>DevOps: resource limits / budgets (neutral proxy).</div>"
 	}
 	return fmt.Sprintf(
-		"<div>🅾️ %d O(N³)+ / %d O(N²)</div>",
+		"<div>🅾️ %d 𝒪(n³)+ / %d 𝒪(n²)</div>",
 		r.n3, r.n2)
 }
 
@@ -891,15 +896,15 @@ func renderCultureIssues(res *result.AnalysisResult, panelsByPlat map[langspec.P
 func bigOString(order int) string {
 	switch {
 	case order <= 1:
-		return "O(N)"
+		return "𝒪(n)"
 	case order == 2:
-		return "O(N²)"
+		return "𝒪(n²)"
 	case order == 3:
-		return "O(N³)"
+		return "𝒪(n³)"
 	case order == 4:
-		return "O(N⁴)"
+		return "𝒪(n⁴)"
 	default:
-		return "O(Nⁿ)"
+		return "𝒪(nⁿ)"
 	}
 }
 

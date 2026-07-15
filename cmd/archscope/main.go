@@ -14,10 +14,13 @@
 //	--depth         clone depth; 0 = full history (default: 0)
 //	--fail-on       exit 2 when findings exist at or above threshold: low|medium|high
 //	--render-modules  include the Modules & Microservices section (and its graphs); omitted by default
-//	--lang-platforms  group all files of a language into one platform tab (default: one tab per top-level folder)
+//	--lang-platforms  group all files of a language into one platform tab (shorthand for --group-by=language)
+//	--group-by      how to group platform tabs: language | folder | gitrepo (default: auto-detected)
+//	--scan-all-files  also scan git-submodule (third-party/vendored) directories, skipped by default
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"os"
@@ -43,6 +46,7 @@ import (
 	_ "github.com/exey/archscope/internal/report/markdown" // register md emitter
 	_ "github.com/exey/archscope/internal/report/sarif"    // register sarif emitter
 	"github.com/exey/archscope/internal/result"
+	"github.com/exey/archscope/internal/scanner"
 )
 
 // exitCodeError is returned by run when a specific exit code is required.
@@ -65,11 +69,12 @@ func main() {
 	// valFlags lists flags whose next argument is their value (no '=' inline).
 	valFlags := map[string]bool{
 		"output": true, "o": true,
-		"format":  true,
-		"config":  true,
-		"ref":     true,
-		"depth":   true,
-		"fail-on": true,
+		"format":   true,
+		"config":   true,
+		"ref":      true,
+		"depth":    true,
+		"fail-on":  true,
+		"group-by": true,
 	}
 	rawArgs := os.Args[1:]
 	var target string
@@ -122,6 +127,8 @@ func main() {
 		langPlatforms bool
 		renderModules bool
 		failOn        string
+		groupBy       string
+		scanAllFiles  bool
 	)
 
 	fs.BoolVar(&openFlag, "open", false, "open the HTML report in the browser when done")
@@ -131,9 +138,11 @@ func main() {
 	fs.StringVar(&cfgPath, "config", "", "path to .archscope.json (default: .archscope.json in cwd)")
 	fs.StringVar(&ref, "ref", "", "git ref for remote URLs (branch/tag/sha)")
 	fs.IntVar(&depth, "depth", 0, "clone depth for remote URLs; 0 = full history")
-	fs.BoolVar(&langPlatforms, "lang-platforms", false, "group all files of a language into one platform tab (default: one tab per top-level folder)")
+	fs.BoolVar(&langPlatforms, "lang-platforms", false, "group all files of a language into one platform tab (shorthand for --group-by=language)")
 	fs.BoolVar(&renderModules, "render-modules", false, "include the Modules & Microservices section and its CDN-loaded graphs (omitted by default)")
 	fs.StringVar(&failOn, "fail-on", "", "exit 2 when findings exist at or above threshold: low | medium | high")
+	fs.StringVar(&groupBy, "group-by", "", "how to group platform tabs: language | folder | gitrepo (default: auto-detected from .git count, prompts interactively when 2+ repos are found)")
+	fs.BoolVar(&scanAllFiles, "scan-all-files", false, "also scan git-submodule (third-party/vendored) directories, skipped by default")
 
 	if err := fs.Parse(flagArgs); err != nil {
 		if err != flag.ErrHelp {
@@ -154,7 +163,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := run(target, ref, depth, cfgPath, outputDir, format, failOn, openFlag, langPlatforms, renderModules); err != nil {
+	groupBy = strings.ToLower(strings.TrimSpace(groupBy))
+	switch groupBy {
+	case "", "language", "folder", "gitrepo":
+	default:
+		fmt.Fprintf(os.Stderr, "archscope: unknown --group-by %q (want language, folder, or gitrepo)\n", groupBy)
+		os.Exit(1)
+	}
+	if langPlatforms && groupBy == "" {
+		groupBy = "language"
+	}
+
+	if err := run(target, ref, depth, cfgPath, outputDir, format, failOn, groupBy, openFlag, renderModules, scanAllFiles); err != nil {
 		if ec, ok := err.(*exitCodeError); ok {
 			if ec.msg != "" {
 				fmt.Fprintln(os.Stderr, ec.msg)
@@ -168,7 +188,7 @@ func main() {
 
 // run executes the full analysis. Deferred cleanup (clone temp dir removal)
 // fires on every return path because os.Exit in main would bypass it.
-func run(target, ref string, depth int, cfgPath, outputDir, format, failOn string, openFlag, langPlatforms, renderModules bool) error {
+func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, groupBy string, openFlag, renderModules, scanAllFiles bool) error {
 	cfg := config.Load(cfgPath)
 	if outputDir == "" {
 		outputDir = cfg.Output.Dir
@@ -183,10 +203,8 @@ func run(target, ref string, depth int, cfgPath, outputDir, format, failOn strin
 	if depth == 0 && cfg.Fetch.Depth > 0 {
 		depth = cfg.Fetch.Depth
 	}
-	// --lang-platforms opts OUT of the default per-folder tab split, grouping
-	// every file of a language back into one platform tab.
-	if langPlatforms {
-		cfg.FolderAsTab = false
+	if scanAllFiles {
+		cfg.ScanAllFiles = true
 	}
 	if renderModules {
 		cfg.RenderModules = true
@@ -198,6 +216,25 @@ func run(target, ref string, depth int, cfgPath, outputDir, format, failOn strin
 		return fmt.Errorf("archscope: %w", err)
 	}
 	defer resolved.Cleanup() //nolint:errcheck
+
+	// Decide how platform tabs are grouped. An explicit --group-by (or its
+	// --lang-platforms shorthand) always wins; otherwise the choice depends on
+	// how many git repositories live under the target: a single repo (or
+	// none) is one project, not a monorepo of independent services, so it
+	// defaults to grouping by language regardless of how many languages are
+	// present; 2+ repos is a real "which way do you want this sliced"
+	// question, asked interactively when possible.
+	if groupBy == "" {
+		gitRepos := scanner.DiscoverGitRepos(resolved.Path, cfg.ExcludePaths)
+		switch {
+		case len(gitRepos) <= 1:
+			fmt.Println("archscope: single project (0-1 git repositories) — grouping platform tabs by language (pass --group-by to override)")
+			groupBy = "language"
+		default:
+			groupBy = promptGroupingMode(len(gitRepos))
+		}
+	}
+	applyGroupBy(&cfg, groupBy)
 
 	pipelineStart := time.Now()
 	res, err := result.RunWithProgress(resolved.Path, cfg, func(msg string) {
@@ -273,6 +310,62 @@ func run(target, ref string, depth int, cfgPath, outputDir, format, failOn strin
 	return nil
 }
 
+// applyGroupBy sets the config fields that control platform-tab grouping.
+// mode is one of "language", "folder", "gitrepo" (anything else falls back
+// to "folder", today's long-standing default).
+func applyGroupBy(cfg *config.Config, mode string) {
+	switch mode {
+	case "language":
+		cfg.FolderAsTab = false
+		cfg.GitRepoAsTab = false
+	case "gitrepo":
+		cfg.FolderAsTab = false
+		cfg.GitRepoAsTab = true
+	default:
+		cfg.FolderAsTab = true
+		cfg.GitRepoAsTab = false
+	}
+}
+
+// promptGroupingMode asks the user (interactively, when stdin is a terminal)
+// how to group platform tabs when 2+ git repositories were found under the
+// target — that ambiguity can't be resolved automatically the way a single
+// repo can. Falls back to "folder" (the long-standing default) without
+// blocking when stdin isn't a terminal (CI, piped input, etc.) or the read
+// fails/hits EOF.
+func promptGroupingMode(repoCount int) string {
+	if !stdinIsTerminal() {
+		fmt.Printf("archscope: found %d git repositories; not an interactive terminal, defaulting to per-folder tabs (pass --group-by to choose explicitly and skip this message)\n", repoCount)
+		return "folder"
+	}
+	fmt.Printf("\narchscope: found %d git repositories under this path. How should platform tabs be grouped?\n", repoCount)
+	fmt.Println("  1. By Languages         — one tab per language, regardless of folder or repo")
+	fmt.Println("  2. By first-level folders — one tab per top-level folder (default)")
+	fmt.Println("  3. By folders with .git  — one tab per detected git repository")
+	fmt.Print("Choose 1-3 (default 2): ")
+
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	switch strings.TrimSpace(line) {
+	case "1":
+		return "language"
+	case "3":
+		return "gitrepo"
+	default:
+		return "folder"
+	}
+}
+
+// stdinIsTerminal reports whether os.Stdin looks like an interactive
+// terminal rather than a pipe, redirect, or CI's non-interactive stdin —
+// used to avoid ever blocking a scripted/CI run on a prompt it can't answer.
+func stdinIsTerminal() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
 // failOnRank maps a lower-case severity name to a comparable integer.
 func failOnRank(s string) int {
 	switch s {
@@ -297,8 +390,11 @@ Flags:
   --ref <ref>         git ref for remote URLs (branch/tag/sha)
   --depth <n>         clone depth for remote URLs (0 = full history)
   --fail-on <lvl>     exit 2 when findings exist at or above: low | medium | high
-  --lang-platforms    group all files of a language into one platform tab (default: one tab per top-level folder)
+  --lang-platforms    group all files of a language into one platform tab (shorthand for --group-by=language)
+  --group-by <mode>   how to group platform tabs: language | folder | gitrepo
+                      (default: auto — one git repo groups by language, 2+ prompts interactively)
   --render-modules    include the Modules & Microservices section (and its CDN-loaded graphs); omitted by default
+  --scan-all-files    also scan git-submodule (third-party/vendored) directories, skipped by default
 `)
 }
 

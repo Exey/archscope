@@ -92,6 +92,15 @@ func Scan(rootPath string, cfg config.Config, reg *langspec.Registry) (*ScanResu
 	}
 	enabled := enabledSet(cfg, reg)
 
+	// Git submodules are vendored, externally-owned code — skip them (like
+	// .git itself) unless the caller explicitly asked to scan everything.
+	submodules := map[string]bool{}
+	if !cfg.ScanAllFiles {
+		for _, p := range ParseGitSubmodules(abs) {
+			submodules[filepath.Join(abs, p)] = true
+		}
+	}
+
 	res := &ScanResult{
 		Root:      abs,
 		Platforms: map[langspec.Platform]*PlatformGroup{},
@@ -99,7 +108,8 @@ func Scan(rootPath string, cfg config.Config, reg *langspec.Registry) (*ScanResu
 	}
 
 	// ── Phase 1: discover module roots and git repos ──
-	roots := discoverModuleRoots(abs, reg, excl)
+	roots := discoverModuleRoots(abs, reg, excl, submodules)
+	res.GitRepos = DiscoverGitRepos(abs, cfg.ExcludePaths)
 	projTypeSet := map[string]bool{}
 	for _, r := range roots {
 		if r.projectType != "" {
@@ -116,10 +126,9 @@ func Scan(rootPath string, cfg config.Config, reg *langspec.Registry) (*ScanResu
 		name := d.Name()
 		if d.IsDir() {
 			if name == ".git" {
-				res.GitRepos = append(res.GitRepos, filepath.Dir(path))
 				return filepath.SkipDir
 			}
-			if strings.HasPrefix(name, ".") || excl[name] || skipDirs[name] {
+			if strings.HasPrefix(name, ".") || excl[name] || skipDirs[name] || submodules[path] {
 				return filepath.SkipDir
 			}
 			return nil
@@ -136,11 +145,20 @@ func Scan(rootPath string, cfg config.Config, reg *langspec.Registry) (*ScanResu
 
 		mod, projType := attributeModule(abs, path, spec, roots)
 
-		// In folder-as-tab mode each (language, top-level folder) pair becomes
-		// its own tab; otherwise all files of a language share one tab.
+		// In gitrepo-as-tab mode each (language, containing repo) pair becomes
+		// its own tab; in folder-as-tab mode each (language, top-level folder)
+		// pair does; otherwise all files of a language share one tab.
 		tabPlatform := spec.Platform
 		tabLabel := ""
-		if cfg.FolderAsTab {
+		switch {
+		case cfg.GitRepoAsTab:
+			if repo := NearestGitRepo(res.GitRepos, path); repo != "" {
+				if label := filepath.ToSlash(relOrBase(abs, repo)); label != "" {
+					tabPlatform = langspec.Platform(string(spec.Platform) + ":" + label)
+					tabLabel = label
+				}
+			}
+		case cfg.FolderAsTab:
 			if folder := topFolder(abs, path); folder != "" {
 				tabPlatform = langspec.Platform(string(spec.Platform) + ":" + folder)
 				tabLabel = folder
@@ -191,14 +209,15 @@ func Scan(rootPath string, cfg config.Config, reg *langspec.Registry) (*ScanResu
 		res.ProjectTypes = append(res.ProjectTypes, t)
 	}
 	sort.Strings(res.ProjectTypes)
-	sort.Strings(res.GitRepos)
-	res.GitRepos = dedupeSorted(res.GitRepos)
 
 	res.DockerServices, res.Technologies = ScanDockerCompose(abs)
 	res.DevOpsTools = ScanDevOps(abs)
 	res.DevOpsLint = ScanDevOpsLint(abs)
 	res.K8sLint = ScanK8sLint(abs)
-	res.FolderAsTab = cfg.FolderAsTab
+	// Gitrepo-as-tab produces the same "platform:label" synthetic keys
+	// folder-as-tab does (just keyed by containing repo instead of top-level
+	// folder), so every report-layer check gated on FolderAsTab still applies.
+	res.FolderAsTab = cfg.FolderAsTab || cfg.GitRepoAsTab
 	res.RenderModules = cfg.RenderModules
 
 	return res, nil
@@ -259,6 +278,20 @@ func topFolder(rootPath, filePath string) string {
 		return rel[:i]
 	}
 	return ""
+}
+
+// relOrBase returns repo's path relative to rootPath, for use as a gitrepo-
+// as-tab label — or repo's base name when repo IS rootPath (a single
+// top-level repo) or the relative path can't be computed.
+func relOrBase(rootPath, repo string) string {
+	if repo == rootPath {
+		return filepath.Base(repo)
+	}
+	rel, err := filepath.Rel(rootPath, repo)
+	if err != nil || rel == "." || rel == "" {
+		return filepath.Base(repo)
+	}
+	return rel
 }
 
 // platformShortLabel returns the abbreviated language name used in folder-as-tab

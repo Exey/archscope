@@ -136,6 +136,20 @@ func ScanDevOpsLint(rootPath string) *DevOpsLint {
 	return lint
 }
 
+// HasEnoughSignal reports whether this DevOps lint carries enough evidence of
+// a real DevOps setup to display/score at all. A single lone Dockerfile with
+// no compose file or Helm chart alongside it isn't — that's as likely to be a
+// throwaway dev container as a real deployment artefact.
+func (l *DevOpsLint) HasEnoughSignal() bool {
+	if l.Empty() {
+		return false
+	}
+	if l.Compose == nil && l.Helm == nil && l.Dockerfiles != nil && len(l.Dockerfiles.Files) == 1 {
+		return false
+	}
+	return true
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 func readSmall(path string) []string {

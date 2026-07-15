@@ -451,6 +451,47 @@ func TestAnalyze_Empty(t *testing.T) {
 	}
 }
 
+// TestAnalyze_SameURIAcrossFilesMerges verifies that the same (URI, Protocol,
+// Module) registered from two different files produces ONE entry with the
+// second file's location folded into Extra, rather than silently dropping it.
+func TestAnalyze_SameURIAcrossFilesMerges(t *testing.T) {
+	m := Module{}
+	files := []*parser.ParsedFile{
+		{
+			ModuleName: "api",
+			Extra: map[string]any{
+				"trafficInbound": []Entry{
+					{URI: "/users", Protocol: "REST", FilePath: "/app/a/routes.go", Line: 10},
+				},
+			},
+		},
+		{
+			ModuleName: "api",
+			Extra: map[string]any{
+				"trafficInbound": []Entry{
+					{URI: "/users", Protocol: "REST", FilePath: "/app/b/routes.go", Line: 20},
+				},
+			},
+		},
+	}
+	r := m.Analyze(files).(Result)
+	if len(r.Inbound) != 1 {
+		t.Fatalf("want 1 merged entry, got %d: %+v", len(r.Inbound), r.Inbound)
+	}
+	e := r.Inbound[0]
+	if e.FilePath != "/app/a/routes.go" || e.Line != 10 {
+		t.Errorf("expected first occurrence as primary, got %s:%d", e.FilePath, e.Line)
+	}
+	if len(e.Extra) != 1 || e.Extra[0].FilePath != "/app/b/routes.go" || e.Extra[0].Line != 20 {
+		t.Errorf("expected second occurrence in Extra, got %+v", e.Extra)
+	}
+
+	out := fileLinksFor(e)
+	if !strings.Contains(out, "routes.go:10") || !strings.Contains(out, "routes.go:20") {
+		t.Errorf("expected both locations rendered, got %s", out)
+	}
+}
+
 // ── Java inbound ─────────────────────────────────────────────────────────────
 
 func TestJavaInbound_SpringMVC(t *testing.T) {

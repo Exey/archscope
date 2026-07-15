@@ -26,8 +26,11 @@ var skipDirs = map[string]bool{
 // discoverModuleRoots finds directories that hold a module for some language,
 // identified by that language's ModuleDetection.MarkerFiles (and ProjectTypes).
 // It searches up to maxRootDepth levels below rootPath. Deeper, more specific
-// roots are kept so attributeModule can pick the nearest one.
-func discoverModuleRoots(rootPath string, reg *langspec.Registry, excl map[string]bool) []moduleRoot {
+// roots are kept so attributeModule can pick the nearest one. submodules (full
+// absolute directory paths) are skipped entirely, same as excl/skipDirs — a
+// vendored git submodule shouldn't be mistaken for one of this project's own
+// modules.
+func discoverModuleRoots(rootPath string, reg *langspec.Registry, excl map[string]bool, submodules map[string]bool) []moduleRoot {
 	// Build marker -> (languageID) and marker -> projectType indexes once.
 	type markerInfo struct {
 		languageID  string
@@ -120,7 +123,11 @@ func discoverModuleRoots(rootPath string, reg *langspec.Registry, excl map[strin
 			if name == ".git" || strings.HasPrefix(name, ".") || excl[name] || skipDirs[name] {
 				continue
 			}
-			visit(filepath.Join(dir, name), depth+1)
+			sub := filepath.Join(dir, name)
+			if submodules[sub] {
+				continue
+			}
+			visit(sub, depth+1)
 		}
 	}
 	visit(rootPath, 0)

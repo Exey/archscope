@@ -646,6 +646,12 @@ func techCategorySets(res *result.AnalysisResult) map[string]map[string]bool {
 func renderDevOpsSection(res *result.AnalysisResult) string {
 	lint := res.DevOpsLint
 	k8s := res.K8sLint
+	// A single lone Dockerfile with nothing else (no compose, no Helm) isn't
+	// enough evidence of a real DevOps setup to display or score — could just
+	// be a throwaway dev container. Downstream, treat lint as absent.
+	if !lint.HasEnoughSignal() {
+		lint = nil
+	}
 	if len(res.DevOpsTools) == 0 && lint.Empty() && k8s.Empty() {
 		return ""
 	}
@@ -3383,6 +3389,38 @@ func platformCardIndex(res *result.AnalysisResult) map[langspec.Platform]int {
 	return idx
 }
 
+// platformFolderNames returns the distinct top-level folders pg's files sit
+// in (relative to rootPath), busiest (most files) first — used to hint at a
+// language-grouped card's physical spread across a monorepo, since in that
+// mode one card can span every folder in the tree.
+func platformFolderNames(pg *scanner.PlatformGroup, rootPath string) []string {
+	counts := map[string]int{}
+	for _, f := range pg.Files {
+		rel, err := filepath.Rel(rootPath, f.Path)
+		if err != nil {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		if i := strings.IndexByte(rel, '/'); i > 0 {
+			counts[rel[:i]]++
+		}
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(counts))
+	for n := range counts {
+		names = append(names, n)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if counts[names[i]] != counts[names[j]] {
+			return counts[names[i]] > counts[names[j]]
+		}
+		return names[i] < names[j]
+	})
+	return names
+}
+
 func renderTabs(res *result.AnalysisResult) string {
 	platforms := orderedPlatformTabs(res)
 	if len(platforms) == 0 {
@@ -3472,6 +3510,18 @@ func renderTabs(res *result.AnalysisResult) string {
 		pillText, nameText := abbr, pg.TabLabel()
 		if res.Scan.FolderAsTab && pg.Label != "" {
 			pillText, nameText = pg.Label, langspec.PlatformTitle(lp)
+		} else if folders := platformFolderNames(pg, res.RootPath); len(folders) > 0 {
+			// Language grouping puts every file of this language in one card
+			// regardless of folder, so — unlike the folder/gitrepo-as-tab case
+			// above, where the pill already names the one folder — a card here
+			// can span many folders. Name up to 3 (busiest first) so a huge
+			// monorepo card still says roughly where its files live.
+			shown := folders
+			suffix := ""
+			if len(shown) > 3 {
+				shown, suffix = shown[:3], ", …"
+			}
+			nameText += " (" + strings.Join(shown, ", ") + suffix + ")"
 		}
 		b.WriteString(`<div class="as-plat-card__head">`)
 		b.WriteString(`<div class="as-plat-card__summary">`)
@@ -4205,12 +4255,12 @@ func renderSpecTrafficTable(b *strings.Builder, heading string, entries []traffi
 			}
 			fmt.Fprintf(b,
 				`<tr><td>%s</td><td class="mono">%s</td><td class="mono">%s</td><td style="text-align:center">%s</td><td class="mono">%s</td><td class="mono">%s</td></tr>`,
-				trafficProtoTag(e.Protocol), esc(uri), esc(dataCell), specIcon, trafficFileLink(e.FilePath, e.Line), esc(mod),
+				trafficProtoTag(e.Protocol), esc(uri), esc(dataCell), specIcon, trafficFileLinksFor(e), esc(mod),
 			)
 		} else {
 			fmt.Fprintf(b,
 				`<tr><td>%s</td><td class="mono">%s</td><td class="mono">%s</td><td class="mono">%s</td><td class="mono">%s</td></tr>`,
-				trafficProtoTag(e.Protocol), esc(uri), esc(dataCell), trafficFileLink(e.FilePath, e.Line), esc(mod),
+				trafficProtoTag(e.Protocol), esc(uri), esc(dataCell), trafficFileLinksFor(e), esc(mod),
 			)
 		}
 	}
@@ -4258,6 +4308,33 @@ func trafficFileLink(filePath string, line int) string {
 		name += ":" + strconv.Itoa(line)
 	}
 	return fmt.Sprintf(`<a href="%s">%s</a>`, esc(href), esc(name))
+}
+
+// trafficMaxFileLinksShown mirrors traffic.maxFileLinksShown for this
+// package's own copy of the file-links renderer.
+const trafficMaxFileLinksShown = 4
+
+// trafficFileLinksFor renders every location a deduplicated Entry was seen at
+// (its primary FilePath/Line plus any Extra occurrences) as a comma-separated
+// list of vscode:// links, capped at trafficMaxFileLinksShown. Mirrors
+// traffic.fileLinksFor so the SPEC COV variant of the table reads the same
+// data the same way.
+func trafficFileLinksFor(e traffic.Entry) string {
+	if e.FilePath == "" {
+		return "—"
+	}
+	total := 1 + len(e.Extra)
+	shown := min(total, trafficMaxFileLinksShown)
+	links := make([]string, 0, shown)
+	links = append(links, trafficFileLink(e.FilePath, e.Line))
+	for i := 0; i < len(e.Extra) && len(links) < shown; i++ {
+		links = append(links, trafficFileLink(e.Extra[i].FilePath, e.Extra[i].Line))
+	}
+	out := strings.Join(links, ", ")
+	if total > shown {
+		out += fmt.Sprintf(` <span style="color:var(--text-faint)">+%d more</span>`, total-shown)
+	}
+	return out
 }
 
 func moduleIcon(id string) string {

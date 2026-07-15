@@ -61,15 +61,15 @@ type Violation struct {
 func (v Violation) bigO() string {
 	switch {
 	case v.Order <= 1:
-		return "O(N)"
+		return "𝒪(n)"
 	case v.Order == 2:
-		return "O(N²)"
+		return "𝒪(n²)"
 	case v.Order == 3:
-		return "O(N³)"
+		return "𝒪(n³)"
 	case v.Order == 4:
-		return "O(N⁴)"
+		return "𝒪(n⁴)"
 	default:
-		return "O(Nⁿ)"
+		return "𝒪(nⁿ)"
 	}
 }
 
