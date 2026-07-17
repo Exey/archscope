@@ -99,49 +99,100 @@ type DesignPatternResult struct {
 // HasDetection reports whether any pattern was found.
 func (r DesignPatternResult) HasDetection() bool { return len(r.Matches) > 0 }
 
-// suffixRule maps a declaration-name suffix to a GoF pattern.
+// suffixRule maps a declaration-name suffix to a GoF pattern. kinds, when
+// non-nil, restricts the match to those declaration kinds (e.g. Delegation
+// only fires on a protocol/interface named "*Delegate", not a class); nil
+// means "any kind isPatternTypeKind already allows".
 type suffixRule struct {
 	suffix   string
 	pattern  string
 	category patternCategory
+	kinds    []parser.DeclKind
+}
+
+// kindAllowed reports whether k is permitted by a rule's kind filter.
+func kindAllowed(kinds []parser.DeclKind, k parser.DeclKind) bool {
+	if kinds == nil {
+		return true
+	}
+	for _, kk := range kinds {
+		if kk == k {
+			return true
+		}
+	}
+	return false
 }
 
 // suffixRules are checked against every type-like declaration name. Order does
 // not matter; a name is attributed to the first rule it satisfies.
+//
+// Factory and Prototype are deliberately absent here: Factory needs a
+// whole-codebase pass to tell Factory Method from Abstract Factory (see
+// factoryLabel in Analyze), and Prototype is detected from content
+// (NSCopying/copy()/clone()) rather than its name, in scanSwiftFile below.
 var suffixRules = []suffixRule{
-	{"Factory", "Factory Method", creational},
-	{"Builder", "Builder", creational},
-	{"Prototype", "Prototype", creational},
-	{"Adapter", "Adapter", structural},
-	{"Bridge", "Bridge", structural},
-	{"Composite", "Composite", structural},
-	{"Decorator", "Decorator", structural},
-	{"Facade", "Facade", structural},
-	{"Flyweight", "Flyweight", structural},
-	{"Proxy", "Proxy", structural},
-	{"Strategy", "Strategy", behavioral},
-	{"Observer", "Observer", behavioral},
-	{"Listener", "Observer", behavioral},
-	{"Subscriber", "Observer", behavioral},
-	{"Publisher", "Observer", behavioral},
-	{"Command", "Command", behavioral},
-	{"Visitor", "Visitor", behavioral},
-	{"Mediator", "Mediator", behavioral},
-	{"Memento", "Memento", behavioral},
-	{"Iterator", "Iterator", behavioral},
-	{"Interpreter", "Interpreter", behavioral},
-	{"Handler", "Chain of Responsibility", behavioral},
+	{suffix: "Builder", pattern: "Builder", category: creational},
+	{suffix: "Adapter", pattern: "Adapter", category: structural},
+	{suffix: "Bridge", pattern: "Bridge", category: structural},
+	{suffix: "Composite", pattern: "Composite", category: structural},
+	{suffix: "Decorator", pattern: "Decorator", category: structural},
+	{suffix: "Facade", pattern: "Facade", category: structural},
+	{suffix: "Flyweight", pattern: "Flyweight", category: structural},
+	{suffix: "Proxy", pattern: "Proxy", category: structural},
+	// Cache-backed types implement caching, not GoF Flyweight (shared
+	// immutable intrinsic state) — restricted to concrete kinds so a
+	// CacheProtocol interface doesn't double-count with its implementation.
+	{suffix: "Cache", pattern: "Caching", category: structural,
+		kinds: []parser.DeclKind{parser.DeclStruct, parser.DeclClass, parser.DeclActor}},
+	{suffix: "Strategy", pattern: "Strategy", category: behavioral},
+	{suffix: "Observer", pattern: "Observer", category: behavioral},
+	{suffix: "Listener", pattern: "Observer", category: behavioral},
+	{suffix: "Subscriber", pattern: "Observer", category: behavioral},
+	{suffix: "Publisher", pattern: "Observer", category: behavioral},
+	// Delegation is split out from Observer: one object forwarding
+	// responsibility to a single designated other is a distinct claim from
+	// Observer's one-to-many broadcast, even though both ship as protocols.
+	{suffix: "Delegate", pattern: "Delegation", category: behavioral,
+		kinds: []parser.DeclKind{parser.DeclInterface}},
+	{suffix: "Command", pattern: "Command", category: behavioral},
+	{suffix: "Visitor", pattern: "Visitor", category: behavioral},
+	{suffix: "Mediator", pattern: "Mediator", category: behavioral},
+	// Memento restricted to class/struct, matching the reference — an enum or
+	// protocol named "*Snapshot"/"*Memento" is usually a state description,
+	// not the pattern's actual originator/caretaker/memento trio.
+	{suffix: "Memento", pattern: "Memento", category: behavioral,
+		kinds: []parser.DeclKind{parser.DeclClass, parser.DeclStruct}},
+	{suffix: "Snapshot", pattern: "Memento", category: behavioral,
+		kinds: []parser.DeclKind{parser.DeclClass, parser.DeclStruct}},
+	{suffix: "Iterator", pattern: "Iterator", category: behavioral},
+	{suffix: "Interpreter", pattern: "Interpreter", category: behavioral},
+	{suffix: "Handler", pattern: "Chain of Responsibility", category: behavioral},
 	// Feature Flag / Toggle — a runtime behavior switch, closely related to
 	// Strategy's "select behavior at runtime" intent. Not in the GoF catalog,
 	// but a real, widespread practice worth surfacing the same way.
-	{"FeatureFlag", "Feature Flag", behavioral},
-	{"FeatureToggle", "Feature Flag", behavioral},
-	{"FeatureGate", "Feature Flag", behavioral},
+	{suffix: "FeatureFlag", pattern: "Feature Flag", category: behavioral},
+	{suffix: "FeatureToggle", pattern: "Feature Flag", category: behavioral},
+	{suffix: "FeatureGate", pattern: "Feature Flag", category: behavioral},
 	// Dependency Injection by explicit naming convention — the Swinject-import
 	// signal below covers the case where no such type is named.
-	{"ServiceLocator", "Dependency Injection", creational},
-	{"DIContainer", "Dependency Injection", creational},
-	{"Injector", "Dependency Injection", creational},
+	{suffix: "ServiceLocator", pattern: "Dependency Injection", category: creational},
+	{suffix: "DIContainer", pattern: "Dependency Injection", category: creational},
+	{suffix: "Injector", pattern: "Dependency Injection", category: creational},
+}
+
+// nullObjectKinds restricts Null Object to concrete/enumerable kinds — an
+// interface named "NullFoo" would be unusual and isn't the pattern anyway
+// (Null Object is a concrete no-op stand-in, not an abstraction).
+var nullObjectKinds = []parser.DeclKind{parser.DeclClass, parser.DeclStruct, parser.DeclEnum}
+
+// hasRolePrefix reports whether name starts with prefix as a whole "word" —
+// i.e. "NullUser" matches "Null" but "Nullable" does not.
+func hasRolePrefix(name, prefix string) bool {
+	if len(name) <= len(prefix) || !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	next := name[len(prefix)]
+	return next >= 'A' && next <= 'Z'
 }
 
 // featureFlagImportNeedles are known feature-flagging SDK import markers,
@@ -207,6 +258,7 @@ type swiftFileScan struct {
 	combineSignal     bool // @Published/ObservableObject/import Combine — Observer
 	swinjectImport    bool // import Swinject — Dependency Injection
 	multiton          bool // static var/let instances: [...] — Multiton
+	prototype         bool // NSCopying conformance or copy()/clone() declaration — Prototype
 }
 
 // multitonNeedles are the declaration-style spellings of a static keyed-
@@ -250,6 +302,10 @@ func scanSwiftFile(path string) (s swiftFileScan, ok bool) {
 				break
 			}
 		}
+		if strings.Contains(line, ": NSCopying") || strings.Contains(line, ", NSCopying") ||
+			strings.Contains(line, "func copy()") || strings.Contains(line, "func clone()") {
+			s.prototype = true
+		}
 	}
 	content := whole.String()
 	if strings.Contains(content, "DispatchQueue") && strings.Contains(content, ".barrier") {
@@ -276,6 +332,95 @@ func scanSwiftFile(path string) (s swiftFileScan, ok bool) {
 	return s, true
 }
 
+// ── Marker interface detection ────────────────────────────────────────────
+//
+// A protocol/interface declared with an empty body exists purely to tag
+// conforming types (`protocol Trashable {}`) — the Marker pattern. Universal
+// (not Swift-only): any language's protocol/interface with zero members
+// qualifies, so this works off the shared sourceCache/typeDeclKeywords rather
+// than scanSwiftFile.
+
+// declaresProtocolLike reports whether stripped line l declares a
+// protocol/interface named exactly name (identifier-boundary checked).
+func declaresProtocolLike(l, name string) bool {
+	for _, kw := range []string{"protocol ", "interface "} {
+		idx := strings.Index(l, kw+name)
+		if idx < 0 {
+			continue
+		}
+		after := idx + len(kw) + len(name)
+		if after >= len(l) || !isIdentByte(l[after]) {
+			return true
+		}
+	}
+	return false
+}
+
+// braceDelta counts the net brace-depth change contributed by s.
+func braceDelta(s string) int {
+	d := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			d++
+		case '}':
+			d--
+		}
+	}
+	return d
+}
+
+// protocolInterior returns the content strictly between a protocol/
+// interface's outermost braces (braces themselves excluded), or ok=false
+// when the declaration can't be located or has no brace body.
+func protocolInterior(lines []string, name string) (body string, ok bool) {
+	for i, l := range lines {
+		if !declaresProtocolLike(l, name) {
+			continue
+		}
+		openIdx := strings.IndexByte(l, '{')
+		if openIdx < 0 {
+			return "", false
+		}
+		depth := 1
+		first := l[openIdx+1:]
+		d := braceDelta(first)
+		if depth+d <= 0 {
+			if closeIdx := strings.LastIndexByte(first, '}'); closeIdx >= 0 {
+				first = first[:closeIdx]
+			}
+			return first, true
+		}
+		collected := []string{first}
+		depth += d
+		for j := i + 1; j < len(lines); j++ {
+			l2 := lines[j]
+			d2 := braceDelta(l2)
+			if depth+d2 <= 0 {
+				if closeIdx := strings.LastIndexByte(l2, '}'); closeIdx >= 0 {
+					collected = append(collected, l2[:closeIdx])
+				}
+				return strings.Join(collected, "\n"), true
+			}
+			collected = append(collected, l2)
+			depth += d2
+		}
+		return strings.Join(collected, "\n"), true
+	}
+	return "", false
+}
+
+// isEmptyProtocolBody reports whether body (as returned by protocolInterior)
+// has no non-whitespace content — i.e. the protocol declares zero members.
+func isEmptyProtocolBody(body string) bool {
+	for _, raw := range strings.Split(body, "\n") {
+		if strings.TrimSpace(raw) != "" {
+			return false
+		}
+	}
+	return true
+}
+
 // Analyze scans declarations across files and attributes GoF roles.
 func (DesignPatterns) Analyze(files []*parser.ParsedFile) any {
 	type agg struct {
@@ -285,6 +430,7 @@ func (DesignPatterns) Analyze(files []*parser.ParsedFile) any {
 		isIdiom  bool
 	}
 	found := map[string]*agg{}
+	cache := newSourceCache()
 
 	add := func(pattern string, cat patternCategory, example string, idiom bool) {
 		a := found[pattern]
@@ -295,6 +441,23 @@ func (DesignPatterns) Analyze(files []*parser.ParsedFile) any {
 		a.count++
 		if len(a.examples) < 4 {
 			a.examples = append(a.examples, example)
+		}
+	}
+
+	// Factory Method vs. Abstract Factory needs a whole-codebase view: the
+	// label depends on whether *any* Factory-suffixed declaration anywhere is
+	// a protocol/interface, not just the one being visited right now.
+	factoryLabel := ""
+	for _, f := range files {
+		for _, d := range f.Declarations {
+			if !isPatternTypeKind(d.Kind) || !hasRoleSuffix(d.Name, "Factory") {
+				continue
+			}
+			if d.Kind == parser.DeclInterface {
+				factoryLabel = "Abstract Factory"
+			} else if factoryLabel == "" {
+				factoryLabel = "Factory Method"
+			}
 		}
 	}
 
@@ -337,10 +500,38 @@ func (DesignPatterns) Analyze(files []*parser.ParsedFile) any {
 				}
 			}
 
+			// Marker interface: a protocol/interface declared with zero
+			// members, used purely to tag conforming types. Universal (works
+			// off the shared stripped-line cache, not a Swift-only scan).
+			if d.Kind == parser.DeclInterface {
+				if lines := cache.lines(f.FilePath); lines != nil {
+					if body, ok := protocolInterior(lines, d.Name); ok && isEmptyProtocolBody(body) {
+						add("Marker", structural, exemplar(d.Name, fname), false)
+					}
+				}
+			}
+
 			if !isPatternTypeKind(d.Kind) {
 				continue
 			}
+
+			// Null Object: types prefixed Null<X> — a no-op stand-in for a real <X>.
+			if kindAllowed(nullObjectKinds, d.Kind) && hasRolePrefix(d.Name, "Null") {
+				add("Null Object", behavioral, exemplar(d.Name, fname), false)
+			}
+
+			// Factory Method / Abstract Factory: label decided by the
+			// whole-codebase pre-pass above, since it depends on whether any
+			// Factory-suffixed declaration anywhere is a protocol.
+			if hasRoleSuffix(d.Name, "Factory") {
+				add(factoryLabel, creational, exemplar(d.Name, fname), false)
+				continue
+			}
+
 			for _, rule := range suffixRules {
+				if !kindAllowed(rule.kinds, d.Kind) {
+					continue
+				}
 				if hasRoleSuffix(d.Name, rule.suffix) {
 					add(rule.pattern, rule.category, exemplar(d.Name, fname), false)
 					break
@@ -376,6 +567,9 @@ func (DesignPatterns) Analyze(files []*parser.ParsedFile) any {
 				}
 				if s.swinjectImport {
 					add("Dependency Injection", creational, exemplar("", fname), false)
+				}
+				if s.prototype {
+					add("Prototype", creational, exemplar("", fname), false)
 				}
 				if s.combineSignal {
 					// Folded into the same "Observer" match as the NC/suffix

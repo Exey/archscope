@@ -49,6 +49,52 @@ func TestDetectsHighEntropyInEitherRadix(t *testing.T) {
 	}
 }
 
+func TestAttributesToGoMethodWithReceiver(t *testing.T) {
+	// Before the reFuncDecl fix, a Go method with a receiver clause
+	// ("func (h *Hasher) Sum32()") wasn't recognized as a function
+	// declaration at all, so a magic constant inside it fell back to
+	// "(top level)" instead of the actual method name.
+	f := mcFile(t, "a.go", "func (h *Hasher) Sum32() uint32 {\n\treturn 0x01000193\n}\n")
+	res := (MagicConstants{}).Analyze([]*parser.ParsedFile{f}).(MagicConstantResult)
+	var sym string
+	for _, m := range res.Matches {
+		if m.Name == "FNV-1/1a (32-bit prime)" {
+			sym = m.Occurrences[0].Symbol
+		}
+	}
+	if sym != "Sum32" {
+		t.Errorf("expected attribution to method %q, got %q", "Sum32", sym)
+	}
+}
+
+func TestDetectsSha512IVsXxHashAndPCGConstants(t *testing.T) {
+	got := mcDetect(mcFile(t, "a.go", strings.Join([]string{
+		"const ivA = 0x6a09e667f3bcc908",
+		"const prime1 = 0x9e3779b185ebca87",
+		"const prime32_1 = 0x9e3779b1",
+		"const pcgMul = 0x5851f42d4c957f2d",
+		"const pcgInc = 0x14057b7ef767814f",
+	}, "\n")))
+	for _, want := range []string{
+		"SHA-512 (initialization vector)",
+		"xxHash64 (prime 1)",
+		"xxHash32 (prime 1)",
+		"PCG32 (default multiplier)",
+		"PCG32 (default increment)",
+	} {
+		if got[want] == 0 {
+			t.Errorf("missing constant %q (got %v)", want, got)
+		}
+	}
+}
+
+func TestDetectsJavaThreadLocalRandomConstant(t *testing.T) {
+	got := mcDetect(mcFile(t, "a.java", "private static final long INCREMENT = 0x61c88647L;\n"))
+	if got["Java ThreadLocalRandom / ThreadLocal (golden ratio increment)"] != 1 {
+		t.Errorf("want Java ThreadLocalRandom golden-ratio constant, got %v", got)
+	}
+}
+
 func TestLowEntropyRequiresHex(t *testing.T) {
 	// CRC-16/CCITT 0x1021 (4129) is low-entropy: only hex spelling counts.
 	hex := mcDetect(mcFile(t, "a.go", "poly := 0x1021\n"))

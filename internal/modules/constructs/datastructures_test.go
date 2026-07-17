@@ -56,6 +56,43 @@ func TestDetectsCoreStructures(t *testing.T) {
 	}
 }
 
+func TestDetectsBSTAcronymSuffix(t *testing.T) {
+	got := detectedNames([]*parser.ParsedFile{file("a.go", ty("NodeBST"))})
+	if got["Binary Search Tree"] != 1 {
+		t.Errorf("expected Binary Search Tree from BST acronym suffix, got %v", got)
+	}
+}
+
+func TestSnakeCaseSuffixMatching(t *testing.T) {
+	files := []*parser.ParsedFile{
+		file("a.go", ty("my_stack")),           // real Stack — gated, needs body evidence
+		file("b.go", ty("my_linked_list")),     // unambiguous compound suffix — no gating
+		file("c.go", ty("singly_linked_list")), // multi-word suffix, exact PascalCase name
+		file("d.go", ty("event_queue")),        // compound suffix, single underscore word
+	}
+	got := detectedNames(files)
+	if got["Linked List"] != 2 {
+		t.Errorf("expected Linked List ×2 (my_linked_list, singly_linked_list), got %v", got)
+	}
+	if got["Event Queue"] != 1 {
+		t.Errorf("expected Event Queue, got %v", got)
+	}
+	// my_stack has no push/pop evidence in its (empty) body — must stay rejected,
+	// same as the PascalCase gating behavior.
+	if _, ok := got["Stack"]; ok {
+		t.Errorf("snake_case Stack without body evidence must still be rejected: %v", got)
+	}
+}
+
+func TestSnakeCaseDoesNotDoubleMatchAlreadyPascalNames(t *testing.T) {
+	// A name with no underscore must go through the exact-case path only,
+	// unaffected by the snake_case fallback.
+	got := detectedNames([]*parser.ParsedFile{file("a.go", ty("LinkedList"))})
+	if got["Linked List"] != 1 {
+		t.Errorf("expected Linked List ×1, got %v", got)
+	}
+}
+
 func TestLongestMatchWins(t *testing.T) {
 	got := detectedNames([]*parser.ParsedFile{file("a.go", ty("BinarySearchTree"))})
 	if got["Binary Search Tree"] != 1 {
@@ -138,6 +175,18 @@ func TestGenericSuffixNeedsBodyEvidence(t *testing.T) {
 	}
 }
 
+func TestGraphEvidenceRecognizesCamelCaseCompounds(t *testing.T) {
+	// "adjacencyList"/"adjacencyMatrix" lowercase to one token each
+	// ("adjacencylist"/"adjacencymatrix"), not "adjacency" as its own word —
+	// must still count as strong evidence, not just bare "adjacency".
+	g := writeFile(t, ".go",
+		"type CityGraph struct {\n\tadjacencyList map[int][]int\n}\n",
+		parser.Declaration{Name: "CityGraph", Kind: parser.DeclStruct, Line: 1})
+	if detectedNames([]*parser.ParsedFile{g})["Graph"] != 1 {
+		t.Errorf("expected Graph detected from adjacencyList field")
+	}
+}
+
 func TestRejectsFrameworkFalseFriendsAndViews(t *testing.T) {
 	// SwiftUI layout views are rejected by name outright.
 	for _, name := range []string{"HStack", "VStack", "ZStack", "NavigationStack"} {
@@ -153,6 +202,107 @@ func TestRejectsFrameworkFalseFriendsAndViews(t *testing.T) {
 		parser.Declaration{Name: "CardStack", Kind: parser.DeclStruct, Line: 1})
 	if (DataStructures{}).Analyze([]*parser.ParsedFile{cardStack}).(Result).HasDetection() {
 		t.Errorf("CardStack view (: some View) must be rejected")
+	}
+}
+
+// ── Self-referential / linked structures (name-free, Swift-only) ────────────
+
+func TestLinkedDetectsSinglyLinkedNode(t *testing.T) {
+	f := writeFile(t, ".swift",
+		"final class ListNode {\n    var next: ListNode?\n    var value: Int = 0\n}\n",
+		parser.Declaration{Name: "ListNode", Kind: parser.DeclClass, Line: 1})
+	got := detectedNames([]*parser.ParsedFile{f})
+	if got["Singly Linked Node"] != 1 {
+		t.Errorf("expected Singly Linked Node, got %v", got)
+	}
+}
+
+func TestLinkedDetectsBinaryTreeAndDoublyLinkedShapes(t *testing.T) {
+	f := writeFile(t, ".swift",
+		"final class BTNode {\n    var left: BTNode?\n    var right: BTNode?\n}\n"+
+			"final class DLNode {\n    var next: DLNode?\n    var prev: DLNode?\n}\n",
+		parser.Declaration{Name: "BTNode", Kind: parser.DeclClass, Line: 1},
+		parser.Declaration{Name: "DLNode", Kind: parser.DeclClass, Line: 4})
+	got := detectedNames([]*parser.ParsedFile{f})
+	if got["Binary Tree Node"] != 1 {
+		t.Errorf("expected Binary Tree Node, got %v", got)
+	}
+	if got["Doubly Linked Node"] != 1 {
+		t.Errorf("expected Doubly Linked Node, got %v", got)
+	}
+}
+
+func TestLinkedDetectsTreeNodeSelfCollectionAndSelfReferentialType(t *testing.T) {
+	f := writeFile(t, ".swift",
+		"final class TreeNode2 {\n    var children: [TreeNode2] = []\n}\n"+
+			"final class Employee {\n    var manager: Employee?\n}\n",
+		parser.Declaration{Name: "TreeNode2", Kind: parser.DeclClass, Line: 1},
+		parser.Declaration{Name: "Employee", Kind: parser.DeclClass, Line: 4})
+	got := detectedNames([]*parser.ParsedFile{f})
+	if got["Tree Node (self collection)"] != 1 {
+		t.Errorf("expected Tree Node (self collection), got %v", got)
+	}
+	if got["Self-Referential Type"] != 1 {
+		t.Errorf("expected Self-Referential Type for Employee.manager, got %v", got)
+	}
+}
+
+func TestLinkedDetectsRecursiveEnum(t *testing.T) {
+	f := writeFile(t, ".swift",
+		"indirect enum Expr {\n    case add(Expr, Expr)\n    case lit(Int)\n}\n",
+		parser.Declaration{Name: "Expr", Kind: parser.DeclEnum, Line: 1})
+	got := detectedNames([]*parser.ParsedFile{f})
+	if got["Recursive Enum"] != 1 {
+		t.Errorf("expected Recursive Enum, got %v", got)
+	}
+}
+
+func TestLinkedDetectsEmbeddingLevels(t *testing.T) {
+	// Container directly embeds the self-referential ListNode (L1); Wrapper
+	// embeds Container, one hop further in (L2).
+	f := writeFile(t, ".swift",
+		"final class ListNode {\n    var next: ListNode?\n}\n"+
+			"final class Container {\n    var head: ListNode?\n}\n"+
+			"final class Wrapper {\n    var box: Container?\n}\n",
+		parser.Declaration{Name: "ListNode", Kind: parser.DeclClass, Line: 1},
+		parser.Declaration{Name: "Container", Kind: parser.DeclClass, Line: 4},
+		parser.Declaration{Name: "Wrapper", Kind: parser.DeclClass, Line: 7})
+	got := detectedNames([]*parser.ParsedFile{f})
+	if got["Embeds Linked Structure (direct)"] != 1 {
+		t.Errorf("expected Embeds Linked Structure (direct) for Container, got %v", got)
+	}
+	if got["Embeds Linked Structure (nested)"] != 1 {
+		t.Errorf("expected Embeds Linked Structure (nested) for Wrapper, got %v", got)
+	}
+}
+
+func TestLinkedSkipsTypesAlreadyClaimedBySuffixRules(t *testing.T) {
+	// A type suffix-matched as "Linked List" (LinkedList) must not also be
+	// double-reported by the name-free engine, even though it's structurally
+	// self-referential too.
+	f := writeFile(t, ".swift",
+		"final class MyLinkedList {\n    var next: MyLinkedList?\n}\n",
+		parser.Declaration{Name: "MyLinkedList", Kind: parser.DeclClass, Line: 1})
+	got := detectedNames([]*parser.ParsedFile{f})
+	if got["Linked List"] != 1 {
+		t.Errorf("expected suffix match Linked List, got %v", got)
+	}
+	if _, ok := got["Singly Linked Node"]; ok {
+		t.Errorf("MyLinkedList should not be double-reported by the linked-structure engine: %v", got)
+	}
+}
+
+func TestLinkedIgnoresComputedProperties(t *testing.T) {
+	// `var parent: Node? { lookup() }` is a computed property — it creates no
+	// stored self-reference edge and must not count.
+	f := writeFile(t, ".swift",
+		"final class LooksLinked {\n    var parent: LooksLinked? { lookup() }\n    func lookup() -> LooksLinked? { nil }\n}\n",
+		parser.Declaration{Name: "LooksLinked", Kind: parser.DeclClass, Line: 1})
+	got := detectedNames([]*parser.ParsedFile{f})
+	for name := range got {
+		if strings.Contains(name, "Linked") || strings.Contains(name, "Self-Referential") {
+			t.Errorf("computed property must not count as a self-reference: %v", got)
+		}
 	}
 }
 

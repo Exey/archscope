@@ -121,7 +121,7 @@ func ParseUniversal(filePath string, lines []string, spec *langspec.LanguageSpec
 		// ── Type declarations ──
 		if c.TypeDecl != nil {
 			if m := c.TypeDecl.FindStringSubmatch(trimmed); len(m) >= 2 {
-				name, keyword := declNameKeyword(m)
+				name, keyword := declNameKeyword(m, spec.Patterns.DeclKindMap)
 				if name != "" {
 					kind := mapDeclKind(spec, keyword)
 					pf.Declarations = append(pf.Declarations,
@@ -240,10 +240,27 @@ func ParseUniversal(filePath string, lines []string, spec *langspec.LanguageSpec
 //   - 2 groups where group1 is a keyword in DeclKindMap → (group2=name, group1=keyword)
 //   - 2 groups where group1 is the name and group2 the keyword → (group1=name, group2=keyword)
 //   - 1 effective group → name only, empty keyword.
-func declNameKeyword(m []string) (name, keyword string) {
+//
+// declKindMap (the spec's own keyword→kind table) is the primary signal for
+// telling the two 2-group shapes apart: it is authoritative regardless of
+// identifier casing, unlike a guess based on capitalization (which breaks for
+// languages — C chief among them — whose type names are conventionally
+// lowercase, e.g. "struct point", so a bare capitalization check can't tell
+// "struct" the keyword from "point" the name). Capitalization is kept only as
+// a fallback for the rare TypeDecl pattern whose keyword isn't a declKindMap
+// key at all.
+func declNameKeyword(m []string, declKindMap map[string]string) (name, keyword string) {
 	switch {
 	case len(m) >= 3:
-		// Ambiguous; decide by which group looks like an identifier keyword.
+		if _, ok := declKindMap[m[1]]; ok {
+			return m[2], m[1]
+		}
+		if _, ok := declKindMap[m[2]]; ok {
+			return m[1], m[2]
+		}
+		// Neither capture is a recognized keyword: fall back to the
+		// capitalization guess (declaration keywords are lowercase words;
+		// type names conventionally start uppercase or contain mixed case).
 		if looksLikeKeyword(m[1]) && !looksLikeKeyword(m[2]) {
 			return m[2], m[1]
 		}

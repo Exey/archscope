@@ -857,7 +857,7 @@ func renderArchComponents(files []*parser.ParsedFile, techSet map[string]bool) s
 
 // ── Longest functions ─────────────────────────────────────────────────────────
 
-func renderLongestFunctions(files []*parser.ParsedFile, rootPath string) string {
+func renderLongestFunctions(files []*parser.ParsedFile, rootPath string, plat langspec.Platform) string {
 	type entry struct {
 		fn  *parser.FunctionInfo
 		mod string
@@ -876,7 +876,8 @@ func renderLongestFunctions(files []*parser.ParsedFile, rootPath string) string 
 		fns = fns[:20]
 	}
 	var b strings.Builder
-	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">📏</span><h3>Longest Functions</h3></div>`)
+	fmt.Fprintf(&b, `<div class="as-section" id="%s"><div class="as-section__head"><span class="ico">📏</span><h3>Longest Functions</h3></div>`,
+		esc(cultAnchorID("longestfunc", plat)))
 	b.WriteString(`<table class="as-table"><thead><tr><th>Function</th><th>Lines</th><th>File</th></tr></thead><tbody>`)
 	for _, e := range fns {
 		fn := e.fn
@@ -903,7 +904,7 @@ func renderLongestFunctions(files []*parser.ParsedFile, rootPath string) string 
 
 // ── Biggest types ─────────────────────────────────────────────────────────────
 
-func renderBiggestTypes(files []*parser.ParsedFile, rootPath string) string {
+func renderBiggestTypes(files []*parser.ParsedFile, rootPath string, plat langspec.Platform) string {
 	type entry struct {
 		ty  *parser.TypeInfo
 		mod string
@@ -922,7 +923,8 @@ func renderBiggestTypes(files []*parser.ParsedFile, rootPath string) string {
 		types = types[:20]
 	}
 	var b strings.Builder
-	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">📐</span><h3>Biggest Types</h3></div>`)
+	fmt.Fprintf(&b, `<div class="as-section" id="%s"><div class="as-section__head"><span class="ico">📐</span><h3>Biggest Types</h3></div>`,
+		esc(cultAnchorID("biggesttypes", plat)))
 	b.WriteString(`<table class="as-table"><thead><tr><th>Type</th><th>Kind</th><th>Lines</th><th>File</th><th>Module</th></tr></thead><tbody>`)
 	for _, e := range types {
 		ty := e.ty

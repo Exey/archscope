@@ -25,8 +25,9 @@ type Compiled struct {
 type Registry struct {
 	mu       sync.RWMutex
 	byID     map[string]*LanguageSpec
-	byExt    map[string]*LanguageSpec // ".go" -> spec
-	compiled map[string]*Compiled     // spec ID -> compiled patterns
+	byExt    map[string]*LanguageSpec   // ".go" -> spec (default/fallback claimant for shared exts)
+	shared   map[string][]*LanguageSpec // ".h" -> [objc, cpp, c, ...] contenders, for content resolution
+	compiled map[string]*Compiled       // spec ID -> compiled patterns
 }
 
 // NewRegistry returns an empty registry.
@@ -34,6 +35,7 @@ func NewRegistry() *Registry {
 	return &Registry{
 		byID:     map[string]*LanguageSpec{},
 		byExt:    map[string]*LanguageSpec{},
+		shared:   map[string][]*LanguageSpec{},
 		compiled: map[string]*Compiled{},
 	}
 }
@@ -60,21 +62,68 @@ func (r *Registry) Register(spec LanguageSpec) {
 
 	for _, ext := range s.Extensions {
 		key := normExt(ext)
-		if other, clash := r.byExt[key]; clash {
-			panic(fmt.Sprintf("langspec: extension %q claimed by both %q and %q",
-				key, other.ID, s.ID))
+		r.shared[key] = append(r.shared[key], &s)
+
+		existing, claimed := r.byExt[key]
+		switch {
+		case !claimed:
+			// First claimant of this extension becomes the default —
+			// regardless of Sniff — so single-owner extensions (the common
+			// case) keep working with plain Lookup, no clash to resolve.
+			r.byExt[key] = &s
+		case s.Sniff == nil:
+			// s has no Sniff: it's a genuine "I exclusively own this"
+			// declaration. Two such declarations for the same extension is
+			// an ownership bug, same as before this sharing mechanism
+			// existed. If the existing default DOES have a Sniff, s
+			// (nil-Sniff) takes over as the new default and demotes it to a
+			// pure content-matched contender.
+			if existing.Sniff == nil {
+				panic(fmt.Sprintf("langspec: extension %q claimed by both %q and %q with no Sniff to disambiguate",
+					key, existing.ID, s.ID))
+			}
+			r.byExt[key] = &s
 		}
-		r.byExt[key] = &s
+		// else: s has a Sniff and the extension already has a default —
+		// s just joins the shared contenders list without disturbing it.
 	}
 
 	r.compiled[s.ID] = compilePatterns(s.ID, s.Patterns)
 }
 
-// Lookup returns the spec owning a file extension (with or without dot), or nil.
+// Lookup returns the spec owning a file extension (with or without dot), or
+// nil. For a shared extension (see Sniff) this returns the default/fallback
+// claimant, ignoring file content — callers that can read the file should
+// prefer ResolveShared for an accurate per-file answer.
 func (r *Registry) Lookup(ext string) *LanguageSpec {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.byExt[normExt(ext)]
+}
+
+// IsShared reports whether ext has more than one registered contender, i.e.
+// needs ResolveShared (content-based) rather than Lookup to pick correctly.
+func (r *Registry) IsShared(ext string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.shared[normExt(ext)]) > 1
+}
+
+// ResolveShared picks the LanguageSpec owning ext for one specific file,
+// running each contender's Sniff predicate (in registration order) against
+// peekLines and returning the first match. Falls back to the default/no-Sniff
+// claimant (same as Lookup) if no Sniff matches, or nil if ext isn't
+// registered at all.
+func (r *Registry) ResolveShared(ext string, peekLines []string) *LanguageSpec {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	key := normExt(ext)
+	for _, s := range r.shared[key] {
+		if s.Sniff != nil && s.Sniff(peekLines) {
+			return s
+		}
+	}
+	return r.byExt[key]
 }
 
 // Get returns the spec with the given ID, or nil.

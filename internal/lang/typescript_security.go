@@ -68,7 +68,7 @@ var (
 
 func init() {
 	security.Default.RegisterRule(reRule(
-		"javascript.eval", "Dynamic Code Execution", "unsafe_exec", security.SevHigh, tsLangs,
+		"javascript.eval", "Dynamic Code Execution", "unsafe_exec", security.SevMedium, tsLangs,
 		reJSEval,
 		"eval() and new Function() execute strings as code; with any untrusted input this is an "+
 			"injection vector. Parse data with JSON.parse and model behavior with explicit functions.",

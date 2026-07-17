@@ -26,9 +26,11 @@ package constructs
 import (
 	"fmt"
 	"html"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/exey/archscope/internal/modules"
 	"github.com/exey/archscope/internal/parser"
@@ -83,9 +85,11 @@ type algoRule struct {
 var algoRules = []algoRule{
 	// ── Sorting ─────────────────────────────────────────────────────────────
 	{tokens: []string{"bubble", "sort"}, name: "Bubble Sort", category: sorting},
+	{tokens: []string{"isort"}, name: "Insertion Sort", category: sorting},
 	{tokens: []string{"insertion", "sort"}, name: "Insertion Sort", category: sorting},
 	{tokens: []string{"selection", "sort"}, name: "Selection Sort", category: sorting},
 	{tokens: []string{"merge", "sort"}, name: "Merge Sort", category: sorting},
+	{tokens: []string{"qsort"}, name: "Quicksort", category: sorting},
 	{tokens: []string{"quick", "sort"}, name: "Quicksort", category: sorting},
 	{tokens: []string{"heap", "sort"}, name: "Heapsort", category: sorting},
 	{tokens: []string{"counting", "sort"}, name: "Counting Sort", category: sorting},
@@ -101,6 +105,7 @@ var algoRules = []algoRule{
 	{tokens: []string{"intro", "sort"}, name: "Introsort", category: sorting},
 
 	// ── Searching & selection ───────────────────────────────────────────────
+	{tokens: []string{"bsearch"}, name: "Binary Search", category: searching},
 	{tokens: []string{"binary", "search"}, name: "Binary Search", category: searching},
 	{tokens: []string{"linear", "search"}, name: "Linear Search", category: searching},
 	{tokens: []string{"sequential", "search"}, name: "Linear Search", category: searching},
@@ -147,6 +152,7 @@ var algoRules = []algoRule{
 	{tokens: []string{"levenshtein"}, name: "Levenshtein (Edit Distance)", category: strMatch},
 	{tokens: []string{"edit", "distance"}, name: "Levenshtein (Edit Distance)", category: strMatch},
 	{tokens: []string{"longest", "common", "subsequence"}, name: "Longest Common Subsequence", category: strMatch},
+	{tokens: []string{"lcs"}, name: "Longest Common Subsequence", category: strMatch},
 
 	// ── Numeric & classic ───────────────────────────────────────────────────
 	{tokens: []string{"euclid", "gcd"}, name: "Euclidean GCD", category: numeric},
@@ -164,6 +170,8 @@ var algoRules = []algoRule{
 	{tokens: []string{"kadane"}, name: "Kadane (Max Subarray)", category: numeric},
 	{tokens: []string{"huffman"}, name: "Huffman Coding", category: numeric},
 	{tokens: []string{"fibonacci"}, name: "Fibonacci", category: numeric},
+	{tokens: []string{"ramer", "douglas", "peucker"}, name: "Ramer–Douglas–Peucker", category: numeric},
+	{tokens: []string{"douglas", "peucker"}, name: "Ramer–Douglas–Peucker", category: numeric},
 }
 
 func init() {
@@ -177,6 +185,305 @@ func init() {
 		}
 		return len(algoRules[i].joined) > len(algoRules[j].joined)
 	})
+}
+
+// ── Structural (name-independent) detection ─────────────────────────────────
+//
+// Phase 1 above (matchAlgoRule) only catches a function whose *name* gives it
+// away (`bubbleSort`, `dijkstra`, …). Some algorithms are just as often
+// written under an unrelated name — a backtracking search called
+// `chatContextMenuItems`, a two-pointer scan called `findEdgePoints` — so
+// this phase fingerprints a function's *body shape* instead: loop nesting,
+// self-recursion, and the presence of specific idiom substrings/tokens.
+// Ported from ArchSwiftScope's AlgorithmDetector.StructuralRule/FnFeatures.
+//
+// Kept to the handful of algorithms where structural detection was requested
+// (Backtracking, Two-Pointer, structural Depth-First Search, structural
+// Sieve of Eratosthenes) rather than porting the reference's full ~20-rule
+// catalog — the fingerprinting infrastructure generalizes, but each
+// additional rule is its own false-positive surface to validate.
+
+// fnFeat is a function body's structural fingerprint.
+type fnFeat struct {
+	norm      string          // body with comments/strings stripped and whitespace removed
+	spaced    string          // same, but whitespace preserved (needed to tell "while x" from "whileX")
+	tokens    map[string]bool // whole identifier tokens appearing in the body
+	loopNest  int             // max nesting depth of for/while/repeat
+	selfCalls int             // recursive calls to the enclosing function
+}
+
+func (f fnFeat) hasLoop() bool { return f.loopNest >= 1 }
+
+func (f fnFeat) any(subs []string) bool {
+	for _, s := range subs {
+		if strings.Contains(f.norm, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// structuralRule pairs an algorithm with a body-shape predicate.
+type structuralRule struct {
+	name     string
+	category algoCategory
+	matches  func(fnFeat) bool
+}
+
+var reLoopKeyword = regexp.MustCompile(`(^|[^a-z0-9_])(for|while|repeat)($|[^a-z0-9_])`)
+var reWhileLess = regexp.MustCompile(`\bwhile\s+(\w+)\s*<\s*(\w+)`)
+
+// reForLess catches the same converging-pointer condition inside a C-style
+// three-clause for header ("for i, j := 0, n-1; i < j; …", "for (int i = 0,
+// j = n - 1; i < j; i++, j--)") — the non-greedy [^{]*? stops at the first
+// "var < var" before the loop's opening brace, which is always the header's
+// own condition clause, never something from inside the body.
+var reForLess = regexp.MustCompile(`\bfor\b[^{]*?\b(\w+)\s*<\s*(\w+)\b`)
+
+// containsBounded is a substring search with identifier-boundary checks: "l+=1"
+// must not match inside "total+=1". Boundaries are enforced only on the ends
+// of needle that are themselves word characters.
+func containsBounded(norm, needle string) bool {
+	if needle == "" {
+		return false
+	}
+	isWord := func(b byte) bool {
+		return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+	}
+	needPre, needPost := isWord(needle[0]), isWord(needle[len(needle)-1])
+	from := 0
+	for {
+		idx := strings.Index(norm[from:], needle)
+		if idx < 0 {
+			return false
+		}
+		start := from + idx
+		end := start + len(needle)
+		preOK := !needPre || start == 0 || !isWord(norm[start-1])
+		postOK := !needPost || end == len(norm) || !isWord(norm[end])
+		if preOK && postOK {
+			return true
+		}
+		from = start + 1
+	}
+}
+
+// hasIncrementBy1 reports whether spaced contains "<varName> <op> 1" (any
+// amount of whitespace around the operator) — used to confirm a while-loop
+// bound variable actually advances by exactly one per iteration.
+func hasIncrementBy1(spaced, varName, op string) bool {
+	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(varName) + `\s*` + regexp.QuoteMeta(op) + `\s*1\b`)
+	return re.MatchString(spaced)
+}
+
+// hasStepBy1 reports whether varName is advanced by exactly one in either
+// idiom family a language uses for it: compound assignment ("l += 1") or a
+// postfix/prefix increment/decrement operator ("l++"/"++l", "r--"/"--r").
+// The plain compound-assignment check alone missed the far more common
+// "i++"/"j--" spelling used in Go/Java/C/JS/Kotlin/Swift loops.
+func hasStepBy1(norm, spaced, varName string, positive bool) bool {
+	op, incDec := "+=", "++"
+	if !positive {
+		op, incDec = "-=", "--"
+	}
+	return hasIncrementBy1(spaced, varName, op) ||
+		containsBounded(norm, varName+incDec) ||
+		containsBounded(norm, incDec+varName)
+}
+
+// selfSquareTerms returns every identifier x that appears as "x*x" in norm —
+// the marking-start idiom of a sieve (start at p*p). Go's RE2 has no
+// backreferences (unlike the reference's `(\w+)\*\1`), so this replicates
+// that regex's own backtracking behavior by hand: since norm has whitespace
+// stripped, the identifier run immediately before '*' often includes a glued-
+// on keyword too ("while p * p" → "whilep*p"), so this tries every suffix
+// length of that run, longest first — exactly the order `(\w+)\*\1` tries
+// backtracking over \w+'s captured length — and keeps the first (longest)
+// suffix that equals the same-length run right after '*'.
+func selfSquareTerms(norm string) map[string]bool {
+	out := map[string]bool{}
+	isIdent := func(b byte) bool {
+		return b == '_' || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
+	}
+	for i := 0; i < len(norm); i++ {
+		if norm[i] != '*' {
+			continue
+		}
+		j := i - 1
+		for j >= 0 && isIdent(norm[j]) {
+			j--
+		}
+		beforeFull := norm[j+1 : i]
+		if beforeFull == "" {
+			continue
+		}
+		rest := norm[i+1:]
+		for l := len(beforeFull); l >= 1; l-- {
+			if l > len(rest) {
+				continue
+			}
+			suffix := beforeFull[len(beforeFull)-l:]
+			if suffix == rest[:l] {
+				out[suffix] = true
+				break
+			}
+		}
+	}
+	return out
+}
+
+// structuralRules is checked in order; the first match wins per function.
+// DFS is listed before Backtracking so a genuine visited-set DFS claims it
+// first — Backtracking only catches the recursive try/undo shape DFS's
+// stricter `visited` requirement doesn't already cover.
+var structuralRules = []structuralRule{
+	{
+		name: "Sieve of Eratosthenes", category: numeric,
+		matches: func(f fnFeat) bool {
+			if !f.hasLoop() || !f.any([]string{"=false", "=true"}) {
+				return false
+			}
+			for term := range selfSquareTerms(f.norm) {
+				if containsBounded(f.norm, "by:"+term) || containsBounded(f.norm, "+="+term) {
+					return true
+				}
+			}
+			return false
+		},
+	},
+	{
+		name: "Depth-First Search", category: graphAlg,
+		matches: func(f fnFeat) bool {
+			return f.hasLoop() && f.tokens["visited"] &&
+				(f.any([]string{"removelast(", "poplast("}) || f.selfCalls >= 1)
+		},
+	},
+	{
+		name: "Backtracking (DFS)", category: searching,
+		matches: func(f fnFeat) bool {
+			return f.selfCalls >= 1 && f.any([]string{"append("}) &&
+				f.any([]string{"removelast(", "poplast("})
+		},
+	},
+	{
+		name: "Two-Pointer Technique", category: searching,
+		matches: func(f fnFeat) bool {
+			check := func(re *regexp.Regexp) bool {
+				for _, m := range re.FindAllStringSubmatch(f.spaced, -1) {
+					if hasStepBy1(f.norm, f.spaced, m[1], true) && hasStepBy1(f.norm, f.spaced, m[2], false) {
+						return true
+					}
+				}
+				return false
+			}
+			return check(reWhileLess) || check(reForLess)
+		},
+	},
+}
+
+// computeFnFeatures brace-matches the function body starting at lines[startLine]
+// (0-indexed) and extracts its structural fingerprint. lines must already be
+// comment/string-stripped. Returns ok=false for a bodiless/unmatched function.
+func computeFnFeatures(lines []string, startLine int, funcName string) (fnFeat, bool) {
+	depth, started := 0, false
+	var loopStack []int
+	maxNest := 0
+	var cleaned []string
+	pendingLoop := false
+	for j := startLine; j < len(lines) && len(cleaned) < 1200; j++ {
+		line := strings.ToLower(lines[j])
+		if reLoopKeyword.MatchString(line) {
+			pendingLoop = true
+		}
+		for k := 0; k < len(line); k++ {
+			switch line[k] {
+			case '{':
+				depth++
+				started = true
+				if pendingLoop {
+					loopStack = append(loopStack, depth)
+					pendingLoop = false
+					if len(loopStack) > maxNest {
+						maxNest = len(loopStack)
+					}
+				}
+			case '}':
+				depth--
+				for len(loopStack) > 0 && loopStack[len(loopStack)-1] > depth {
+					loopStack = loopStack[:len(loopStack)-1]
+				}
+			}
+		}
+		cleaned = append(cleaned, line)
+		if started && depth <= 0 {
+			break
+		}
+	}
+	if !started {
+		return fnFeat{}, false
+	}
+
+	joined := strings.Join(cleaned, "\n")
+	var normB strings.Builder
+	normB.Grow(len(joined))
+	for _, r := range joined {
+		if !unicode.IsSpace(r) {
+			normB.WriteRune(r)
+		}
+	}
+	norm := normB.String()
+
+	tokens := map[string]bool{}
+	var cur []rune
+	flush := func() {
+		if len(cur) > 0 {
+			tokens[string(cur)] = true
+			cur = cur[:0]
+		}
+	}
+	for _, r := range joined {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			cur = append(cur, r)
+		} else {
+			flush()
+		}
+	}
+	flush()
+
+	selfCalls := 0
+	needle := strings.ToLower(funcName) + "("
+	isWord := func(b byte) bool {
+		return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+	}
+	for from := 0; ; {
+		idx := strings.Index(norm[from:], needle)
+		if idx < 0 {
+			break
+		}
+		start := from + idx
+		if start == 0 || !isWord(norm[start-1]) {
+			selfCalls++
+		}
+		from = start + 1
+	}
+
+	return fnFeat{norm: norm, spaced: joined, tokens: tokens, loopNest: maxNest, selfCalls: selfCalls}, true
+}
+
+// matchStructuralRule fingerprints the function at lines[startLine] and tests
+// it against structuralRules. A body under 30 chars (norm) is too small to
+// fingerprint reliably and is rejected, same as the reference.
+func matchStructuralRule(lines []string, startLine int, funcName string) (name string, cat algoCategory, ok bool) {
+	f, computed := computeFnFeatures(lines, startLine, funcName)
+	if !computed || len(f.norm) < 30 {
+		return "", "", false
+	}
+	for _, r := range structuralRules {
+		if r.matches(f) {
+			return r.name, r.category, true
+		}
+	}
+	return "", "", false
 }
 
 // AlgoOccurrence is one detected algorithm declaration with its location, used
@@ -216,29 +523,45 @@ func isCandidateKind(k parser.DeclKind) bool {
 }
 
 // Analyze scans function and type declarations and classifies them against the
-// algorithm catalog.
+// algorithm catalog: first by name convention (Phase 1), then, for functions
+// a name rule didn't already claim, by body shape (Phase 2 — see
+// matchStructuralRule).
 func (Algorithms) Analyze(files []*parser.ParsedFile) any {
 	type agg struct {
 		category algoCategory
 		occ      []AlgoOccurrence
 	}
 	found := map[string]*agg{}
+	cache := newSourceCache()
+
+	record := func(name string, cat algoCategory, symbol, path string, line int) {
+		a := found[name]
+		if a == nil {
+			a = &agg{category: cat}
+			found[name] = a
+		}
+		a.occ = append(a.occ, AlgoOccurrence{Symbol: symbol, FilePath: path, Line: line})
+	}
 
 	for _, f := range files {
 		for _, d := range f.Declarations {
 			if !isCandidateKind(d.Kind) {
 				continue
 			}
-			r, ok := matchAlgoRule(d.Name)
-			if !ok {
+			if r, ok := matchAlgoRule(d.Name); ok {
+				record(r.name, r.category, d.Name, f.FilePath, d.Line)
 				continue
 			}
-			a := found[r.name]
-			if a == nil {
-				a = &agg{category: r.category}
-				found[r.name] = a
+			if d.Kind != parser.DeclFunc {
+				continue
 			}
-			a.occ = append(a.occ, AlgoOccurrence{Symbol: d.Name, FilePath: f.FilePath, Line: d.Line})
+			lines := cache.lines(f.FilePath)
+			if lines == nil || d.Line <= 0 || d.Line > len(lines) {
+				continue
+			}
+			if name, cat, ok := matchStructuralRule(lines, d.Line-1, d.Name); ok {
+				record(name, cat, d.Name, f.FilePath, d.Line)
+			}
 		}
 	}
 

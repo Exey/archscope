@@ -64,7 +64,40 @@ var jsonKeyValue = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)+$`)
 var secretSkipWords = []string{
 	"example", "test", "dummy", "fake", "sample", "placeholder",
 	"your_", "xxx", "todo", "changeme", "insert", "enter", "redacted",
-	"null", "none", "undefined",
+	"null", "none", "undefined", "{{", "managed",
+}
+
+// reDottedPathValue matches a value shaped like a dotted reference/config path
+// (`instanceRoles.resource.apiKey`) rather than a literal secret — real
+// secrets are opaque random strings, not chains of identifier segments joined
+// by dots.
+var reDottedPathValue = regexp.MustCompile(`^\$?[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$`)
+
+// reEnumMemberLine matches a bare enum-member assignment — just
+// `Name = "value",` with nothing else on the line, comma required. This is
+// the TS/JS shape of the `case Name = "value"` mapping Swift/Kotlin use; the
+// trailing comma is what distinguishes it from an ordinary top-level
+// `keyword = "literal"` assignment (which never ends in a comma).
+var reEnumMemberLine = regexp.MustCompile(`^[A-Za-z_]\w*\s*=\s*['"][^'"]*['"],$`)
+
+// reStringConcat matches a quoted literal immediately followed by string
+// concatenation (`'foo=' + x`) — the literal is a fragment of a larger
+// runtime-built string, not a complete secret in itself.
+var reStringConcat = regexp.MustCompile(`["']\s*\+`)
+
+// reMaskedValue matches a run of masking characters (•, *, #, x) — a UI
+// redaction placeholder like '••••••••••••3f9a', not a real secret.
+var reMaskedValue = regexp.MustCompile(`[•*#x]{4,}`)
+
+// isLowDiversity reports whether s uses too few distinct characters to be
+// real key material — a genuine hash/key drawn from 16 hex symbols uses many
+// of them; a placeholder like "000...0" or "fff...f" uses one or two.
+func isLowDiversity(s string) bool {
+	seen := make(map[rune]bool, len(s))
+	for _, c := range s {
+		seen[c] = true
+	}
+	return len(seen) < 4
 }
 
 // privateKeyHeader matches PEM private-key headers committed into source.
@@ -110,9 +143,17 @@ func detectHardcodedSecrets(filePath string, lines []string) []security.Finding 
 		if security.IsComment(line) {
 			continue
 		}
-		// Enum `case Name = "json_key"` lines map identifiers to wire keys; the
-		// value is a JSON field name, not a secret.
-		if strings.HasPrefix(strings.TrimSpace(line), "case ") {
+		trimmed := strings.TrimSpace(line)
+		// Enum `case Name = "json_key"` (Swift/Kotlin) and bare `Name =
+		// "value",` (TS/JS) lines map identifiers to wire keys or other enum
+		// values; the literal is a name, not a secret.
+		if strings.HasPrefix(trimmed, "case ") || reEnumMemberLine.MatchString(trimmed) {
+			continue
+		}
+		// A literal immediately followed by string concatenation (`'prefix=' +
+		// realValue`) is a fragment being built at runtime, not the complete
+		// secret — the actual value lives in whatever it's concatenated with.
+		if reStringConcat.MatchString(line) {
 			continue
 		}
 
@@ -121,13 +162,18 @@ func detectHardcodedSecrets(filePath string, lines []string) []security.Finding 
 			val := m[2]
 			low := strings.ToLower(val)
 			isJSONKey := jsonKeyValue.MatchString(low) && len(val) <= 40
-			if !isJSONKey && !containsAny(low, secretSkipWords) {
+			isPlaceholder := reDottedPathValue.MatchString(val) || reMaskedValue.MatchString(val) ||
+				strings.Contains(val, " ") || containsAny(low, secretSkipWords)
+			if !isJSONKey && !isPlaceholder {
 				out = append(out, security.NewFinding(filePath, i, lines))
 				continue
 			}
 		}
-		// 2) raw hex digest / key material
-		if hexBlob.MatchString(line) && !containsAny(strings.ToLower(line), secretSkipWords) {
+		// 2) raw hex digest / key material — a genuine digest/key drawn from 16
+		// hex symbols uses many of them; a placeholder like "000...0" uses one,
+		// so low character diversity rules it out.
+		if m := hexBlob.FindStringSubmatch(line); m != nil &&
+			!containsAny(strings.ToLower(line), secretSkipWords) && !isLowDiversity(m[1]) {
 			out = append(out, security.NewFinding(filePath, i, lines))
 			continue
 		}
@@ -214,11 +260,11 @@ func SQLStringInterpolation() security.Rule {
 	}
 }
 
-// isLikelyTestPath delegates to the canonical security.IsTestPath which covers
-// all language test conventions (Go _test.go, Swift *Test.swift, JS *.spec.ts,
-// Python test_*.py, plus test/mock/fixture/e2e directory components).
+// isLikelyTestPath delegates to the canonical security.IsTestPath (all
+// language test conventions, plus test/mock/fixture/e2e directory components)
+// and security.IsCredentialDataPath (credential-schema/seed-data files).
 func isLikelyTestPath(filePath string) bool {
-	return security.IsTestPath(filePath)
+	return security.IsTestPath(filePath) || security.IsCredentialDataPath(filePath)
 }
 
 func containsAny(s string, subs []string) bool {

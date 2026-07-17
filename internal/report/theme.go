@@ -263,6 +263,8 @@ code,.mono{font-family:var(--mono)}
 .as-cult-dimdetail{margin-top:6px;max-width:190px;font-size:10.5px;line-height:1.5;color:var(--text-dim);background:var(--bg-elev-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px}
 .as-cult-dimdetail>div{margin-bottom:4px}
 .as-cult-dimdetail>div:last-child{margin-bottom:0}
+.as-cult-dimlink{color:inherit;text-decoration:none;border-bottom:1px dashed var(--border-strong);cursor:pointer}
+.as-cult-dimlink:hover{color:var(--accent);border-bottom-color:var(--accent)}
 .as-cult-issues{margin-top:16px}
 .as-cult-issues__head{font-size:13px;font-weight:650;margin-bottom:8px}
 .as-cult-issuelist{display:flex;flex-direction:column;gap:5px}
@@ -291,6 +293,13 @@ code,.mono{font-family:var(--mono)}
 .as-cx__bigo--2{color:#d08a1a}
 .as-cx__bigo--3{color:#d1590a}
 .as-cx__bigo--4{color:#c0392b}
+
+/* Memory Leaks */
+.as-ml__summary{font-size:13px; font-weight:600; margin-bottom:10px}
+.as-ml__summary--clean{color:var(--good); margin-bottom:0}
+.as-ml__table td{vertical-align:top}
+.as-ml__label{font-weight:600; font-size:12.5px}
+.as-ml__advice{color:var(--text-dim); font-size:11.5px; margin-top:2px; line-height:1.4}
 
 /* Traffic Health summary */
 .as-th{margin:0 0 16px; padding:12px 14px; background:var(--bg-elev-2); border:1px solid var(--border); border-radius:var(--radius-sm)}
@@ -529,6 +538,7 @@ a.as-chip:hover{opacity:.8}
 .as-plat-kotlin{background:rgba(127,82,255,.18); color:#7f52ff}
 .as-plat-python{background:rgba(55,118,171,.18); color:#3776ab}
 .as-plat-ts_js{background:rgba(49,120,198,.18); color:#3178c6}
+.as-plat-c_cpp{background:rgba(0,89,156,.18); color:#00599c}
 .as-plat-k8s{background:rgba(50,108,229,.18); color:#326ce5}
 
 /* Prompt card */
@@ -876,6 +886,23 @@ const JS = `
     var modId='mod-'+chip.getAttribute('data-mod');
     var el=document.getElementById(modId);
     if(!el)return;
+    var platCard=el.closest('.as-plat-card');
+    if(platCard){
+      document.querySelectorAll('.as-plat-card--open').forEach(function(c){c.classList.remove('as-plat-card--open');});
+      platCard.classList.add('as-plat-card--open');
+    }
+    setTimeout(function(){el.scrollIntoView({behavior:'smooth',block:'start'});},50);
+  });
+  // Programming Culture dimension-detail line → open the ancestor platform
+  // card and scroll straight to the specific card that produced the number
+  // (module panel, Architecture, Danger Details, …), rather than just
+  // jumping to the top of the platform tab in general.
+  document.addEventListener('click',function(e){
+    var link=e.target.closest('[data-panel-target]');
+    if(!link)return;
+    var el=document.getElementById(link.getAttribute('data-panel-target'));
+    if(!el)return;
+    e.preventDefault();
     var platCard=el.closest('.as-plat-card');
     if(platCard){
       document.querySelectorAll('.as-plat-card--open').forEach(function(c){c.classList.remove('as-plat-card--open');});

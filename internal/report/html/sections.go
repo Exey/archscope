@@ -180,6 +180,25 @@ var techImportMap = []struct{ needle, label, cat string }{
 	// Data
 	{"sqlx", "SQLx", "data"}, {"diesel", "Diesel", "data"}, {"sea-orm", "SeaORM", "data"},
 
+	// ── C / C++ ────────────────────────────────────────────────────────────────
+	// Frontend / GUI
+	{"qt/q", "Qt", "frontend"}, {"gtk/gtk", "GTK", "frontend"}, {"sfml/", "SFML", "frontend"},
+	{"imgui", "Dear ImGui", "frontend"},
+	// Backend / networking
+	{"boost/asio", "Boost.Asio", "backend"}, {"boost/", "Boost", "backend"},
+	{"grpcpp/", "gRPC (C++)", "backend"}, {"curl/curl", "libcurl", "backend"},
+	{"libevent", "libevent", "backend"}, {"libuv", "libuv", "backend"},
+	{"poco/", "POCO", "backend"},
+	// Data / serialization
+	{"google/protobuf", "Protobuf", "data"}, {"nlohmann/json", "nlohmann/json", "data"},
+	{"rapidjson/", "RapidJSON", "data"}, {"sqlite3", "SQLite", "data"},
+	{"libpq-fe", "PostgreSQL (libpq)", "data"}, {"mysql/mysql", "MySQL", "data"},
+	// Crypto / TLS
+	{"openssl/", "OpenSSL", "backend"},
+	// Build / test
+	{"gtest/gtest", "Google Test", "linters"}, {"catch2/", "Catch2", "linters"},
+	{"cmake", "CMake", "linters"},
+
 	// ── Universal metrics / observability ─────────────────────────────────────
 	{"opentelemetry", "OpenTelemetry", "linters"}, {"go.opentelemetry.io", "OpenTelemetry", "linters"},
 	{"open-telemetry", "OpenTelemetry", "linters"},
@@ -196,6 +215,7 @@ var langLabels = map[string]string{
 	"typescript": "TypeScript / JS", "javascript": "JavaScript",
 	"go":   "Go",
 	"rust": "Rust",
+	"c":    "C", "cpp": "C++",
 }
 
 // renderContributionsCard renders a GitHub-style contribution calendar.
@@ -2707,6 +2727,7 @@ func platformBadges(platforms map[langspec.Platform]bool) string {
 		langspec.PlatformPython,
 		langspec.PlatformGo,
 		langspec.PlatformRust,
+		langspec.PlatformC,
 	}
 	short := map[langspec.Platform]string{
 		langspec.PlatformSwiftObjC: "Swift",
@@ -2715,6 +2736,7 @@ func platformBadges(platforms map[langspec.Platform]bool) string {
 		langspec.PlatformPython:    "Python",
 		langspec.PlatformGo:        "Go",
 		langspec.PlatformRust:      "Rust",
+		langspec.PlatformC:         "C/C++",
 	}
 	var b strings.Builder
 	for _, p := range order {
@@ -2745,6 +2767,8 @@ func shortLangLabel(plat langspec.Platform) string {
 		return "Kt"
 	case langspec.PlatformRust:
 		return "Rust"
+	case langspec.PlatformC:
+		return "C/C++"
 	}
 	return s
 }
@@ -3606,7 +3630,7 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 		switch p.ModuleID {
 		case "architecture":
 			// rendered in the dedicated Architecture section above; skip
-		case "codestructure", "langrichness":
+		case "codestructure", "langrichness", "memoryleaks":
 			// rendered as their own subcards in 💡 Module Insights; skip
 		case "dddmodel", "oopvspop":
 			dddPanels = append(dddPanels, p)
@@ -3635,7 +3659,8 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 	if layersHTML := renderArchLayers(files); layersHTML != "" {
 		techSet := buildTechSet(res, files)
 		componentsHTML := renderArchComponents(files, techSet)
-		fmt.Fprintf(&b, `<div class="as-section"><div class="as-section__head">%s<span class="ico">🏛️</span><h3>Architecture</h3></div>`, badge)
+		fmt.Fprintf(&b, `<div class="as-section" id="%s"><div class="as-section__head">%s<span class="ico">🏛️</span><h3>Architecture</h3></div>`,
+			esc(cultAnchorID("arch", pg.Platform)), badge)
 		b.WriteString(layersHTML)
 		b.WriteString(componentsHTML)
 		b.WriteString(`</div>`)
@@ -3854,13 +3879,16 @@ func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup,
 	if cs := renderCodeStructureInsight(res, pg); cs != "" {
 		parts = append(parts, cs)
 	}
+	if ml := renderMemoryLeaksInsight(res, pg); ml != "" {
+		parts = append(parts, ml)
+	}
 	if t := renderTodosFixmes(files); t != "" {
 		parts = append(parts, t)
 	}
-	if lf := renderLongestFunctions(files, rootPath); lf != "" {
+	if lf := renderLongestFunctions(files, rootPath, pg.Platform); lf != "" {
 		parts = append(parts, lf)
 	}
-	if bt := renderBiggestTypes(files, rootPath); bt != "" {
+	if bt := renderBiggestTypes(files, rootPath, pg.Platform); bt != "" {
 		parts = append(parts, bt)
 	}
 	if len(parts) == 0 {
@@ -3885,7 +3913,8 @@ func renderLanguageRichnessInsight(res *result.AnalysisResult, pg *scanner.Platf
 			continue
 		}
 		var b strings.Builder
-		b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">🎖️</span><h3>Language Richness</h3></div>`)
+		fmt.Fprintf(&b, `<div class="as-section" id="%s"><div class="as-section__head"><span class="ico">🎖️</span><h3>Language Richness</h3></div>`,
+			esc(modPanelID(p.Platform, p.ModuleID)))
 		b.WriteString(p.HTML)
 		b.WriteString(`</div>`)
 		return b.String()
@@ -3905,7 +3934,27 @@ func renderCodeStructureInsight(res *result.AnalysisResult, pg *scanner.Platform
 			continue
 		}
 		var b strings.Builder
-		b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">💻</span><h3>Code Structure</h3></div>`)
+		fmt.Fprintf(&b, `<div class="as-section" id="%s"><div class="as-section__head"><span class="ico">💻</span><h3>Code Structure</h3></div>`,
+			esc(modPanelID(p.Platform, p.ModuleID)))
+		b.WriteString(p.HTML)
+		b.WriteString(`</div>`)
+		return b.String()
+	}
+	return ""
+}
+
+// renderMemoryLeaksInsight renders the 💧 Memory Leaks module's panel
+// (unclosed handles, unstopped timers, unjoined threads, un-freed C
+// allocations, leaked JS listeners/observers, Swift retain-cycle-prone
+// closures) as a Module Insights subcard, right after 💻 Code Structure.
+func renderMemoryLeaksInsight(res *result.AnalysisResult, pg *scanner.PlatformGroup) string {
+	for _, p := range res.PanelsForPlatform(pg.Platform) {
+		if p.ModuleID != "memoryleaks" || strings.TrimSpace(p.HTML) == "" {
+			continue
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, `<div class="as-section" id="%s"><div class="as-section__head"><span class="ico">💧</span><h3>Memory Leaks</h3></div>`,
+			esc(modPanelID(p.Platform, p.ModuleID)))
 		b.WriteString(p.HTML)
 		b.WriteString(`</div>`)
 		return b.String()
@@ -4024,7 +4073,7 @@ func renderPlatformSecurity(res *result.AnalysisResult, plat langspec.Platform, 
 	for _, rr := range res.Security {
 		var fs []security.Finding
 		for _, f := range rr.Findings {
-			if pmap[f.FullPath] == plat {
+			if pmap[f.FullPath] == plat && !security.IsTestPath(f.FullPath) {
 				fs = append(fs, f)
 			}
 		}
@@ -4047,18 +4096,19 @@ func renderPlatformSecurity(res *result.AnalysisResult, plat langspec.Platform, 
 	}
 	var b strings.Builder
 	if total == 0 {
-		fmt.Fprintf(&b, `<div class="as-section as-danger-section"><div class="as-section__head">%s<span class="ico">🛡️</span><h3>Danger Details</h3></div>`, headBadge)
+		fmt.Fprintf(&b, `<div class="as-section as-danger-section" id="%s"><div class="as-section__head">%s<span class="ico">🛡️</span><h3>Danger Details</h3></div>`,
+			esc(cultAnchorID("danger", plat)), headBadge)
 		b.WriteString(`<p class="as-clean">✓ No findings in this platform's sources.</p></div>`)
 		return b.String()
 	}
 	fmt.Fprintf(&b,
-		`<div class="as-section as-danger-section"><div class="as-section__head">%s<span class="ico">🛡️</span><h3>Danger Details</h3>`+
+		`<div class="as-section as-danger-section" id="%s"><div class="as-section__head">%s<span class="ico">🛡️</span><h3>Danger Details</h3>`+
 			`<span style="margin-left:10px;font-size:12px;font-weight:400">`+
 			`<span class="as-sev sev-high">HIGH %d</span> `+
 			`<span class="as-sev sev-medium">MED %d</span> `+
 			`<span class="as-sev sev-low">LOW %d</span>`+
 			`</span></div>`,
-		headBadge, hi, med, lo)
+		esc(cultAnchorID("danger", plat)), headBadge, hi, med, lo)
 	b.WriteString(renderFindings(filtered))
 	b.WriteString(`</div>`)
 	return b.String()
@@ -4129,7 +4179,7 @@ func renderModulePanels(panels []result.ModulePanel, headBadge ...string) string
 	}
 	var b strings.Builder
 	for _, p := range panels {
-		b.WriteString(`<div class="as-section as-modpanel">`)
+		fmt.Fprintf(&b, `<div class="as-section as-modpanel" id="%s">`, esc(modPanelID(p.Platform, p.ModuleID)))
 		b.WriteString(`<div class="as-modpanel__head">`)
 		fmt.Fprintf(&b, `%s<span class="ico">%s</span><h4>%s</h4>`, badge, moduleIcon(p.ModuleID), esc(p.Title))
 		for _, c := range p.Cards {
@@ -4178,7 +4228,7 @@ func renderTrafficWithSpec(panels []result.ModulePanel, spec *speccoverage.Resul
 		tr, ok := p.RawResult.(traffic.Result)
 		if !ok {
 			// Fallback: render without SPEC COV column or Traffic Health.
-			b.WriteString(`<div class="as-section as-modpanel">`)
+			fmt.Fprintf(&b, `<div class="as-section as-modpanel" id="%s">`, esc(modPanelID(p.Platform, p.ModuleID)))
 			b.WriteString(`<div class="as-modpanel__head">`)
 			fmt.Fprintf(&b, `%s<span class="ico">🛜</span><h4>%s</h4>`, badge, esc(p.Title))
 			for _, c := range p.Cards {
@@ -4190,7 +4240,7 @@ func renderTrafficWithSpec(panels []result.ModulePanel, spec *speccoverage.Resul
 			continue
 		}
 
-		b.WriteString(`<div class="as-section as-modpanel">`)
+		fmt.Fprintf(&b, `<div class="as-section as-modpanel" id="%s">`, esc(modPanelID(p.Platform, p.ModuleID)))
 		b.WriteString(`<div class="as-modpanel__head">`)
 		fmt.Fprintf(&b, `%s<span class="ico">🛜</span><h4>%s</h4>`, badge, esc(p.Title))
 		for _, c := range p.Cards {
@@ -4755,7 +4805,14 @@ func plural(n int, one, many string) string {
 }
 
 // isTestFile returns true for test files across all supported languages.
+// isTestFile reports whether path is test or benchmark code — filename
+// suffixes across every language ArchScope parses, plus directory components
+// like "Tests/"/"Benchmarks/" that a filename suffix alone would miss (see
+// security.IsTestOrBenchPath).
 func isTestFile(path string) bool {
+	if security.IsTestOrBenchPath(path) {
+		return true
+	}
 	base := strings.ToLower(filepath.Base(path))
 	switch {
 	case strings.HasSuffix(base, "_test.go"):
@@ -4994,4 +5051,24 @@ func anchorID(name string) string {
 		}
 	}
 	return strings.Trim(b.String(), "-")
+}
+
+// modPanelID builds the DOM id given to a per-platform report-module panel
+// (renderModulePanels, renderTrafficWithSpec) — unique per (platform,
+// moduleID) pair, since each report module runs at most once per platform.
+// Programming Culture's dimension-detail links (see culture.go) target these
+// ids via the generic "open ancestor platform card + scroll to id" JS handler
+// (data-panel-target), so a click jumps straight to the specific card that
+// produced the number, not just the platform tab in general.
+func modPanelID(plat langspec.Platform, moduleID string) string {
+	return "modpanel-" + anchorID(moduleID) + "-" + anchorID(string(plat))
+}
+
+// cultAnchorID builds the DOM id for a per-platform section that isn't a
+// generic report-module panel (Architecture, 🎖️ Language Richness, 💻 Code
+// Structure, 📏 Longest Functions, 📐 Biggest Types, 🛡️ Danger Details) —
+// same purpose as modPanelID, for sections rendered by hand rather than
+// through renderModulePanels.
+func cultAnchorID(kind string, plat langspec.Platform) string {
+	return "cult-" + anchorID(kind) + "-" + anchorID(string(plat))
 }

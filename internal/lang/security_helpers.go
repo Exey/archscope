@@ -107,8 +107,30 @@ var reCredAssign = regexp.MustCompile(
 // credentialEntropy instead and do not need explicit entries here.
 var credAssignSkips = []string{
 	"getenv", "environ", "process.env", "config.", "os.env",
-	"viper.", "settings.", "${",
+	"viper.", "settings.", "${", "{{", "managed",
 }
+
+// reDottedPathValue matches a value shaped like a dotted reference/config path
+// (`instanceRoles.resource.apiKey`, `$credentials.apiKey`) rather than a
+// literal secret — real secrets are opaque random strings, not chains of
+// identifier segments joined by dots.
+var reDottedPathValue = regexp.MustCompile(`^\$?[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$`)
+
+// reEnumMemberLine matches a bare enum-member assignment — just
+// `Name = "value",` with nothing else on the line, comma required — the
+// TS/JS shape of the `case Name = "value"` mapping Swift/Kotlin use. The
+// trailing comma distinguishes it from an ordinary `keyword = "literal"`
+// assignment, which never ends in a comma.
+var reEnumMemberLine = regexp.MustCompile(`^[A-Za-z_]\w*\s*=\s*['"][^'"]*['"],$`)
+
+// reStringConcat matches a quoted literal immediately followed by string
+// concatenation (`'foo=' + x`) — the literal is a fragment of a larger
+// runtime-built string, not a complete secret in itself.
+var reStringConcat = regexp.MustCompile(`["']\s*\+`)
+
+// reMaskedValue matches a run of masking characters (•, *, #, x) — a UI
+// redaction placeholder like '••••••••••••3f9a', not a real secret.
+var reMaskedValue = regexp.MustCompile(`[•*#x]{4,}`)
 
 // credentialEntropy computes the Shannon entropy (bits per symbol) of s.
 // Real secrets produced by a CSPRNG typically score ≥ 3.5; human-readable
@@ -130,9 +152,11 @@ func credentialEntropy(s string) float64 {
 	return h
 }
 
-// isCredentialTestPath delegates to the canonical security.IsTestPath.
+// isCredentialTestPath delegates to the canonical security.IsTestPath (all
+// language test conventions, plus test/mock/fixture/e2e directory components)
+// and security.IsCredentialDataPath (credential-schema/seed-data files).
 func isCredentialTestPath(filePath string) bool {
-	return security.IsTestPath(filePath)
+	return security.IsTestPath(filePath) || security.IsCredentialDataPath(filePath)
 }
 
 // credentialRule returns a CWE-798 rule for the given language set with
@@ -161,11 +185,18 @@ func credentialRule(id string, langs []string, desc string) security.Rule {
 				if security.IsComment(line) {
 					continue
 				}
-				if strings.HasPrefix(strings.TrimSpace(line), "case ") {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "case ") || reEnumMemberLine.MatchString(trimmed) {
+					continue
+				}
+				if reStringConcat.MatchString(line) {
 					continue
 				}
 				m := reCredAssign.FindStringSubmatch(line)
 				if m == nil {
+					continue
+				}
+				if reDottedPathValue.MatchString(m[2]) || reMaskedValue.MatchString(m[2]) || strings.Contains(m[2], " ") {
 					continue
 				}
 				if credentialEntropy(m[2]) < 3.2 {

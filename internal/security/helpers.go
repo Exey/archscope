@@ -7,7 +7,8 @@ import "strings"
 // (test TLS bypasses, test credentials, test command execution, etc.).
 //
 // Checks both directory components (split on / and \) and filename suffixes for
-// the major language conventions across Go, Swift, Kotlin, TypeScript, Python.
+// the major language conventions across Go, Swift, Kotlin, TypeScript, Python,
+// Java, C/C++.
 func IsTestPath(filePath string) bool {
 	low := strings.ToLower(filePath)
 	for _, part := range strings.FieldsFunc(low, func(r rune) bool { return r == '/' || r == '\\' }) {
@@ -21,9 +22,13 @@ func IsTestPath(filePath string) bool {
 		if strings.HasPrefix(part, "e2e") {
 			return true
 		}
+		// Any component *containing* "mock" — not just an exact "mock"/"mocks"
+		// directory — covers filenames like "eval-mock-helpers.ts" too.
+		if strings.Contains(part, "mock") {
+			return true
+		}
 		switch part {
 		case "fixture", "fixtures",
-			"mock", "mocks", "__mocks__",
 			"spec", "specs", "__tests__",
 			"example", "examples",
 			"fuzz", "fuzzer", "fuzzers",
@@ -38,16 +43,107 @@ func IsTestPath(filePath string) bool {
 	return strings.HasSuffix(base, "_test.go") ||
 		strings.HasSuffix(base, "test.swift") ||
 		strings.HasSuffix(base, "test.kt") ||
-		strings.HasSuffix(base, ".test.ts") ||
-		strings.HasSuffix(base, ".spec.ts") ||
-		strings.HasSuffix(base, ".test.tsx") ||
-		strings.HasSuffix(base, ".spec.tsx") ||
-		strings.HasSuffix(base, ".test.js") ||
-		strings.HasSuffix(base, ".spec.js") ||
+		// ".test." / ".spec." anywhere in the filename — not just as the final
+		// suffix — covers "*.test.constants.ts", "*.test.mock.ts" and similar
+		// multi-segment test-only filenames, not just "*.test.ts"/"*.spec.ts".
+		strings.Contains(base, ".test.") ||
+		strings.Contains(base, ".spec.") ||
 		strings.HasSuffix(base, "_test.py") ||
 		(strings.HasPrefix(base, "test_") && strings.Contains(base, ".py")) ||
 		strings.HasSuffix(base, "test.java") ||
-		strings.HasSuffix(base, "tests.java")
+		strings.HasSuffix(base, "tests.java") ||
+		strings.HasSuffix(base, "_test.c") ||
+		strings.HasSuffix(base, "_test.cpp") ||
+		strings.HasSuffix(base, "_test.cc") ||
+		strings.HasSuffix(base, "_test.cxx") ||
+		strings.HasSuffix(base, "_unittest.cc") ||
+		strings.HasSuffix(base, "_unittest.cpp") ||
+		// n8n-style credential *schema* files (e.g. AirtableApi.credentials.ts)
+		// declare a credential's UI fields — they never hold a real secret
+		// value, only expression placeholders or field names.
+		strings.HasSuffix(base, ".credentials.ts") ||
+		strings.HasSuffix(base, ".credentials.js")
+}
+
+// IsCredentialDataPath reports whether filePath is a credentials-schema
+// directory or a seed/fixture-data file — contexts where a "secret-shaped"
+// string is structurally never a real secret (n8n-style `credentials/`
+// directories declare form fields; `*seeder*` files generate mock records for
+// tests/evaluations). Narrower and additive to IsTestPath: used only by the
+// hardcoded-secret/credential detectors, not folded into the general-purpose
+// IsTestPath, since an eval() or SQL-injection finding in one of these files
+// would still be a real issue worth flagging.
+func IsCredentialDataPath(filePath string) bool {
+	low := strings.ToLower(filePath)
+	for _, part := range strings.FieldsFunc(low, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if part == "credentials" || part == "credential" {
+			return true
+		}
+		if strings.Contains(part, "seeder") {
+			return true
+		}
+	}
+	return false
+}
+
+// IsTestOrBenchPath reports whether filePath is test or benchmark code — used
+// by code-quality metrics (Complexity, Code Structure, Longest Functions,
+// Biggest Types) that want production code only.
+//
+// Deliberately independent of IsTestPath rather than building on it: that
+// function's directory check matches on a "test"-prefix (test, testdata,
+// testutil, …), which is the right net for security-rule suppression but
+// collides with Go's own `t.TempDir()` naming — every quality-metric unit
+// test writes its fixtures under a path like ".../TestFooBar123/001/f.go",
+// and a prefix match would exclude the fixture from the very test verifying
+// it's included. This checks directory components for an *exact* name match
+// instead (test, tests, __tests__, benchmark, benchmarks, …), which still
+// catches the real "Tests/"/"Benchmarks/" folder convention (Swift Package
+// Manager, Go/Java benchmark packages) without that collision, plus the same
+// filename-suffix conventions IsTestPath checks (safe either way, since
+// those match the file's own base name, not a path component Go's test
+// harness controls).
+func IsTestOrBenchPath(filePath string) bool {
+	low := strings.ToLower(filePath)
+	for _, part := range strings.FieldsFunc(low, func(r rune) bool { return r == '/' || r == '\\' }) {
+		switch part {
+		case "test", "tests", "__tests__", "testdata",
+			"spec", "specs", "e2e",
+			"benchmark", "benchmarks", "bench", "benches":
+			return true
+		}
+	}
+	base := low
+	if idx := strings.LastIndexAny(low, "/\\"); idx >= 0 {
+		base = low[idx+1:]
+	}
+	return strings.HasSuffix(base, "_test.go") ||
+		strings.HasSuffix(base, "test.swift") ||
+		strings.HasSuffix(base, "tests.swift") ||
+		strings.HasSuffix(base, "spec.swift") ||
+		strings.HasSuffix(base, "test.kt") ||
+		strings.HasSuffix(base, "tests.kt") ||
+		strings.HasSuffix(base, "spec.kt") ||
+		strings.Contains(base, ".test.ts") ||
+		strings.Contains(base, ".spec.ts") ||
+		strings.Contains(base, ".test.tsx") ||
+		strings.Contains(base, ".spec.tsx") ||
+		strings.Contains(base, ".test.js") ||
+		strings.Contains(base, ".spec.js") ||
+		strings.HasSuffix(base, "_test.py") ||
+		(strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py")) ||
+		strings.HasSuffix(base, "test.java") ||
+		strings.HasSuffix(base, "tests.java") ||
+		strings.HasSuffix(base, "_test.c") ||
+		strings.HasSuffix(base, "_test.cpp") ||
+		strings.HasSuffix(base, "_test.cc") ||
+		strings.HasSuffix(base, "_test.cxx") ||
+		strings.HasSuffix(base, "_unittest.cc") ||
+		strings.HasSuffix(base, "_unittest.cpp") ||
+		strings.Contains(base, "_benchmark") ||
+		strings.Contains(base, "benchmark_") ||
+		strings.HasSuffix(base, "_bench.go") ||
+		strings.HasSuffix(base, "_bench_test.go")
 }
 
 // StripStringsAndComments returns a copy of line with the contents of string

@@ -100,13 +100,32 @@ Each language is **one self-registering file** in `internal/lang/`. A `LanguageS
 | Python | ✅ language rules + universal | — | 
 | Java | ✅ language rules + universal | — |
 | Rust | ✅ language rules + universal | — |
+| C | ✅ language rules + universal | — |
+| C++ | ✅ language rules + universal | — |
 | TypeScript / JavaScript | ✅ language rules + universal | ✅ |
 | Kotlin | ✅ language rules + universal | ✅ |
 | Swift / Objective-C | ✅ language rules + universal | ✅ |
 
 Adding a language (e.g. `rust.go`) needs no central edit — importing the package triggers its `init()`. The `Client` flag is what routes a tab to pattern detection vs. the layered backend view; the module noun/icon control how its modules are labeled.
 
-Drop a file in `internal/lang/` to add another.
+C, C++, and Objective-C all share the `.h` extension. Since a `LanguageSpec` normally owns its extensions exclusively, `.h` is instead resolved per-file by content: each of the three specs registers a `Sniff` predicate (ObjC signals like `@interface`/`#import`, C++ signals like `class`/`namespace`/`std::`), and whichever one matches first wins — plain C is the fallback when neither matches. See `langspec.Registry.ResolveShared` and `internal/lang/{c,cpp,objc}.go`.
+
+### Adding a new language
+
+Most of it really is "drop a file in `internal/lang/` and its `init()` self-registers" — no central dispatch table to edit. The checklist below is everything a *new* language still needs, drawn from adding C/C++ support:
+
+1. **Add a `Platform` constant** in `internal/langspec/spec.go` (e.g. `PlatformRust`), then list it in `PlatformOrder` (tab order) and the `PlatformTitle` switch.
+2. **Create `internal/lang/<lang>.go`** with an `init()` that calls `langspec.Default.Register(langspec.LanguageSpec{...})`, setting: `ID`, `DisplayName`, `Platform`, `Extensions` (no dots), `ModuleIcon`/`ModuleLabel`, `Client` (only for UI/client-side languages — see below), `VersionProbes`, `ProjectTypes`, `Modules` (marker files / container dirs), `Patterns` (import/type/func/doc-comment/TODO regexes + `DeclKindMap`), and optionally `ParseHook`.
+   - If the language shares an extension with another (like `.h` across C/C++/ObjC), set `Sniff func(peekLines []string) bool` — a content-signal predicate. At most one contender for a shared extension may leave `Sniff` nil; that one is the fallback. See `internal/lang/{c,cpp,objc}.go` and `langspec.Registry.ResolveShared`.
+3. **Add security rules** in a paired `internal/lang/<lang>_security.go`: package-level regexes, a `var <lang>Langs = []string{"<id>"}` language-ID list, and an `init()` registering each rule via `security.Default.RegisterRule(...)`. Build rules with the shared constructors in `internal/lang/security_helpers.go` — `reRule(id, name, category, severity, langs, pattern, desc, skip...)` for a single-pattern line match, `twoReRule(...)` for a sink+source two-pattern match, `credentialRule(id, langs, desc)` for the standard hardcoded-credential check. List the new rule IDs on the spec's `SecurityRuleIDs`.
+4. **Extend `security.IsTestPath`** in `internal/security/helpers.go` with the language's test-file suffix conventions (e.g. `_test.c`, `_unittest.cc`) so test code doesn't trip false-positive security findings — both 🛡️ Danger Details and 🛜 Traffic rely on it.
+5. **Wire up 🛜 Traffic** (optional, backend languages only): add the language's ID to `Module.AppliesTo` in `internal/modules/traffic/traffic.go`, and create `internal/modules/traffic/detect_<lang>.go` with `func Extract<Lang>Traffic(filePath string, lines []string) (inbound, outbound []Entry)`; call it from the spec's `ParseHook`, storing results in `pf.Extra["trafficInbound"]`/`["trafficOutbound"]`.
+6. **Add short-label entries** for the new platform in three places: `platformShortLabel` in `internal/scanner/scanner.go` (used by `--group-by=folder`/`gitrepo` tab names), and `platformBadges`/`shortLangLabel` in `internal/report/html/sections.go` (report-wide badges and module-card pills).
+7. **Add a badge color** — a `.as-plat-<platform>{background:...; color:...}` CSS rule in `internal/report/theme.go`, alongside the existing `.as-plat-go`/`.as-plat-swift_objc`/etc.
+8. **Extend `config.Default().ExcludePaths`** in `internal/config/config.go` with the language's build-output directories (e.g. CMake's `cmake-build-debug`, `cmake-build-release`, `CMakeFiles`) so build artifacts aren't scanned as source.
+9. **Write `internal/lang/<lang>_security_test.go`** — package `lang_test`, blank-import `_ "github.com/exey/archscope/internal/lang"` to trigger registration, then one `_Fires`/`_Safe` pair per rule using the shared `javaDetect(t, ruleID, lines) int` helper (in `internal/lang/java_security_test.go` despite the name — it's a generic cross-language test helper).
+
+The `Client` flag (step 2) is what routes a tab to app-architecture pattern detection (MVC/MVVM/…) instead of the layered backend view — set it only for UI/client-side languages (Swift, Objective-C, Kotlin, TypeScript/JavaScript).
 
 ---
 

@@ -4,6 +4,7 @@
 package scanner
 
 import (
+	"bufio"
 	"os"
 	"path/filepath"
 	"sort"
@@ -139,7 +140,15 @@ func Scan(rootPath string, cfg config.Config, reg *langspec.Registry) (*ScanResu
 
 		ext := strings.ToLower(filepath.Ext(name))
 		spec := reg.Lookup(ext)
-		if spec == nil || !enabled[spec.ID] {
+		if spec == nil {
+			return nil
+		}
+		if reg.IsShared(ext) {
+			if resolved := reg.ResolveShared(ext, peekLines(path, headerSniffLines)); resolved != nil {
+				spec = resolved
+			}
+		}
+		if !enabled[spec.ID] {
 			return nil
 		}
 
@@ -310,9 +319,34 @@ func platformShortLabel(p langspec.Platform) string {
 		return "Go"
 	case langspec.PlatformRust:
 		return "Rust"
+	case langspec.PlatformC:
+		return "C/C++"
 	default:
 		return string(p)
 	}
+}
+
+// headerSniffLines caps how much of a shared-extension file (e.g. ".h") is
+// read to resolve its real language by content — enough to see the first
+// #import/@interface/class/namespace/template signal in practice.
+const headerSniffLines = 80
+
+// peekLines reads up to max lines from path, or nil on any read error (the
+// caller treats that as "no signal" and falls back to the default claimant).
+func peekLines(path string, max int) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 64*1024)
+	var lines []string
+	for len(lines) < max && sc.Scan() {
+		lines = append(lines, sc.Text())
+	}
+	return lines
 }
 
 func enabledSet(cfg config.Config, reg *langspec.Registry) map[string]bool {

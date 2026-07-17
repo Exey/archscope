@@ -1,12 +1,11 @@
 // Package traffic detects inbound and outbound connection signals in Go,
-// Python, Java, Swift, Kotlin, and TypeScript/JavaScript source files: HTTP
-// routes, gRPC services, WebSocket, GraphQL, Redis, Kafka, NATS, AMQP, and
-// (Swift only, ported from ArchSwiftScope's TrafficScanner) raw-TCP endpoints
-// — from string literals only.
+// Python, Java, Swift, Kotlin, C/C++, and TypeScript/JavaScript source files:
+// HTTP routes, gRPC services, WebSocket, GraphQL, Redis, Kafka, NATS, AMQP,
+// and raw-TCP/socket endpoints (Swift and C/C++) — from string literals only.
 //
 // Detection is a two-stage pipeline:
 //
-//  1. ParseHooks in internal/lang/{golang,python,java,swift,kotlin,typescript}.go
+//  1. ParseHooks in internal/lang/{golang,python,java,swift,kotlin,typescript,c,cpp}.go
 //     scan raw source lines and store results in pf.Extra["trafficInbound"]
 //     and pf.Extra["trafficOutbound"] as []Entry.
 //
@@ -27,6 +26,7 @@ import (
 
 	"github.com/exey/archscope/internal/modules"
 	"github.com/exey/archscope/internal/parser"
+	"github.com/exey/archscope/internal/security"
 )
 
 func init() { modules.Default.Register(Module{}) }
@@ -38,7 +38,7 @@ func (Module) ID() string    { return "traffic" }
 func (Module) Title() string { return "Traffic" }
 func (Module) AppliesTo(l string) bool {
 	switch l {
-	case "go", "python", "java", "swift", "kotlin", "ts":
+	case "go", "python", "java", "swift", "kotlin", "ts", "c", "cpp":
 		return true
 	}
 	return false
@@ -75,15 +75,16 @@ func (r Result) HasData() bool { return len(r.Inbound) > 0 || len(r.Outbound) > 
 
 func (Module) Analyze(files []*parser.ParsedFile) any {
 	var r Result
-	// Maps a (URI, Protocol, Module) key to its index in r.Inbound/r.Outbound
-	// — a repeat key doesn't get dropped, its file:line is folded into that
-	// entry's Extra instead, so "the same route registered in N files" stays
-	// visible rather than silently collapsing to whichever file was seen first.
+	// Maps a (URI, Protocol) key to its index in r.Inbound/r.Outbound — a
+	// repeat key doesn't get dropped, its file:line is folded into that
+	// entry's Extra instead, so "the same route registered in N files" (even
+	// across different modules) stays visible as one row rather than
+	// splintering into a duplicate row per module.
 	seenIn := map[string]int{}
 	seenOut := map[string]int{}
 
 	for _, f := range files {
-		if f.Extra == nil {
+		if f.Extra == nil || security.IsTestPath(f.FilePath) {
 			continue
 		}
 		mod := f.ModuleName
@@ -93,7 +94,7 @@ func (Module) Analyze(files []*parser.ParsedFile) any {
 		if in, ok := f.Extra["trafficInbound"].([]Entry); ok {
 			for _, e := range in {
 				e.Module = mod
-				k := e.URI + "|" + e.Protocol + "|" + mod
+				k := e.URI + "|" + e.Protocol
 				if idx, ok := seenIn[k]; ok {
 					r.Inbound[idx].Extra = append(r.Inbound[idx].Extra, Location{e.FilePath, e.Line})
 				} else {
@@ -105,7 +106,7 @@ func (Module) Analyze(files []*parser.ParsedFile) any {
 		if out, ok := f.Extra["trafficOutbound"].([]Entry); ok {
 			for _, e := range out {
 				e.Module = mod
-				k := e.URI + "|" + e.Protocol + "|" + mod
+				k := e.URI + "|" + e.Protocol
 				if idx, ok := seenOut[k]; ok {
 					r.Outbound[idx].Extra = append(r.Outbound[idx].Extra, Location{e.FilePath, e.Line})
 				} else {

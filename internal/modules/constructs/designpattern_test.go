@@ -7,6 +7,15 @@ import (
 	"github.com/exey/archscope/internal/parser"
 )
 
+func patternNames(files []*parser.ParsedFile) map[string]int {
+	res := (DesignPatterns{}).Analyze(files).(DesignPatternResult)
+	got := map[string]int{}
+	for _, m := range res.Matches {
+		got[m.Pattern] = m.Count
+	}
+	return got
+}
+
 func TestDetectsSuffixPatterns(t *testing.T) {
 	files := []*parser.ParsedFile{
 		file("a.swift", ty("RequestBuilder")),
@@ -35,6 +44,110 @@ func TestIgnoresNonBoundarySuffix(t *testing.T) {
 	res := (DesignPatterns{}).Analyze(files).(DesignPatternResult)
 	if res.HasDetection() {
 		t.Errorf("expected no detections, got %+v", res.Matches)
+	}
+}
+
+func TestFactoryLabelSplitsMethodVsAbstract(t *testing.T) {
+	// No protocol among the Factory-suffixed decls → Factory Method.
+	got := patternNames([]*parser.ParsedFile{file("a.go", ty("WidgetFactory"))})
+	if got["Factory Method"] != 1 {
+		t.Errorf("expected Factory Method, got %v", got)
+	}
+	if _, ok := got["Abstract Factory"]; ok {
+		t.Errorf("must not also report Abstract Factory: %v", got)
+	}
+
+	// A protocol/interface among the Factory-suffixed decls (anywhere in the
+	// codebase) → the whole group relabels to Abstract Factory.
+	files := []*parser.ParsedFile{
+		file("a.swift", parser.Declaration{Name: "WidgetFactory", Kind: parser.DeclInterface, Line: 1}),
+		file("b.swift", ty("ConcreteWidgetFactory")),
+	}
+	got = patternNames(files)
+	if got["Abstract Factory"] != 2 {
+		t.Errorf("expected Abstract Factory ×2, got %v", got)
+	}
+	if _, ok := got["Factory Method"]; ok {
+		t.Errorf("must not also report Factory Method: %v", got)
+	}
+}
+
+func TestDetectsMarkerInterface(t *testing.T) {
+	f := writeFile(t, ".swift", "protocol Trashable {}\n",
+		parser.Declaration{Name: "Trashable", Kind: parser.DeclInterface, Line: 1})
+	got := patternNames([]*parser.ParsedFile{f})
+	if got["Marker"] != 1 {
+		t.Errorf("expected Marker, got %v", got)
+	}
+}
+
+func TestMarkerRejectsNonEmptyProtocol(t *testing.T) {
+	f := writeFile(t, ".swift", "protocol Greeter {\n    func greet()\n}\n",
+		parser.Declaration{Name: "Greeter", Kind: parser.DeclInterface, Line: 1})
+	got := patternNames([]*parser.ParsedFile{f})
+	if _, ok := got["Marker"]; ok {
+		t.Errorf("a protocol with a member must not be a Marker: %v", got)
+	}
+}
+
+func TestDetectsDelegationOnlyOnProtocols(t *testing.T) {
+	files := []*parser.ParsedFile{
+		file("a.swift", parser.Declaration{Name: "AccountDelegate", Kind: parser.DeclInterface, Line: 1}),
+		file("b.swift", ty("NotADelegateProtocolClass")), // a class, not a protocol
+	}
+	got := patternNames(files)
+	if got["Delegation"] != 1 {
+		t.Errorf("expected Delegation ×1 (protocol only), got %v", got)
+	}
+}
+
+func TestDetectsNullObject(t *testing.T) {
+	files := []*parser.ParsedFile{
+		file("a.go", ty("NullUser")),
+		file("b.go", ty("Nullable")), // must NOT match — no boundary after "Null"
+	}
+	got := patternNames(files)
+	if got["Null Object"] != 1 {
+		t.Errorf("expected Null Object ×1, got %v", got)
+	}
+}
+
+func TestDetectsCaching(t *testing.T) {
+	got := patternNames([]*parser.ParsedFile{file("a.go", ty("ImageCache"))})
+	if got["Caching"] != 1 {
+		t.Errorf("expected Caching, got %v", got)
+	}
+}
+
+func TestDetectsMementoAndSnapshot(t *testing.T) {
+	files := []*parser.ParsedFile{
+		file("a.go", parser.Declaration{Name: "EditorMemento", Kind: parser.DeclStruct, Line: 1}),
+		file("b.go", parser.Declaration{Name: "ChatSnapshot", Kind: parser.DeclStruct, Line: 1}),
+	}
+	got := patternNames(files)
+	if got["Memento"] != 2 {
+		t.Errorf("expected Memento ×2 (Memento + Snapshot suffixes), got %v", got)
+	}
+}
+
+func TestDetectsPrototypeFromContent(t *testing.T) {
+	f := swiftFile(t,
+		"final class Node: NSCopying {\n    func copy(with zone: NSZone? = nil) -> Any { Node() }\n}\n",
+		parser.Declaration{Name: "Node", Kind: parser.DeclClass, Line: 1})
+	got := patternNames([]*parser.ParsedFile{f})
+	if got["Prototype"] != 1 {
+		t.Errorf("expected Prototype from NSCopying conformance, got %v", got)
+	}
+}
+
+func TestPrototypeSuffixAloneIsNotEnough(t *testing.T) {
+	// A type merely named "*Prototype" with no NSCopying/copy()/clone() must
+	// not match — Prototype is content-based now, not suffix-based.
+	f := swiftFile(t, "final class WidgetPrototype {\n    var value = 0\n}\n",
+		parser.Declaration{Name: "WidgetPrototype", Kind: parser.DeclClass, Line: 1})
+	got := patternNames([]*parser.ParsedFile{f})
+	if _, ok := got["Prototype"]; ok {
+		t.Errorf("name alone must not trigger Prototype: %v", got)
 	}
 }
 

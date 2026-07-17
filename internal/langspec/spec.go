@@ -18,13 +18,14 @@ const (
 	PlatformGo        Platform = "go"         // Go tab
 	PlatformJava      Platform = "java"       // Java tab
 	PlatformRust      Platform = "rust"       // Rust tab
+	PlatformC         Platform = "c_cpp"      // C + C++ tab
 )
 
 // PlatformOrder is the canonical left-to-right tab order in the HTML report.
 // (The report itself re-sorts tabs by lines of code; this is only the
 // tie-break / fallback order.)
 var PlatformOrder = []Platform{
-	PlatformSwiftObjC, PlatformKotlin, PlatformPython, PlatformTSJS, PlatformGo, PlatformJava, PlatformRust,
+	PlatformSwiftObjC, PlatformKotlin, PlatformPython, PlatformTSJS, PlatformGo, PlatformJava, PlatformRust, PlatformC,
 }
 
 // PlatformTitle is the human label shown on a tab.
@@ -44,6 +45,8 @@ func PlatformTitle(p Platform) string {
 		return "Java"
 	case PlatformRust:
 		return "Rust"
+	case PlatformC:
+		return "C + C++"
 	default:
 		return string(p)
 	}
@@ -103,6 +106,15 @@ type LanguageSpec struct {
 	DisplayName string
 	Platform    Platform
 	Extensions  []string // owned extensions WITHOUT dot: ["swift"], ["h","m","mm"]
+
+	// Sniff opts an extension into content-based sharing instead of exclusive
+	// ownership: when set, this spec may register the SAME extension as
+	// another spec (e.g. ".h" shared by c/cpp/objc) rather than panicking on
+	// the clash. At most one spec per shared extension may leave Sniff nil —
+	// that one is the fallback used when no Sniff predicate matches (or when
+	// a caller doesn't do content-aware resolution at all, e.g. Lookup).
+	// peekLines is a prefix of the file's lines, enough for a content signal.
+	Sniff func(peekLines []string) bool
 
 	// Client marks UI/client-side languages (Swift, Objective-C, Kotlin,
 	// TypeScript/JavaScript). The architecture module shows app-architecture

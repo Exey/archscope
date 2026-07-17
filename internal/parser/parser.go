@@ -27,15 +27,21 @@ func (p *Parser) Parse(filePath, moduleName, projectType string) (*ParsedFile, e
 	if spec == nil {
 		return nil, nil
 	}
-	c := p.Reg.Compiled(spec.ID)
-	if c == nil {
-		// Should not happen: a registered spec always has compiled patterns.
-		return nil, nil
-	}
 
 	lines, err := p.Loader.Load(filePath)
 	if err != nil {
 		return nil, err
+	}
+
+	if p.Reg.IsShared(ext) {
+		if resolved := p.Reg.ResolveShared(ext, lines); resolved != nil {
+			spec = resolved
+		}
+	}
+	c := p.Reg.Compiled(spec.ID)
+	if c == nil {
+		// Should not happen: a registered spec always has compiled patterns.
+		return nil, nil
 	}
 
 	pf := ParseUniversal(filePath, lines, spec, c)

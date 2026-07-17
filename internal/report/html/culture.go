@@ -13,6 +13,7 @@ package html
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -141,8 +142,60 @@ type cultureRow struct {
 	hasTrafficHealth         bool
 	trafficHealthWeight      int
 
-	// Performance.
-	n3, n2 int
+	// Performance: 🅾️ Complexity (90% W) + 💧 Memory Leaks (10% W) — a clean
+	// (0-leak) platform earns the full 10 points; leaks pull that slice down
+	// via the same curveScore as everything else.
+	n3, n2                    int
+	complexityScore           int
+	memLeaks                  int // High + Medium 💧 Memory Leaks findings, for display
+	memLeaksHigh, memLeaksMed int // same findings split by severity, for scoring
+	memLeaksScore             int
+}
+
+// perfComplexityWeightPct and perfMemLeaksWeightPct split ⚡ Performance
+// between 🅾️ Big-O complexity and 💧 Memory Leaks; they must sum to 100.
+const (
+	perfComplexityWeightPct = 90
+	perfMemLeaksWeightPct   = 10
+)
+
+// curveScoreFloor and curveScoreDecay shape the shared asymptotic scoring
+// curve used by both 🛡️ Dangers and ⚡ Performance: score = floor +
+// (100-floor)·e^(−points/decay). A single HIGH-weight point source (7 points
+// — one HIGH security finding, one O(N³)+ hotspot, one HIGH memory leak)
+// still leaves a platform just inside the 82%+ top band; a second one (14
+// points) drops it out. The curve never truly reaches 0 — even a very bad
+// platform (e.g. 20 HIGH + 80 MEDIUM = 300 points) settles near the 5% floor
+// rather than a flat, uninformative 0%.
+const (
+	curveScoreFloor = 5.0
+	curveScoreDecay = 40.0
+)
+
+// complexityPoints computes 🅾️ Complexity's weighted violation points: the
+// same HIGH×7 / MEDIUM×2 convention 🛡️ Dangers uses, with O(N³)+ hotspots as
+// the HIGH tier and O(N²) violations as the MEDIUM tier.
+func complexityPoints(r cultureRow) int {
+	return r.n3*7 + r.n2*2
+}
+
+// memLeaksPoints computes 💧 Memory Leaks' weighted points, same HIGH×7 /
+// MEDIUM×2 convention — a clean (0-leak) platform scores curveScore(0) = 100
+// on this component, earning the full perfMemLeaksWeightPct share.
+func memLeaksPoints(r cultureRow) int {
+	return r.memLeaksHigh*7 + r.memLeaksMed*2
+}
+
+// curveScore converts weighted points (HIGH-tier×7 + MEDIUM-tier×2, the same
+// convention 🛡️ Dangers and ⚡ Performance both use for their respective
+// violation counts) into a 0–100 score via an asymptotic decay curve — see
+// curveScoreFloor/curveScoreDecay for the shape this is tuned to.
+func curveScore(points int) int {
+	if points <= 0 {
+		return 100
+	}
+	score := curveScoreFloor + (100-curveScoreFloor)*math.Exp(-float64(points)/curveScoreDecay)
+	return clampInt(int(score+0.5), 0, 100)
 }
 
 // clampInt bounds v to [lo, hi].
@@ -259,6 +312,28 @@ func renderProgrammingCulture(res *result.AnalysisResult) string {
 		}
 		return rows[i].overall > rows[j].overall
 	})
+
+	// Single-folder scans (one repo, not a multi-repo/monorepo comparison)
+	// have one "home" language — the platform with the most LOC is what the
+	// project is actually written in, so it's pinned to the very top
+	// regardless of devLevel rank. Without this, a small but highly-scored
+	// tooling platform (e.g. a handful of pristine scripts) could outrank the
+	// language the whole project is built in, which reads oddly as the first
+	// row of its own report.
+	if len(res.Scan.GitRepos) <= 1 {
+		mainIdx, mainLOC := -1, -1
+		for i, r := range rows {
+			if !r.isDevOps && r.loc > mainLOC {
+				mainLOC = r.loc
+				mainIdx = i
+			}
+		}
+		if mainIdx > 0 {
+			main := rows[mainIdx]
+			rows = append(rows[:mainIdx], rows[mainIdx+1:]...)
+			rows = append([]cultureRow{main}, rows...)
+		}
+	}
 
 	var b strings.Builder
 	b.WriteString(`<div class="as-section as-culture">`)
@@ -467,6 +542,10 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 					r.n2++
 				}
 			}
+		case constructs.MemoryLeaksReport:
+			r.memLeaks = v.High + v.Medium
+			r.memLeaksHigh = v.High
+			r.memLeaksMed = v.Medium
 		}
 	}
 
@@ -587,7 +666,7 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 	// dominate — a single HIGH is a flag) + 🩺 Traffic Health, weighted 30%
 	// whenever this platform has traffic data (Traffic Health's own TLS
 	// check was removed to avoid double-counting the same signal here).
-	r.secFindingsScore = clampInt(100-(r.high*7+r.med*2), 0, 100)
+	r.secFindingsScore = curveScore(r.high*7 + r.med*2)
 	if hasTrafficData {
 		if th, ok := computeTrafficHealth(trafficRes, specRes, langspec.Default.IsClientPlatform(pg.Platform)); ok {
 			r.trafficHealthScore = th.overall
@@ -605,12 +684,23 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 		(r.secFindingsScore*r.secFindingsWeight+r.trafficHealthScore*r.trafficHealthWeight+50)/100,
 		0, 100)
 
-	// Performance: Big-O health, with an extra dent per O(N³)+ hotspot.
-	perf := r.perf
-	if perf == 0 && r.n2 == 0 && r.n3 == 0 {
-		perf = 80 // no complexity panel / no loops → assume adequate
+	// Performance: 🅾️ Complexity (90% W) scored via curveScore over weighted
+	// violation points (O(N³)+ ×7, O(N²) ×2 — the same HIGH/MEDIUM convention
+	// 🛡️ Dangers uses) + 💧 Memory Leaks (10% W) scored the same way over its
+	// own HIGH/MEDIUM points. A clean (0-leak) platform earns the full 10
+	// points for that slice; a single O(N³)+ hotspot alone still just holds
+	// Complexity's 82%+ top band, a second one drops out of it, and a very
+	// complex platform settles near the curve's 5% floor.
+	cxPoints := complexityPoints(r)
+	if cxPoints == 0 && r.perf == 0 {
+		r.complexityScore = 80 // no complexity panel / no loops → no signal, assume adequate
+	} else {
+		r.complexityScore = curveScore(cxPoints)
 	}
-	r.perf = clampInt(perf-r.n3*5, 0, 100)
+	r.memLeaksScore = curveScore(memLeaksPoints(r))
+	r.perf = clampInt(
+		(r.complexityScore*perfComplexityWeightPct+r.memLeaksScore*perfMemLeaksWeightPct+50)/100,
+		0, 100)
 
 	r.overall = overallScore(r.design, r.quality, r.security, r.perf)
 	return r
@@ -681,32 +771,52 @@ func computeDevOpsRow(res *result.AnalysisResult) (cultureRow, bool) {
 }
 
 // ── dimension tooltips ───────────────────────────────────────────────────────
+//
+// Each line names the platform card that actually produced its number — a
+// report-module panel (modPanelID) or a hand-rendered per-platform section
+// (cultAnchorID) — and dimLine turns that into a click target: open the
+// platform tab and scroll straight to that card, instead of (as before) the
+// platform in general. See the "data-panel-target" JS handler in theme.go.
+
+// dimLine renders one formula-component line, linked to targetID when given
+// (empty targetID — e.g. the "no signal" case — falls back to plain text).
+func dimLine(targetID, inner string) string {
+	if targetID == "" {
+		return fmt.Sprintf("<div>%s</div>", inner)
+	}
+	return fmt.Sprintf(`<div><a class="as-cult-dimlink" href="#%s" data-panel-target="%s">%s</a></div>`,
+		esc(targetID), esc(targetID), inner)
+}
 
 func designTip(r cultureRow) string {
 	if r.isDevOps {
 		return "<div>DevOps: IaC/config hygiene from the DevOps Health Score.</div>"
 	}
-	var base string
+	var base, baseTarget string
 	switch {
 	case r.dddScore > 0:
 		base = fmt.Sprintf("%d%% DDD", r.dddScore)
+		baseTarget = modPanelID(r.key, "dddmodel")
 	case r.popScore > 0:
 		base = fmt.Sprintf("%d%% POP", r.popScore)
+		baseTarget = modPanelID(r.key, "oopvspop")
 	case r.hasLangRichness && r.langRichnessWeight == 0:
 		// No DDD/POP: 🎖️ Language Richness replaces Base entirely.
 		base = fmt.Sprintf("🎖️ %d%% Richness", r.langRichness)
+		baseTarget = modPanelID(r.key, "langrichness")
 	case r.hasDesign:
 		base = "arch confidence"
+		baseTarget = cultAnchorID("arch", r.key)
 	default:
 		base = "no signal"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "<div>🍱 %s (%d%% W)</div>", base, r.designBaseWeight)
+	b.WriteString(dimLine(baseTarget, fmt.Sprintf("🍱 %s (%d%% W)", base, r.designBaseWeight)))
 	if r.langRichnessWeight > 0 {
-		fmt.Fprintf(&b, "<div>🎖️ %d%% Richness (%d%% W)</div>", r.langRichnessScore, r.langRichnessWeight)
+		b.WriteString(dimLine(modPanelID(r.key, "langrichness"), fmt.Sprintf("🎖️ %d%% Richness (%d%% W)", r.langRichnessScore, r.langRichnessWeight)))
 	}
-	fmt.Fprintf(&b, "<div>🏗️ %d%% Arch Layers (%d%% W)</div>", r.archLayerScore, archWeightPct)
-	fmt.Fprintf(&b, "<div>🧩 %d%% Patterns (%d%% W)</div>", r.patternScore, patternWeightPct)
+	b.WriteString(dimLine(cultAnchorID("arch", r.key), fmt.Sprintf("🏗️ %d%% Arch Layers (%d%% W)", r.archLayerScore, archWeightPct)))
+	b.WriteString(dimLine(modPanelID(r.key, "designpattern"), fmt.Sprintf("🧩 %d%% Patterns (%d%% W)", r.patternScore, patternWeightPct)))
 	return b.String()
 }
 
@@ -714,18 +824,13 @@ func qualityTip(r cultureRow) string {
 	if r.isDevOps {
 		return "<div>DevOps: static-analysis pass rate across Dockerfile/Compose/Helm.</div>"
 	}
-	return fmt.Sprintf(
-		"<div>💻 %d%% Code Structure (%d%% W)</div>"+
-			"<div>🌳 %d%% Data Structures (%d%% W)</div>"+
-			"<div>🔀 %d%% Algorithms (%d%% W)</div>"+
-			"<div>📐 %d%% Big Types (%d%% W)</div>"+
-			"<div>📏 %d%% Long Func (%d%% W)</div>",
-		r.csScore, r.csWeight,
-		r.dsScore, dsWeightPct,
-		r.algoScore, algoWeightPct,
-		r.ltScore, r.ltWeight,
-		r.lfScore, r.lfWeight,
-	)
+	var b strings.Builder
+	b.WriteString(dimLine(modPanelID(r.key, "codestructure"), fmt.Sprintf("💻 %d%% Code Structure (%d%% W)", r.csScore, r.csWeight)))
+	b.WriteString(dimLine(modPanelID(r.key, "datastructures"), fmt.Sprintf("🌳 %d%% Data Structures (%d%% W)", r.dsScore, dsWeightPct)))
+	b.WriteString(dimLine(modPanelID(r.key, "algorithms"), fmt.Sprintf("🔀 %d%% Algorithms (%d%% W)", r.algoScore, algoWeightPct)))
+	b.WriteString(dimLine(cultAnchorID("biggesttypes", r.key), fmt.Sprintf("📐 %d%% Big Types (%d%% W)", r.ltScore, r.ltWeight)))
+	b.WriteString(dimLine(cultAnchorID("longestfunc", r.key), fmt.Sprintf("📏 %d%% Long Func (%d%% W)", r.lfScore, r.lfWeight)))
+	return b.String()
 }
 
 func securityTip(r cultureRow) string {
@@ -733,11 +838,9 @@ func securityTip(r cultureRow) string {
 		return "<div>DevOps: security-context / privilege checks from the DevOps Health Score.</div>"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b,
-		"<div>🛡️ %d Dangers %d%% (%d%% W)</div>",
-		r.high+r.med, r.secFindingsScore, r.secFindingsWeight)
+	b.WriteString(dimLine(cultAnchorID("danger", r.key), fmt.Sprintf("🛡️ %d (%dH/%dM) Dangers %d%% (%d%% W)", r.high+r.med, r.high, r.med, r.secFindingsScore, r.secFindingsWeight)))
 	if r.hasTrafficHealth {
-		fmt.Fprintf(&b, "<div>🛜 %d%% Traffic (%d%% W)</div>", r.trafficHealthScore, r.trafficHealthWeight)
+		b.WriteString(dimLine(modPanelID(r.key, "traffic"), fmt.Sprintf("🛜 %d%% Traffic (%d%% W)", r.trafficHealthScore, r.trafficHealthWeight)))
 	}
 	return b.String()
 }
@@ -746,9 +849,10 @@ func perfTip(r cultureRow) string {
 	if r.isDevOps {
 		return "<div>DevOps: resource limits / budgets (neutral proxy).</div>"
 	}
-	return fmt.Sprintf(
-		"<div>🅾️ %d 𝒪(n³)+ / %d 𝒪(n²)</div>",
-		r.n3, r.n2)
+	var b strings.Builder
+	b.WriteString(dimLine(modPanelID(r.key, "complexity"), fmt.Sprintf("🅾️ %d 𝒪(n³)+ / %d 𝒪(n²) — %d%% (%d%% W)", r.n3, r.n2, r.complexityScore, perfComplexityWeightPct)))
+	b.WriteString(dimLine(modPanelID(r.key, "memoryleaks"), fmt.Sprintf("💧 %d Memory Leaks %d%% (%d%% W)", r.memLeaks, r.memLeaksScore, perfMemLeaksWeightPct)))
+	return b.String()
 }
 
 // boolWord picks whenTrue/whenFalse based on ok — a tiny helper so tooltip

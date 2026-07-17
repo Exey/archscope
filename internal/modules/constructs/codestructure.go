@@ -28,6 +28,7 @@ import (
 
 	"github.com/exey/archscope/internal/modules"
 	"github.com/exey/archscope/internal/parser"
+	"github.com/exey/archscope/internal/security"
 )
 
 func init() { modules.Default.Register(CodeStructure{}) }
@@ -226,6 +227,14 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 	cache := newSourceCache()
 	var rep CodeStructureReport
 	var commentLines, totalLines int
+
+	prod := make([]*parser.ParsedFile, 0, len(files))
+	for _, f := range files {
+		if !security.IsTestOrBenchPath(f.FilePath) {
+			prod = append(prod, f)
+		}
+	}
+	files = prod
 
 	for _, f := range files {
 		if isConstructDetectorFile(f.FilePath) {

@@ -89,6 +89,14 @@ var rawConstants = []rawConstant{
 	{0x9b05688c, "SHA-256 (initialization vector)", mcCrypto},
 	{0x1f83d9ab, "SHA-256 (initialization vector)", mcCrypto},
 	{0x5be0cd19, "SHA-256 (initialization vector)", mcCrypto},
+	{0x6a09e667f3bcc908, "SHA-512 (initialization vector)", mcCrypto},
+	{0xbb67ae8584caa73b, "SHA-512 (initialization vector)", mcCrypto},
+	{0x3c6ef372fe94f82b, "SHA-512 (initialization vector)", mcCrypto},
+	{0xa54ff53a5f1d36f1, "SHA-512 (initialization vector)", mcCrypto},
+	{0x510e527fade682d1, "SHA-512 (initialization vector)", mcCrypto},
+	{0x9b05688c2b3e6c1f, "SHA-512 (initialization vector)", mcCrypto},
+	{0x1f83d9abfb41bd6b, "SHA-512 (initialization vector)", mcCrypto},
+	{0x5be0cd19137e2179, "SHA-512 (initialization vector)", mcCrypto},
 
 	// PRNGs
 	{0x9908b0df, "Mersenne Twister (MT19937 matrix A)", mcPRNG},
@@ -96,8 +104,11 @@ var rawConstants = []rawConstant{
 	{0x2545f4914f6cdd1d, "xorshift64star", mcPRNG},
 	{0x9e3779b9, "Fibonacci hashing (32-bit golden ratio)", mcHash},
 	{0x9e3779b97f4a7c15, "Fibonacci hashing / SplitMix64 (64-bit golden ratio)", mcPRNG},
+	{0x61c88647, "Java ThreadLocalRandom / ThreadLocal (golden ratio increment)", mcPRNG},
 	{0xbf58476d1ce4e5b9, "SplitMix64 (mix constant)", mcPRNG},
 	{0x94d049bb133111eb, "SplitMix64 (mix constant)", mcPRNG},
+	{0x5851f42d4c957f2d, "PCG32 (default multiplier)", mcPRNG},
+	{0x14057b7ef767814f, "PCG32 (default increment)", mcPRNG},
 
 	// Non-cryptographic hashes
 	{0x5bd1e995, "MurmurHash2", mcHash},
@@ -107,6 +118,14 @@ var rawConstants = []rawConstant{
 	{0xc2b2ae35, "MurmurHash3 (finalizer)", mcHash},
 	{0xff51afd7ed558ccd, "MurmurHash3 (64-bit finalizer)", mcHash},
 	{0xc4ceb9fe1a85ec53, "MurmurHash3 (64-bit finalizer)", mcHash},
+	{0x9e3779b185ebca87, "xxHash64 (prime 1)", mcHash},
+	{0xc2b2ae3d27d4eb4f, "xxHash64 (prime 2)", mcHash},
+	{0x165667b19e3779f9, "xxHash64 (prime 3)", mcHash},
+	{0x9e3779b1, "xxHash32 (prime 1)", mcHash},
+	{0x85ebca77, "xxHash32 (prime 2)", mcHash},
+	{0xc2b2ae3d, "xxHash32 (prime 3)", mcHash},
+	{0x27d4eb2f, "xxHash32 (prime 4)", mcHash},
+	{0x165667b1, "xxHash32 (prime 5)", mcHash},
 	// djb2's seed (5381) is deliberately absent: it has no natural hex spelling
 	// (nobody writes 0x1505), so it can't be hex-gated the way the low-entropy
 	// CRC-16 polynomials are, and as a bare decimal it's indistinguishable from
@@ -246,6 +265,13 @@ func (MagicConstants) Analyze(files []*parser.ParsedFile) any {
 // followed by a digit — a float) are applied in numericTokens.
 var reNumericLit = regexp.MustCompile(`(^|[^\w.])(0[xX][0-9a-fA-F_]+|[0-9][0-9_]*)`)
 
+// reNumericLitSuffix matches an integer/float literal suffix immediately
+// following the digits — Java/Kotlin/C/C#/C++'s 'L'/'l' (long), 'U'/'u'
+// (unsigned, alone or combined as "UL"/"LU"), 'F'/'f' (float) — so
+// `0x61c88647L` and `100UL` are recognized as one literal rather than
+// rejected as "part of a longer identifier" by the trailing-boundary check.
+var reNumericLitSuffix = regexp.MustCompile(`^(?:[uU][lL]?|[lL][uU]?|[fF])`)
+
 type numTok struct {
 	value string // decimal-string form of the value
 	isHex bool
@@ -263,13 +289,18 @@ func numericTokens(line string) []numTok {
 		lit := line[m[4]:m[5]]
 		end := m[5]
 		// Trailing boundary: reject if immediately followed by a word char
-		// (part of a longer identifier/number) or by ".<digit>" (a float).
+		// (part of a longer identifier/number) — unless that word char is a
+		// literal suffix (L/U/F/UL/LU) not itself followed by another word
+		// char — or by ".<digit>" (a float).
 		if end < len(line) {
 			nb := line[end]
 			if isIdentByte(nb) {
-				continue
-			}
-			if nb == '.' && end+1 < len(line) && line[end+1] >= '0' && line[end+1] <= '9' {
+				suf := reNumericLitSuffix.FindString(line[end:])
+				after := end + len(suf)
+				if suf == "" || (after < len(line) && isIdentByte(line[after])) {
+					continue
+				}
+			} else if nb == '.' && end+1 < len(line) && line[end+1] >= '0' && line[end+1] <= '9' {
 				continue
 			}
 		}
@@ -305,7 +336,10 @@ type funcRange struct {
 	start, end int // inclusive line indices
 }
 
-var reFuncDecl = regexp.MustCompile(`(^|[^\w.])(?:func|fn|fun|function)\s+(\w+)`)
+// reFuncDecl also recognizes Go's receiver clause ("func (r *Foo) Bar(") —
+// like codestructure.go's reFuncSig — so a magic constant inside a Go method
+// attributes to the method name instead of falling back to "(top level)".
+var reFuncDecl = regexp.MustCompile(`(^|[^\w.])(?:func(?:\s*\([^)]*\))?|fn|fun|function)\s+(\w+)`)
 
 // funcRanges brace-matches every function declaration to its body range, so a
 // hit can be attributed to the innermost enclosing function.

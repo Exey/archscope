@@ -77,6 +77,8 @@ func Default() Config {
 			// product code, all of it noise in per-language metrics otherwise.
 			"third-party", "ThirdParty", "build-system", "BuildSystem",
 			"scripts", "Scripts", "fastlane",
+			// CMake/CLion build output and generated-file directories.
+			"cmake-build-debug", "cmake-build-release", "CMakeFiles",
 		},
 		MaxFilesAnalyze: 50000,
 		GitCommitLimit:  1000,

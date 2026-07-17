@@ -19,6 +19,7 @@ package html
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"strings"
@@ -225,12 +226,23 @@ func trafficVersioningScore(inbound []traffic.Entry) (score int, detail string, 
 			versioned++
 		}
 	}
-	verPct := versioned * 100 / len(inbound)
+	verFrac := float64(versioned) / float64(len(inbound))
+	verPct := int(verFrac*100 + 0.5)
 	deprecated := trafficCountDeprecated(inbound)
 	depPct := deprecated * 100 / len(inbound)
-	score = clampInt(verPct-depPct, 0, 100)
+	score = clampInt(versioningCoverageScore(verFrac)-depPct, 0, 100)
 	detail = fmt.Sprintf("%d%% versioned in path, %d marked deprecated", verPct, deprecated)
 	return score, detail, true
+}
+
+// versioningCoverageScore softens raw versioned-path coverage into a score via
+// an ease-out cubic curve: 100·(1-(1-f)³). Introducing a versioning scheme at
+// all is the expensive architectural step — once some routes carry a version
+// segment, extending it to the rest is comparatively incremental — so partial
+// coverage earns outsized credit (50% coverage ≈ 87%) rather than the flat
+// 1:1 mapping a linear percentage would give.
+func versioningCoverageScore(f float64) int {
+	return clampInt(int(100*(1-math.Pow(1-f, 3))+0.5), 0, 100)
 }
 
 // trafficCountDeprecated checks each entry's declaration line itself — so a

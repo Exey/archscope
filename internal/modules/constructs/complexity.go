@@ -10,6 +10,7 @@ import (
 
 	"github.com/exey/archscope/internal/modules"
 	"github.com/exey/archscope/internal/parser"
+	"github.com/exey/archscope/internal/security"
 )
 
 func init() { modules.Default.Register(Complexity{}) }
@@ -96,6 +97,9 @@ func (Complexity) Analyze(files []*parser.ParsedFile) any {
 	iterationScopes := map[string]bool{} // (file\x01symbol) that contain ≥1 loop
 
 	for _, f := range files {
+		if security.IsTestOrBenchPath(f.FilePath) {
+			continue
+		}
 		lines := cache.lines(f.FilePath)
 		if lines == nil {
 			continue
