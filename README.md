@@ -1,6 +1,6 @@
 # 🏛️🔭 ArchScope
 
-**Universal CLI for multi-language codebase intelligence** — analyze architecture, security, dependencies and git history across Go, Python, Rust, Java, Kotlin, Swift/Objective-C, TypeScript/JavaScript and produce one interactive HTML report, a Markdown document, LLM prompt or a SARIF log.
+**Universal CLI for multi-language codebase intelligence** — analyze architecture, security, dependencies and git history across Go, Python, Rust, Java, Kotlin, Swift/Objective-C, TypeScript/JavaScript, C and C++, and produce one interactive HTML report, a Markdown document (LLM-ready), or a SARIF log.
 
 ---
 
@@ -19,7 +19,7 @@ go run ./cmd/archscope ~/code --open
 
 1. **Summary bar** — lines of code, source files, declarations, modules, **Danger rate** (0–100% scaled from the 1000-point index), and platform count. One tab per detected language.
 
-2. **🔰 Programming Culture** — a heuristic developer-seniority read per language platform (and DevOps), leading the report as the highest-level summary. One table row per platform, each scored across four dimensions — 🏛️ Design/Architecture (DDD/OOP↔POP score, arch-pattern confidence), 🧹 Code Quality (god functions, longest function, TODO/FIXME density), 🛡️ Security (HIGH/MEDIUM findings), ⚡ Performance (Big-O complexity health) — and mapped onto a 10-rung ladder: Trainee → Junior− (Entry-Level) → Junior (Core) → Junior+/Middle− → Middle → Middle+/Senior− → Senior → Senior+/Lead− → Lead → Architect. Rows sort by level, highest first. From Senior upward every level is *gated*, not just averaged: Senior requires all four dimensions above 60, Senior+/Lead− requires all four ≥ 70, Lead requires all four ≥ 75, and Architect requires all four ≥ 99 — so one weak dimension (a security HIGH, a god function, a stray O(N³)) can't be averaged away by three excellent ones. A collapsible legend explains what each underlying metric measures and its pitfalls. Below the table, a **🔎 Priority Issues** list pulls the worst signals from the Programming Methods detectors — algorithmic complexity hotspots (O(N³) first, then O(N²)) and credential/database security findings — each a clickable VS Code deep link tagged with its platform. Explicitly a conversation starter, not a verdict.
+2. **🔰 Programming Culture** — a heuristic developer-seniority read per language platform (and DevOps), leading the report as the highest-level summary. One table row per platform, each scored across four dimensions — 🏛️ Design/Architecture (DDD/OOP↔POP score, arch-pattern confidence), 🧹 Code Quality (god functions, longest function, TODO/FIXME density), 🛡️ Security (HIGH/MEDIUM findings, plus 🩺 Traffic Health weighted 30% when the platform has traffic data), ⚡ Performance (🅾️ Complexity 90% + 💧 Memory Leaks 10%) — and mapped onto a 10-rung ladder: Trainee → Junior− (Entry-Level) → Junior (Core) → Junior+/Middle− → Middle → Middle+/Senior− → Senior → Senior+/Lead− → Lead → Architect. Rows sort by level, highest first — except for a single-repo scan, where the platform with the most lines of code (the project's actual main language) is always pinned to the top row regardless of level, so a small pristine tooling platform never outranks what the project is really written in. From Senior upward every level is *gated*, not just averaged: Senior requires all four dimensions above 60, Senior+/Lead− requires all four ≥ 70, Lead requires all four ≥ 75, and Architect requires all four ≥ 99 — so one weak dimension (a security HIGH, a god function, a stray O(N³)) can't be averaged away by three excellent ones. A collapsible legend explains what each underlying metric measures and its pitfalls. Below the table, a **🔎 Priority Issues** list pulls the worst signals from the Programming Methods detectors — algorithmic complexity hotspots (O(N³) first, then O(N²)) and credential/database security findings — each a clickable VS Code deep link tagged with its platform. Explicitly a conversation starter, not a verdict.
 
 3. **🧰 Tech Stack & Modules** — repo-wide tag cloud: languages present + frameworks auto-detected from imports (SwiftUI, Combine, React, Next.js, Django, FastAPI, gRPC, GORM, …) and from config files (docker-compose, go.mod, Makefile). Below it: a package grid sized by LOC with per-language badges.
 
@@ -46,7 +46,7 @@ go run ./cmd/archscope ~/code --open
 
 10. **🧱 Spec Coverage** *(Go · Python · Java · Kotlin · TypeScript)* — measures **code→spec coverage**: what percentage of detected code routes have a matching entry in a spec file. Scans the project tree for OpenAPI / Swagger (YAML + JSON), gRPC (`.proto`), and GraphQL (`.graphql` / `.gql`) specs and cross-references them against route handlers extracted from source. *Main metric bar* — `code→spec` percentage: `(code routes with a spec entry) / (total code routes)`.
 
-11. **🛜 Traffic** *(Go · Python · Java)* — detected inbound and outbound connection signals: HTTP/gRPC endpoints, listener ports, external service calls, and data formats (JSON, Protobuf, …). Shown as two tables — 📥 Inbound and 📤 Outbound — with protocol, URI/pattern, data format, source file, and module. Each inbound route gets a **Spec** column (✅ / ❓) when spec files are found.
+11. **🛜 Traffic** *(Go · Python · Java · Swift · Kotlin · TypeScript/JavaScript · C/C++)* — detected inbound and outbound connection signals: HTTP/gRPC/WebSocket endpoints, listener ports, external service calls, and data formats (JSON, Protobuf, …), deduplicated by URI+protocol across every module/file that registers it (all locations linked, not just the first). Shown as two tables — 📥 Inbound and 📤 Outbound — with protocol, URI/pattern, data format, source file(s), and module. Each inbound route gets a **Spec** column (✅ / ❓) when spec files are found. A **🩺 Traffic Health** score sits above the tables — RESTfulness, API versioning coverage, documentation coverage, protocol modernity, dependency health, and observability, whichever sub-scores apply to the platform — and feeds 30% of 🔰 Programming Culture's Security dimension when present.
 
 12. **💡 Module Insights** — four sub-sections in a responsive grid:
      - **🕸️ Dependency Hotspots** — modules ranked by in-degree (how many others depend on them), with Lines & Decl. Backend tabs also include an inline **SVG dependency graph** (node radius ∝ dependents).
@@ -68,6 +68,8 @@ go run ./cmd/archscope ~/code --open
 
    - **🅾️ Complexity** *(all brace languages)* — heuristic Big-O "health" read from iteration nesting: a function whose deepest simultaneous loop nesting is *N* levels (nested `for`/`while`, nested higher-order closures like `.map`/`.filter`, or a linear collection op such as `.sorted()`/`.contains(where:)` used inside a loop) is charged O(Nⁿ), and anything O(N²) or worse is surfaced as a time hotspot; collections allocated inside a loop are flagged as space hotspots. Shows time/space health scores (share of loop-bearing functions that stay O(N) or better), a collection-usage summary, and each violation's Big-O badge, symbol, reason, and VS Code link. Indentation-only sources (Python) have no braces, so they contribute nothing rather than a false reading. Ported from ArchSwiftScope's ComplexityDetector.
 
+   - **💧 Memory Leaks** *(Go · Python · Java · TypeScript/JavaScript · Rust · Swift/Objective-C · C/C++)* — resource-lifecycle health read by pairing each language's acquire call (file/socket/DB handle, timer, thread, heap allocation, event listener, …) against its matching release call, flagging every acquire site once a file's acquire count outpaces its release count. A few shapes with no natural pairing — Rust's `mem::forget`, Swift's retain-cycle-prone closures — flag every risky occurrence directly instead. Each finding carries a severity, plain-language advice, and a VS Code link; feeds 10% of 🔰 Programming Culture's Performance dimension.
+
    - **🪄 Magic Constants** *(all languages)* — well-known algorithms identified by the fixed literal values baked into their implementation: hash primes/offsets (FNV-1/1a), checksum polynomials (CRC-16/32/32C/64), cryptographic initialization vectors (MD5/SHA-1/SHA-256, ChaCha/Salsa `"expand 32-byte k"`), PRNG coefficients (Mersenne Twister, xorshift, SplitMix64), and non-cryptographic hashes (MurmurHash2/3, Fibonacci hashing). Grouped by family, each with a count and VS Code links to the enclosing function. Matched by numeric **value**, so `0x01000193`, `0x1000193`, and `16_777_619` all resolve to the same FNV prime; low-entropy values (`0x1021`, `0x8005`) count only when written in hex, so an ordinary decimal port or id is never misread. Ported from ArchSwiftScope's MagicConstantDetector.
 
 14. **🐙 Git Analysis** (repo-wide):
@@ -81,6 +83,28 @@ go run ./cmd/archscope ~/code --open
 15. **🛡️ Danger Details** — this platform's rule violations grouped by rule, showing severity, CWE, file location, code snippet, and blame author. File links are **VS Code deep links** (`vscode://`) — click to jump to the exact line.
 
 16. **📂 Modules & Microservices** *(opt-in via `--render-modules`)* — per-module deep-dive at the bottom of the report: project-type badge, declaration mix, and a full file inventory (lines, **estimated tokens**, declarations, decl chips) with VS Code deep links. Module chips in each platform tab link down here.
+
+---
+
+## 🎯 Catches What Humans & AI Miss
+
+A single pass surfaces whole-repo signals that a manual review or an LLM skimming a diff doesn't have the context window to add up:
+
+| Metric | Value |
+| --- | --- |
+| **Setup time** | zero config — point it at a folder, no `.yml` to write |
+| **Speed** | ~10 seconds for a 100K-line codebase |
+
+- **SAST** — 187+ security rules across 9 languages plus universal cross-language checks (secrets, SQL injection, weak crypto, …)
+- **Architecture Review** — DDD↔Anemic spectrum, OOP↔POP, and app-architecture pattern detection (MVC/MVVM/VIPER/Clean/Redux/TCA/…) read from real naming and layering conventions
+- **Data Structures** — 100+ implementations classified by catalog (BST/AVL/trie/bloom filter/LRU cache/…), not just "this type has a `push` method"
+- **Algorithms** — sorting/searching/graph/string/numeric algorithms identified by name-token and magic-constant signals
+- **Complexity** — Big-O health from actual iteration-nesting depth, surfacing O(N²)/O(N³) hotspots across a whole function, not one diff hunk
+- **Traffic Analysis** — every inbound/outbound HTTP/gRPC/WebSocket connection extracted straight from source, scored by a 🩺 Traffic Health read (RESTfulness, versioning, protocol modernity, dependency health, …)
+- **Nesting & Signatures** — worst nesting depth and high-parameter-count functions flagged repo-wide via 💻 Code Structure
+- **Tech Radar** — every detected technology, framework, and design pattern plotted on an Adopt → Trial → Assess → Hold radar
+- **Memory Leaks** — unclosed handles, unstopped timers, un-freed allocations, and retain cycles caught by pairing each language's acquire/release calls
+- **VS Code integration** — every finding, hotspot, and function is a `vscode://` deep link straight to the exact line
 
 ---
 
@@ -315,14 +339,12 @@ internal/
   git/         history, blame, branching-model classifier
   fetch/       remote git-URL resolution (clone + cleanup)
   modules/     pluggable report modules
-    algorithms/    universal algorithm detector (sorting/searching/graph/string)
     arch/          architecture: client pattern detection + backend layered view
-    constructs/    code-construct detectors (data structures, complexity, magic constants; ported from ArchSwiftScope)
+    constructs/    code-construct detectors — data structures, algorithms, complexity, magic constants, design patterns, memory leaks, code structure, language richness (ported from ArchSwiftScope / ultimate_bug_scanner)
     dddmodel/      DDD vs. Anemic Domain Model analyzer (Go · Python · Kotlin · Java)
-    designpattern/ universal GoF detector
     oopvspop/      Swift-only OOP↔POP analyzer
     speccoverage/  API spec coverage: OpenAPI · gRPC · GraphQL vs. code routes (Go · Python · Java · Kotlin · TypeScript)
-    traffic/       HTTP/gRPC/WebSocket route + connection detection
+    traffic/       HTTP/gRPC/WebSocket route + connection detection, plus 🩺 Traffic Health scoring
   result/      AnalysisResult aggregate + pipeline (Run / RunWithProgress)
   report/      shared HTML theme
     html/        HTML writer (tabs, panels, SVG dependency graph, git section)
