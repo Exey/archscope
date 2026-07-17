@@ -19,8 +19,6 @@ go run ./cmd/archscope ~/code --open
 
 1. **Summary bar** — lines of code, source files, declarations, modules, **Danger rate** (0–100% scaled from the 1000-point index), and platform count. One tab per detected language.
 
-![ArchScope](https://exey.github.io/ArchScopeDocs/as_summary.svg)
-
 2. **🔰 Programming Culture** — a heuristic developer-seniority read per language platform (and DevOps), leading the report as the highest-level summary. One table row per platform, each scored across four dimensions — 🏛️ Design/Architecture (DDD/OOP↔POP score, arch-pattern confidence), 🧹 Code Quality (god functions, longest function, TODO/FIXME density), 🛡️ Security (HIGH/MEDIUM findings), ⚡ Performance (Big-O complexity health) — and mapped onto a 10-rung ladder: Trainee → Junior− (Entry-Level) → Junior (Core) → Junior+/Middle− → Middle → Middle+/Senior− → Senior → Senior+/Lead− → Lead → Architect. Rows sort by level, highest first. From Senior upward every level is *gated*, not just averaged: Senior requires all four dimensions above 60, Senior+/Lead− requires all four ≥ 70, Lead requires all four ≥ 75, and Architect requires all four ≥ 99 — so one weak dimension (a security HIGH, a god function, a stray O(N³)) can't be averaged away by three excellent ones. A collapsible legend explains what each underlying metric measures and its pitfalls. Below the table, a **🔎 Priority Issues** list pulls the worst signals from the Programming Methods detectors — algorithmic complexity hotspots (O(N³) first, then O(N²)) and credential/database security findings — each a clickable VS Code deep link tagged with its platform. Explicitly a conversation starter, not a verdict.
 
 3. **🧰 Tech Stack & Modules** — repo-wide tag cloud: languages present + frameworks auto-detected from imports (SwiftUI, Combine, React, Next.js, Django, FastAPI, gRPC, GORM, …) and from config files (docker-compose, go.mod, Makefile). Below it: a package grid sized by LOC with per-language badges.
@@ -31,15 +29,11 @@ go run ./cmd/archscope ~/code --open
 
 6. **🛡️ Danger Index** — weighted security score (0 = hardened → 100% = critical) across **14 categories**, each with its own weight and a saturating violation-density curve. Risk band: Hardened / Minor exposure / Elevated risk / Critical exposure. Backed by **187+ security rules** across all languages plus universal cross-language checks.
 
-![ArchScope](https://exey.github.io/ArchScopeDocs/as_danger.svg)
-
 7. **📅 Contribution Calendar** — GitHub-style 14-month heat-map of commit activity. One row per git repository (sorted most-active first), with month labels and a colour scale from no-activity to high-activity. Anomalous weeks (unusually high or low relative to the author's own baseline) are flagged with a dot overlay. Hover any cell to see the exact date, commit count and anomaly note.
 
 8. **Per-platform tabs** — one tab per language (auto-expands when only 1–2 platforms detected), each containing:
 
    **🏛️ Architecture** — *client* languages (Swift/ObjC, Kotlin, TS/JS) get **app-architecture pattern detection**: MVC, MVVM (and variants), VIPER, VIP, RIBs, Clean, Redux, TCA, MVP, MV — scored by role conventions and weighted signals. *Backend* languages (Go, Python, Java) get a **layered architecture view**: API / Models / Services / Persistence / Auth / Config / CLI / Infra / Tests bars + detected component chips.
-
-![ArchScope](https://exey.github.io/ArchScopeDocs/as_platform.svg)
 
 9. **🍱 Domain Model** *(Go · Python · Kotlin · Java)* — spectrum from **Anemic Domain Model** (DAO/DTO/Manager-heavy service layer) to **Rich Domain Model** (DDD tactical patterns). Scored across three weighted dimensions:
      - *Rich Domain Types* (40%) — Entities, Value Objects, Aggregates (×2) vs. DAO/DTO/Manager/BO/DO/PO. Detects both **Java/Kotlin-style suffixes** (`*Entity`, `*Repository`) and **Go/Python-style directory conventions** (`aggregate/`, `entity/`, `valueobject/`).
