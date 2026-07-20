@@ -47,6 +47,59 @@ func TestIgnoresNonBoundarySuffix(t *testing.T) {
 	}
 }
 
+func TestScanSwiftFileIgnoresMultilineStringProse(t *testing.T) {
+	// scanSwiftFile reads through the shared sourceCache (readSource), which
+	// tracks multi-line string state across line boundaries — a per-line
+	// stateless stripper can't know a line is still inside an unterminated
+	// triple-quoted string, and would let this prose register as evidence.
+	src := `class Docs {
+    let help = """
+    Remember to use lazy var for expensive properties.
+    """
+}
+`
+	f := writeFile(t, ".swift", src,
+		parser.Declaration{Name: "Docs", Kind: parser.DeclClass, Line: 1})
+	got := patternNames([]*parser.ParsedFile{f})
+	if _, ok := got["Lazy Initialization"]; ok {
+		t.Errorf("expected no Lazy Initialization from prose inside a multi-line string, got %v", got)
+	}
+}
+
+func TestHandlerRequiresSuccessorLink(t *testing.T) {
+	// A *Handler type only counts as Chain of Responsibility when its body
+	// proves it holds a reference to the next link in the chain — otherwise
+	// ordinary HTTP/completion/event handlers would all falsely report it.
+	src := `class ErrorHandler {
+    var next: ErrorHandler?
+    func handle(_ e: Error) {
+        next?.handle(e)
+    }
+}
+`
+	f := writeFile(t, ".swift", src,
+		parser.Declaration{Name: "ErrorHandler", Kind: parser.DeclClass, Line: 1})
+	got := patternNames([]*parser.ParsedFile{f})
+	if got["Chain of Responsibility"] != 1 {
+		t.Errorf("expected Chain of Responsibility from the next-field link, got %v", got)
+	}
+}
+
+func TestHandlerWithoutSuccessorLinkNotCoR(t *testing.T) {
+	src := `class URLRequestHandler {
+    func handle(_ request: URLRequest) {
+        print(request)
+    }
+}
+`
+	f := writeFile(t, ".swift", src,
+		parser.Declaration{Name: "URLRequestHandler", Kind: parser.DeclClass, Line: 1})
+	got := patternNames([]*parser.ParsedFile{f})
+	if _, ok := got["Chain of Responsibility"]; ok {
+		t.Errorf("expected no Chain of Responsibility without a successor link, got %v", got)
+	}
+}
+
 func TestFactoryLabelSplitsMethodVsAbstract(t *testing.T) {
 	// No protocol among the Factory-suffixed decls → Factory Method.
 	got := patternNames([]*parser.ParsedFile{file("a.go", ty("WidgetFactory"))})

@@ -44,6 +44,33 @@ func TestLanguageRichnessIgnoresKeywordInsideIdentifier(t *testing.T) {
 	}
 }
 
+func TestLanguageRichnessKotlinOperatorTokensNoFalsePositive(t *testing.T) {
+	// "as?"/"!in"/"!is" are not valid identifiers, so they bypass the
+	// \b-anchored regex and are matched via containsBounded instead — this
+	// must still reject them when they're just a substring of an unrelated
+	// identifier ("alias?.foo", "!interfaceEnabled", "!isValid").
+	src := "val x = alias?.foo()\nval y = !interfaceEnabled\nval z = !isValid\n"
+	f := writeFile(t, ".kt", src)
+	f.LanguageID = "kotlin"
+	r := lrAnalyze([]*parser.ParsedFile{f})
+	e := r.Entries[0]
+	if e.Found != 1 {
+		t.Errorf("expected only 'val' to match (no false positives from as?/!in/!is), got %d found", e.Found)
+	}
+}
+
+func TestLanguageRichnessKotlinOperatorTokensDetectedInContext(t *testing.T) {
+	src := "val a = x as? String\n"
+	f := writeFile(t, ".kt", src)
+	f.LanguageID = "kotlin"
+	r := lrAnalyze([]*parser.ParsedFile{f})
+	e := r.Entries[0]
+	// val, and as? (with a real boundary-satisfied usage), at minimum.
+	if e.Found < 2 {
+		t.Errorf("expected 'val' and 'as?' to be detected with proper spacing, got %d found", e.Found)
+	}
+}
+
 func TestLanguageRichnessIgnoresKeywordInComment(t *testing.T) {
 	src := "// switch case for while\npackage p\nfunc Foo() {}\n"
 	f := writeFile(t, ".go", src)

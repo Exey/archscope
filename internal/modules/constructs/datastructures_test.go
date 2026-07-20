@@ -175,6 +175,31 @@ func TestGenericSuffixNeedsBodyEvidence(t *testing.T) {
 	}
 }
 
+// TestGenericSuffixRejectsAWSCDKStacks stress-tests the evidence gate against
+// the real-world false-positive class it exists to catch: AWS CDK apps
+// routinely declare dozens of "class FooStack extends Stack" constructs
+// (cdk.Stack, not a data-structure stack) whose bodies wire up cloud
+// resources — construct calls, not push/pop vocabulary — and must all be
+// rejected the same way TelemetryStack is above.
+func TestGenericSuffixRejectsAWSCDKStacks(t *testing.T) {
+	cdkStacks := []string{"NetworkStack", "DatabaseStack", "ComputeStack", "PipelineStack"}
+	var files []*parser.ParsedFile
+	for _, name := range cdkStacks {
+		src := "export class " + name + " extends Stack {\n" +
+			"  constructor(scope: Construct, id: string, props?: StackProps) {\n" +
+			"    super(scope, id, props);\n" +
+			"    const vpc = new ec2.Vpc(this, 'Vpc', { maxAzs: 2 });\n" +
+			"    new rds.DatabaseInstance(this, 'DB', { vpc });\n" +
+			"  }\n" +
+			"}\n"
+		files = append(files, writeFile(t, ".ts", src,
+			parser.Declaration{Name: name, Kind: parser.DeclClass, Line: 1}))
+	}
+	if got := detectedNames(files); got["Stack"] != 0 {
+		t.Errorf("AWS CDK *Stack constructs (no push/pop vocabulary) should all be rejected, got %v", got)
+	}
+}
+
 func TestGraphEvidenceRecognizesCamelCaseCompounds(t *testing.T) {
 	// "adjacencyList"/"adjacencyMatrix" lowercase to one token each
 	// ("adjacencylist"/"adjacencymatrix"), not "adjacency" as its own word —

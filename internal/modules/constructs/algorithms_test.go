@@ -98,6 +98,38 @@ func TestAvoidsProperNounFalsePositives(t *testing.T) {
 	}
 }
 
+func TestSingleTokenRulesSkipJoinedFallback(t *testing.T) {
+	// The joined-substring fallback exists only for genuinely multi-token
+	// signatures (aStarSearch → {astar, search}). A single-token rule must
+	// get recall solely from the exact-token check — falling back to a bare
+	// substring search on the joined identifier would let unrelated names
+	// resolve by pure boundary coincidence: "WebSearchController" joins to
+	// "websearchcontroller", which contains "bsearch"; "loadFSCache" joins to
+	// "loadfscache", which contains "dfs".
+	files := []*parser.ParsedFile{file("a.go",
+		fn("WebSearchController"), fn("loadFSCache"),
+	)}
+	if (Algorithms{}).Analyze(files).(AlgorithmsResult).HasDetection() {
+		t.Errorf("expected no detections, got %+v", (Algorithms{}).Analyze(files).(AlgorithmsResult).Matches)
+	}
+}
+
+func TestGCDExcludedForSwift(t *testing.T) {
+	// Bare "gcd" means Grand Central Dispatch in Swift, not the numeric
+	// algorithm — excluded there; still detected for every other language.
+	swiftFile := &parser.ParsedFile{FilePath: "a.swift", LanguageID: "swift",
+		Declarations: []parser.Declaration{fn("gcdQueue")}}
+	if got := detected([]*parser.ParsedFile{swiftFile}); len(got) != 0 {
+		t.Errorf("expected no detection for bare gcd in Swift, got %v", got)
+	}
+
+	goFile := &parser.ParsedFile{FilePath: "a.go", LanguageID: "go",
+		Declarations: []parser.Declaration{fn("gcd")}}
+	if got := detected([]*parser.ParsedFile{goFile}); got["Euclidean GCD"] == 0 {
+		t.Errorf("expected Euclidean GCD for bare gcd in Go, got %v", got)
+	}
+}
+
 func TestDetectsAbbreviatedNames(t *testing.T) {
 	files := []*parser.ParsedFile{
 		file("a.go", fn("qsort")),

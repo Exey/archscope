@@ -207,6 +207,146 @@ func TestMemoryLeaks_AppliesTo(t *testing.T) {
 	}
 }
 
+// ── Regression fixes from the second review round ───────────────────────────
+
+func TestMemoryLeaks_PythonAttributeOpenDoesNotFire(t *testing.T) {
+	// \b sits happily between "." and "o" — a bare \bopen\( also fired on
+	// Image.open()/gzip.open()/codecs.open(), which have nothing to do with
+	// Python's builtin open().
+	src := "def f():\n    img = Image.open('x.png')\n    return img\n"
+	r := mlAnalyze([]*parser.ParsedFile{mlFile(t, "python", ".py", src)})
+	if r.HasData() {
+		t.Errorf("Image.open()-style attribute access should not fire the bare open() rule, got %+v", r.Findings)
+	}
+}
+
+func TestMemoryLeaks_PythonStartsWithDoesNotSuppressUnrelatedOpen(t *testing.T) {
+	// "with" as a skipContext needle must match at word boundaries — it must
+	// not match inside "startswith(" and silently exempt an unrelated open()
+	// a couple of lines below.
+	src := "def f():\n" +
+		"    if s.startswith('x'):\n" +
+		"        pass\n" +
+		"    fh = open('y')\n" +
+		"    return fh.read()\n"
+	r := mlAnalyze([]*parser.ParsedFile{mlFile(t, "python", ".py", src)})
+	if !r.HasData() {
+		t.Error("want a finding for open() without close(); 'startswith' must not exempt it")
+	}
+}
+
+func TestMemoryLeaks_GoHTTPBody_RetryDoDoesNotFire(t *testing.T) {
+	src := "package p\nfunc f() {\n\tresp, _ := retry.Do(operation)\n\t_ = resp\n}\n"
+	r := mlAnalyze([]*parser.ParsedFile{mlFile(t, "go", ".go", src)})
+	for _, f := range r.Findings {
+		if f.RuleID == "go.http_body" {
+			t.Errorf("retry.Do() is not an HTTP client call and must not fire go.http_body, got %+v", f)
+		}
+	}
+}
+
+func TestMemoryLeaks_GoHTTPBody_ClientDoFires(t *testing.T) {
+	src := "package p\nfunc f() {\n\tresp, _ := client.Do(req)\n\t_ = resp\n}\n"
+	r := mlAnalyze([]*parser.ParsedFile{mlFile(t, "go", ".go", src)})
+	found := false
+	for _, f := range r.Findings {
+		if f.RuleID == "go.http_body" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("want a go.http_body finding for client.Do(req) without resp.Body.Close(), got %+v", r.Findings)
+	}
+}
+
+func TestMemoryLeaks_RustTokioSpawnNoLongerChecked(t *testing.T) {
+	// rust.tokio_task_leak was removed — its release regex counted any
+	// .await in the file, so it almost never fired and gave false confidence.
+	src := "async fn f() {\n    tokio::spawn(async { do_work().await; });\n}\n"
+	r := mlAnalyze([]*parser.ParsedFile{mlFile(t, "rust", ".rs", src)})
+	for _, f := range r.Findings {
+		if f.RuleID == "rust.tokio_task_leak" {
+			t.Errorf("rust.tokio_task_leak should no longer exist as a rule, got %+v", f)
+		}
+	}
+}
+
+func TestMemoryLeaks_CppThreadJoin_AutoConstructFires(t *testing.T) {
+	src := "void f() {\n    auto t = std::thread(worker);\n}\n"
+	r := mlAnalyze([]*parser.ParsedFile{mlFile(t, "cpp", ".cpp", src)})
+	found := false
+	for _, f := range r.Findings {
+		if f.RuleID == "cpp.thread_join" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("want a cpp.thread_join finding for 'auto t = std::thread(...)' without join/detach, got %+v", r.Findings)
+	}
+}
+
+func TestMemoryLeaks_SwiftRetainCycle_SelfieViewDoesNotFalselyMatch(t *testing.T) {
+	src := "class C {\n" +
+		"  func f() {\n" +
+		"    URLSession.shared.dataTask(with: url) { data, resp, err in\n" +
+		"      selfieView.update(data)\n" +
+		"    }\n" +
+		"  }\n" +
+		"}\n"
+	r := mlAnalyze([]*parser.ParsedFile{mlFile(t, "swift", ".swift", src)})
+	if r.HasData() {
+		t.Errorf("want 0 findings — 'selfieView' is not a self capture, got %+v", r.Findings)
+	}
+}
+
+func TestMemoryLeaks_SwiftRetainCycle_StructSelfCaptureSafe(t *testing.T) {
+	// self inside a struct's closure is a value-type capture (a copy) — it
+	// cannot form a retain cycle, unlike a class/actor's reference capture.
+	// This is the common SwiftUI shape (a View's .onReceive from its own
+	// body). Uses .onReceive rather than Timer.scheduledTimer as the trigger
+	// so this exercises only the retain-cycle check, not the separate
+	// swift.timer_invalidate pairing rule.
+	src := "struct MyView {\n" +
+		"  var body: some View {\n" +
+		"    Text(\"hi\").onReceive(publisher) { value in\n" +
+		"      self.update(value)\n" +
+		"    }\n" +
+		"  }\n" +
+		"}\n"
+	p := filepath.Join(t.TempDir(), "f.swift")
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := &parser.ParsedFile{FilePath: p, LanguageID: "swift",
+		Declarations: []parser.Declaration{{Name: "MyView", Kind: parser.DeclStruct, Line: 1}}}
+	r := mlAnalyze([]*parser.ParsedFile{f})
+	if r.HasData() {
+		t.Errorf("want 0 findings for self capture inside a struct (value type, cannot cycle), got %+v", r.Findings)
+	}
+}
+
+func TestMemoryLeaks_SwiftRetainCycle_ClassSelfCaptureStillFires(t *testing.T) {
+	// Same shape as the struct test above, but a class — self capture here
+	// IS a reference, and the retain-cycle check must still fire.
+	src := "class MyController {\n" +
+		"  func f() {\n" +
+		"    view.onReceive(publisher) { value in\n" +
+		"      self.update(value)\n" +
+		"    }\n" +
+		"  }\n" +
+		"}\n"
+	p := filepath.Join(t.TempDir(), "f.swift")
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := &parser.ParsedFile{FilePath: p, LanguageID: "swift",
+		Declarations: []parser.Declaration{{Name: "MyController", Kind: parser.DeclClass, Line: 1}}}
+	r := mlAnalyze([]*parser.ParsedFile{f})
+	if !r.HasData() {
+		t.Error("want a retain-cycle finding for self captured strongly inside a class's closure")
+	}
+}
+
 // ── Comment/string stripping (review point 1) ───────────────────────────────
 
 func TestMemoryLeaks_CommentedAcquireDoesNotFire(t *testing.T) {

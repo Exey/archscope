@@ -32,13 +32,11 @@ package constructs
 import (
 	"fmt"
 	"html"
-	"os"
 	"sort"
 	"strings"
 
 	"github.com/exey/archscope/internal/modules"
 	"github.com/exey/archscope/internal/parser"
-	"github.com/exey/archscope/internal/security"
 )
 
 func init() { modules.Default.Register(DesignPatterns{}) }
@@ -166,7 +164,11 @@ var suffixRules = []suffixRule{
 		kinds: []parser.DeclKind{parser.DeclClass, parser.DeclStruct}},
 	{suffix: "Iterator", pattern: "Iterator", category: behavioral},
 	{suffix: "Interpreter", pattern: "Interpreter", category: behavioral},
-	{suffix: "Handler", pattern: "Chain of Responsibility", category: behavioral},
+	// Handler → Chain of Responsibility is deliberately NOT a plain suffix
+	// rule here: it needs the successor-link body gate below (see
+	// hasSuccessorLink), since the overwhelming majority of real "*Handler"
+	// types (HTTP handlers, completion handlers, DOM event handlers) aren't
+	// chain-of-responsibility links at all.
 	// Feature Flag / Toggle — a runtime behavior switch, closely related to
 	// Strategy's "select behavior at runtime" intent. Not in the GoF catalog,
 	// but a real, widespread practice worth surfacing the same way.
@@ -244,10 +246,6 @@ func isPatternTypeKind(k parser.DeclKind) bool {
 // contents stripped so a doc comment mentioning "lazy var" in prose can't
 // read as evidence.
 
-// maxContentScanBytes bounds a single source read; a stray huge/minified file
-// is skipped (treated as having none of these signals) rather than read.
-const maxContentScanBytes = 2 << 20 // 2 MiB
-
 // swiftFileScan holds the per-file content signals.
 type swiftFileScan struct {
 	lazyVar           bool // `lazy var ` — Lazy Initialization
@@ -270,24 +268,18 @@ var multitonNeedles = []string{
 	"static var instances=[", "static let instances=[",
 }
 
-// scanSwiftFile reads and comment/string-strips path once and returns its
-// language-feature content signals. ok is false when the file is unreadable
-// or too large to scan.
-func scanSwiftFile(path string) (s swiftFileScan, ok bool) {
-	fi, err := os.Stat(path)
-	if err != nil || fi.Size() > maxContentScanBytes {
-		return s, false
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return s, false
-	}
+// scanSwiftFile scans lines — a file's already comment/string-stripped lines
+// from the shared sourceCache, never read here directly — and returns its
+// language-feature content signals. Sharing the cache (rather than each
+// detector reading+stripping the file itself) means every Swift file is read
+// exactly once per analysis pass, and reuses readSource's stateful, multi-
+// line-aware stripping — a per-line stateless stripper would let a `"""`
+// block containing prose like "use lazy var for this" or a sample
+// `os_unfair_lock` snippet register as real evidence, since it has no way to
+// know those lines are still inside an unterminated multi-line string.
+func scanSwiftFile(lines []string) (s swiftFileScan) {
 	var whole strings.Builder
-	for _, raw := range strings.Split(string(data), "\n") {
-		if security.IsComment(raw) {
-			continue
-		}
-		line := security.StripStringsAndComments(raw)
+	for _, line := range lines {
 		whole.WriteString(line)
 		whole.WriteByte('\n')
 		if strings.Contains(line, "lazy var ") {
@@ -329,7 +321,7 @@ func scanSwiftFile(path string) (s swiftFileScan, ok bool) {
 	if strings.Contains(content, "import Swinject") {
 		s.swinjectImport = true
 	}
-	return s, true
+	return s
 }
 
 // ── Marker interface detection ────────────────────────────────────────────
@@ -528,6 +520,20 @@ func (DesignPatterns) Analyze(files []*parser.ParsedFile) any {
 				continue
 			}
 
+			// Chain of Responsibility: a *Handler type only counts when its
+			// body proves it holds a reference to the next link in the chain
+			// (a next/successor-named field) — otherwise every HTTP handler,
+			// completion handler, or DOM event handler would falsely report
+			// the pattern just for being named "*Handler".
+			if hasRoleSuffix(d.Name, "Handler") {
+				if lines := cache.lines(f.FilePath); lines != nil {
+					if body := typeBody(lines, d.Name); body != "" && hasSuccessorLink(body) {
+						add("Chain of Responsibility", behavioral, exemplar(d.Name, fname), false)
+					}
+				}
+				continue
+			}
+
 			for _, rule := range suffixRules {
 				if !kindAllowed(rule.kinds, d.Kind) {
 					continue
@@ -546,7 +552,8 @@ func (DesignPatterns) Analyze(files []*parser.ParsedFile) any {
 		// DesignPatternDetector applies to its own content scan (test dirs).
 		if isSwift && strings.HasSuffix(f.FilePath, ".swift") &&
 			!strings.Contains(f.FilePath, "/Tests/") && !strings.Contains(f.FilePath, "/Test/") {
-			if s, ok := scanSwiftFile(f.FilePath); ok {
+			if swiftLines := cache.lines(f.FilePath); swiftLines != nil {
+				s := scanSwiftFile(swiftLines)
 				if s.lazyVar {
 					add("Lazy Initialization", creational, exemplar("", fname), true)
 				}
@@ -699,6 +706,21 @@ func hasRoleSuffix(name, suffix string) bool {
 	// Char immediately before the suffix must be a boundary (lower→Upper).
 	prev := name[len(name)-len(suffix)-1]
 	return prev >= 'a' && prev <= 'z'
+}
+
+// hasSuccessorLink reports whether a *Handler type's (lowercased) body holds
+// a next/successor-named field — the structural signal that actually
+// distinguishes a real Chain-of-Responsibility link from the vast majority
+// of unrelated "*Handler" types (HTTP handlers, completion handlers, DOM
+// event handlers, …), which have no notion of a "next handler" at all.
+func hasSuccessorLink(body string) bool {
+	for tok := range bodyTokens(body) {
+		switch tok {
+		case "next", "successor", "nexthandler", "successorhandler":
+			return true
+		}
+	}
+	return false
 }
 
 func exemplar(typeName, file string) string {

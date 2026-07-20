@@ -99,6 +99,17 @@ type mlRule struct {
 
 var mlRules = []mlRule{
 	// ── Go ──
+	//
+	// go.file_handle, go.sql_handle, and go.sql_rows all release on a bare
+	// `.Close(` — deliberately, since Go doesn't name the receiver in the
+	// regex (an *os.File, *sql.DB, and *sql.Rows Close() all look the same at
+	// this file-level, receiver-blind granularity). That means a single
+	// `defer f.Close()` bumps the release count for all three rules at once:
+	// a file with one closed *os.File and one unclosed *sql.Rows reads as
+	// clean for sql_rows too, since the file's Close() alone satisfies its
+	// allowed-count math. This is a false-negative bias inherent to file-wide
+	// acquire/release counting rather than per-variable tracking, and it's
+	// worst in exactly the multi-resource files most likely to have the bug.
 	{id: "go.context_cancel", label: "context.With* cancel func never called",
 		severity: security.SevHigh, langs: []string{"go"},
 		acquire: regexp.MustCompile(`\bcontext\.With(?:Cancel|Timeout|Deadline)\s*\(`),
@@ -132,7 +143,11 @@ var mlRules = []mlRule{
 			"defer) once the DB handle is no longer needed."},
 	{id: "go.http_body", label: "HTTP response body never closed",
 		severity: security.SevMedium, langs: []string{"go"},
-		acquire: regexp.MustCompile(`\.Do\s*\(\s*\w+\s*\)|\bhttp\.(?:Get|Post|Head)\s*\(`),
+		// Restricted to a *client-named* receiver's .Do( — a bare `\.Do\(\w+\)`
+		// also matches retry.Do(operation)/backoff.Do(fn)-style libraries that
+		// have nothing to do with net/http.Client, and were the dominant false
+		// positive here.
+		acquire: regexp.MustCompile(`\b\w*[Cc]lient\.Do\s*\(\s*\w+\s*\)|\bhttp\.(?:Get|Post|Head)\s*\(`),
 		release: regexp.MustCompile(`\.Body\.Close\s*\(`),
 		advice: "An HTTP response whose Body is never closed leaks the underlying connection, eventually " +
 			"exhausting the client's connection pool. Add `defer resp.Body.Close()` right after the error check."},
@@ -148,11 +163,20 @@ var mlRules = []mlRule{
 	// ── Python ──
 	{id: "py.file_handle", label: "file handle never closed",
 		severity: security.SevMedium, langs: []string{"python"},
-		acquire: regexp.MustCompile(`\bopen\s*\(`),
+		// \b sits happily between "." and "o", so a bare \bopen\( also fires
+		// on Image.open(/gzip.open(/codecs.open( — PIL-heavy code lit this up
+		// constantly. Requiring the char before "open" to be neither a word
+		// char nor "." (or start-of-line) excludes the attribute-access form
+		// while still matching every free-function/assignment call shape
+		// (`open(`, `= open(`, `return open(`, …).
+		acquire: regexp.MustCompile(`(?:^|[^.\w])open\s*\(`),
 		release: regexp.MustCompile(`\.close\s*\(|\bwith\s+[\w.]*open\s*\(`),
 		// Covers `with (\n    open(...) as f,\n):` / `with \\\n    open(...) as f:`
 		// where "with" and "open(" land on different lines, so the release
-		// regex above (same-line only) can't see them together.
+		// regex above (same-line only) can't see them together. "with" is a
+		// bare identifier-word needle, so containsAny matches it at word
+		// boundaries — it does not fire on "s.startswith(" three lines above
+		// an unrelated open() call.
 		skipContext: []string{"with"}, skipWindow: 3,
 		advice: "A file opened without a `with` block or a matching .close() leaks a file descriptor. " +
 			"Prefer `with open(...) as f:` so it's always released."},
@@ -275,12 +299,14 @@ var mlRules = []mlRule{
 		advice: "A spawned thread whose JoinHandle is dropped without .join() detaches it silently — any " +
 			"panic or resource it holds is never observed or reclaimed at a known point. Join it, or " +
 			"document the detach as deliberate."},
-	{id: "rust.tokio_task_leak", label: "tokio::spawn task never awaited/aborted",
-		severity: security.SevMedium, langs: []string{"rust"},
-		acquire: regexp.MustCompile(`tokio::spawn\s*\(`),
-		release: regexp.MustCompile(`\.await\b|\.abort\s*\(`),
-		advice: "A tokio task whose JoinHandle is dropped keeps running detached — if it never completes " +
-			"it leaks for the life of the runtime. Await or abort the handle."},
+	// rust.tokio_task_leak was dropped: its release regex (`.await\b|.abort(`)
+	// counted *any* .await in the file, and in async Rust .await appears on
+	// nearly every other line — releaseCount dwarfs acquireCount in virtually
+	// every file, so the rule almost never fired. Fixing it properly needs a
+	// handle-shaped release (`handle.await`, tied back to the specific
+	// spawn's binding) that this file-level acquire/release counter has no
+	// way to express — unenforceable at this granularity, so it's removed
+	// rather than kept as a rule that quietly never does anything.
 	{id: "rust.mem_forget", label: "std::mem::forget leaks its argument by design",
 		severity: security.SevMedium, langs: []string{"rust"},
 		acquire: regexp.MustCompile(`std::mem::forget\s*\(|mem::forget\s*\(`),
@@ -325,7 +351,12 @@ var mlRules = []mlRule{
 			"code path, including early returns on error."},
 	{id: "cpp.thread_join", label: "std::thread never joined or detached",
 		severity: security.SevHigh, langs: []string{"cpp"},
-		acquire: regexp.MustCompile(`std::thread\s+\w+\s*[({=]`),
+		// Two declaration shapes: `std::thread t(...)`/`std::thread t = ...`
+		// (name follows the type) and `auto t = std::thread(...)` (the type
+		// appears only on the constructor-call side). std::jthread
+		// (C++20) is deliberately not matched here — it joins automatically
+		// in its destructor, so an unjoined jthread is not a leak.
+		acquire: regexp.MustCompile(`std::thread\s+\w+\s*[({=]|=\s*std::thread\s*\(`),
 		release: regexp.MustCompile(`\.join\s*\(|\.detach\s*\(`),
 		advice: "A std::thread that's never joined or detached calls std::terminate() when it's " +
 			"destroyed. Always join() or explicitly detach() it before it goes out of scope."},
@@ -350,6 +381,11 @@ var reSwiftClosureDangerSite = regexp.MustCompile(
 	`URLSession\.|DispatchQueue\.(?:global|main)|Timer\.scheduledTimer|` +
 		`NotificationCenter\.default\.addObserver|UIView\.animate|\.sink\s*\(|\.onReceive\s*\(`)
 var reSwiftWeakSelf = regexp.MustCompile(`\[\s*weak\s+self\s*\]|\[\s*unowned\s+self\s*\]`)
+
+// reSelfWord matches "self" as a whole identifier token — a plain
+// strings.Contains(window, "self") also matches "selfieView"/"selfService",
+// neither of which has anything to do with the closure capturing self.
+var reSelfWord = regexp.MustCompile(`\bself\b`)
 
 // maxSwiftClosureScanLines bounds how far swiftClosureBody scans looking for
 // the matching close-brace, so a closure that (due to a parse quirk, or a
@@ -392,16 +428,91 @@ func swiftClosureBody(lines []string, start int) []string {
 	return lines[start : end+1]
 }
 
+// swiftTypeRange is one class/struct/enum/actor declaration's brace-matched
+// body extent — used to tell whether a retain-cycle candidate line sits
+// inside a reference type (class/actor: self capture is a strong reference,
+// a real cycle risk) or a value type (struct/enum: self capture copies the
+// value, so it cannot cycle — SwiftUI views calling Timer.scheduledTimer or
+// .onReceive from a struct's body are the single biggest source of this).
+type swiftTypeRange struct {
+	kind       parser.DeclKind
+	start, end int // 1-indexed, inclusive
+}
+
+// swiftTypeRanges brace-matches every class/struct/enum/actor declaration in
+// decls against lines (already comment/string-stripped) to find its body's
+// line extent.
+func swiftTypeRanges(lines []string, decls []parser.Declaration) []swiftTypeRange {
+	var out []swiftTypeRange
+	for _, d := range decls {
+		switch d.Kind {
+		case parser.DeclClass, parser.DeclStruct, parser.DeclEnum, parser.DeclActor:
+		default:
+			continue
+		}
+		start := d.Line - 1
+		if start < 0 || start >= len(lines) {
+			continue
+		}
+		depth, started := 0, false
+		end := start
+		for j := start; j < len(lines); j++ {
+			for k := 0; k < len(lines[j]); k++ {
+				switch lines[j][k] {
+				case '{':
+					depth++
+					started = true
+				case '}':
+					depth--
+				}
+			}
+			end = j
+			if started && depth <= 0 {
+				break
+			}
+		}
+		if started {
+			out = append(out, swiftTypeRange{kind: d.Kind, start: start + 1, end: end + 1})
+		}
+	}
+	return out
+}
+
+// isInsideValueType reports whether line (1-indexed) falls within the
+// innermost (smallest-range) struct/enum declaration in ranges — i.e. self
+// at this line is a value-type capture (a copy) rather than a reference, so
+// it structurally cannot form a retain cycle.
+func isInsideValueType(ranges []swiftTypeRange, line int) bool {
+	found := false
+	var innermostKind parser.DeclKind
+	bestSize := 1 << 30
+	for _, r := range ranges {
+		if line < r.start || line > r.end {
+			continue
+		}
+		if size := r.end - r.start; size < bestSize {
+			bestSize = size
+			innermostKind = r.kind
+			found = true
+		}
+	}
+	return found && (innermostKind == parser.DeclStruct || innermostKind == parser.DeclEnum)
+}
+
 // detectSwiftRetainCycles flags a closure-danger call site (see above) that
 // references self within the closure body without a [weak self]/[unowned
 // self] capture list. The body is found via brace-matching (swiftClosureBody)
 // rather than a fixed line window, so a long closure doesn't escape detection
 // just because its capture list — or its first "self" reference — falls
 // beyond a few lines.
-func detectSwiftRetainCycles(filePath string, lines []string) []MLFinding {
+func detectSwiftRetainCycles(filePath string, lines []string, decls []parser.Declaration) []MLFinding {
+	ranges := swiftTypeRanges(lines, decls)
 	var out []MLFinding
 	for i, l := range lines {
 		if !reSwiftClosureDangerSite.MatchString(l) {
+			continue
+		}
+		if isInsideValueType(ranges, i+1) {
 			continue
 		}
 		body := swiftClosureBody(lines, i)
@@ -413,7 +524,7 @@ func detectSwiftRetainCycles(filePath string, lines []string) []MLFinding {
 			body = lines[i:min(i+4, len(lines))]
 		}
 		window := strings.Join(body, "\n")
-		if reSwiftWeakSelf.MatchString(window) || !strings.Contains(window, "self") {
+		if reSwiftWeakSelf.MatchString(window) || !reSelfWord.MatchString(window) {
 			continue
 		}
 		out = append(out, MLFinding{
@@ -473,17 +584,43 @@ func (r mlRule) detect(filePath string, lines []string) []MLFinding {
 	return out
 }
 
+// containsAny reports whether any needle appears in line (case-insensitive).
+// A needle that is a bare identifier word (letters only, e.g. "with") is
+// matched at word boundaries via containsBounded — otherwise "with" would
+// silently match inside "startswith(", exempting an unrelated acquire call
+// three lines below a completely unrelated .startsWith() check. A needle
+// containing punctuation (e.g. "try (") already carries its own boundary
+// from that punctuation and is matched as a plain substring.
 func containsAny(line string, needles []string) bool {
 	if len(needles) == 0 {
 		return false
 	}
 	low := strings.ToLower(line)
 	for _, n := range needles {
+		if isBareWord(n) {
+			if containsBounded(low, n) {
+				return true
+			}
+			continue
+		}
 		if strings.Contains(low, n) {
 			return true
 		}
 	}
 	return false
+}
+
+// isBareWord reports whether s consists entirely of ASCII letters.
+func isBareWord(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')) {
+			return false
+		}
+	}
+	return true
 }
 
 // containsAnyInRange reports whether any needle appears on lines[start:end+1]
@@ -523,7 +660,7 @@ func (MemoryLeaks) Analyze(files []*parser.ParsedFile) any {
 			findings = append(findings, r.detect(f.FilePath, lines)...)
 		}
 		if f.LanguageID == "swift" {
-			findings = append(findings, detectSwiftRetainCycles(f.FilePath, lines)...)
+			findings = append(findings, detectSwiftRetainCycles(f.FilePath, lines, f.Declarations)...)
 		}
 	}
 

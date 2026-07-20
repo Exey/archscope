@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"html"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -80,6 +81,11 @@ type algoRule struct {
 	joined   string // precomputed strings.Join(tokens, "")
 	name     string
 	category algoCategory
+	// excludeLangs skips this rule entirely for the listed language IDs — for
+	// a rule whose token(s) collide with a common framework/API vocabulary in
+	// one specific language (Swift's GCD — Grand Central Dispatch — vs. the
+	// numeric Euclidean GCD algorithm).
+	excludeLangs []string
 }
 
 var algoRules = []algoRule{
@@ -548,7 +554,7 @@ func (Algorithms) Analyze(files []*parser.ParsedFile) any {
 			if !isCandidateKind(d.Kind) {
 				continue
 			}
-			if r, ok := matchAlgoRule(d.Name); ok {
+			if r, ok := matchAlgoRule(d.Name, f.LanguageID); ok {
 				record(r.name, r.category, d.Name, f.FilePath, d.Line)
 				continue
 			}
@@ -669,16 +675,19 @@ func (Algorithms) RenderHTML(res any) string {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// matchAlgoRule returns the most-specific rule matching name. Because
-// algoRules is sorted by token count descending, the first hit is the most
-// specific.
-func matchAlgoRule(name string) (algoRule, bool) {
+// matchAlgoRule returns the most-specific rule matching name for a file in
+// language langID. Because algoRules is sorted by token count descending,
+// the first hit is the most specific.
+func matchAlgoRule(name, langID string) (algoRule, bool) {
 	tokens, joined := tokenize(name)
 	set := make(map[string]bool, len(tokens))
 	for _, t := range tokens {
 		set[t] = true
 	}
 	for _, r := range algoRules {
+		if r.excludesLang(langID) {
+			continue
+		}
 		if r.matches(set, joined) {
 			return r, true
 		}
@@ -686,9 +695,15 @@ func matchAlgoRule(name string) (algoRule, bool) {
 	return algoRule{}, false
 }
 
+// excludesLang reports whether this rule is switched off for langID.
+func (r algoRule) excludesLang(langID string) bool {
+	return slices.Contains(r.excludeLangs, langID)
+}
+
 // matches reports whether the signature is satisfied: every token present as a
-// word token, or the concatenated tokens present as a substring of the joined
-// identifier (handling run-together spellings like "aStarSearch").
+// word token, or — for a genuinely multi-token signature only — the
+// concatenated tokens present as a substring of the joined identifier
+// (handling run-together spellings like "aStarSearch").
 func (r algoRule) matches(set map[string]bool, joined string) bool {
 	all := true
 	for _, t := range r.tokens {
@@ -699,6 +714,17 @@ func (r algoRule) matches(set map[string]bool, joined string) bool {
 	}
 	if all {
 		return true
+	}
+	// The joined-substring fallback exists only to catch run-together
+	// multi-word spellings ("aStarSearch" → tokens {astar, search}, joined
+	// "astarsearch"). A single-token rule already gets full recall from the
+	// exact-token check above — falling back to a bare substring search for
+	// it re-admits the false positive this guard exists to block:
+	// "loadFSCache" tokenizes to [load, fs, cache], and its *joined* form
+	// "loadfscache" contains "dfs" purely by boundary coincidence, which
+	// would otherwise wrongly resolve to Depth-First Search.
+	if len(r.tokens) <= 1 {
+		return false
 	}
 	return strings.Contains(joined, r.joined)
 }

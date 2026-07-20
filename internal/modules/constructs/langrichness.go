@@ -40,6 +40,12 @@ var languageKeywords = map[string][]string{
 		"lambda", "match", "case", "nonlocal", "not", "or", "pass", "raise",
 		"return", "try", "while", "with", "yield",
 	},
+	// "goto" and "const" are reserved by the JLS but unusable in any real
+	// Java program (both are compile errors wherever written) — no Java
+	// codebase can ever reach 100% here, only ~96%. Left in deliberately: a
+	// list of Java's reserved words that quietly omitted its two reserved-
+	// but-unusable ones would be a stranger, less honest artifact than a
+	// list whose ceiling is just short of 100.
 	"java": {
 		"abstract", "assert", "boolean", "break", "byte", "case", "catch",
 		"char", "class", "const", "continue", "default", "do", "double",
@@ -58,16 +64,22 @@ var languageKeywords = map[string][]string{
 		"self", "Self", "static", "struct", "super", "trait", "true", "type",
 		"union", "unsafe", "use", "where", "while",
 	},
+	// "get"/"set"/"require"/"string"/"number" are deliberately absent: they're
+	// ordinary identifier names at least as often as they're TS's contextual
+	// keywords (a function named get()/set(), a variable named string/number),
+	// so a purely lexical word-boundary check can't tell the two apart — they
+	// would be "found" in virtually every codebase regardless of whether it
+	// ever used the actual language feature, quietly inflating every score.
 	"ts": {
 		"any", "as", "asserts", "await", "bigint", "boolean", "break",
 		"case", "catch", "class", "const", "constructor", "continue",
 		"debugger", "declare", "default", "delete", "do", "else", "enum",
 		"export", "extends", "false", "finally", "for", "from", "function",
-		"get", "if", "implements", "import", "in", "infer", "instanceof",
+		"if", "implements", "import", "in", "infer", "instanceof",
 		"interface", "is", "keyof", "let", "module", "namespace", "never",
-		"new", "null", "number", "object", "of", "package", "private",
-		"protected", "public", "readonly", "require", "return", "set",
-		"static", "string", "super", "switch", "symbol", "this", "throw",
+		"new", "null", "object", "of", "package", "private",
+		"protected", "public", "readonly", "return",
+		"static", "super", "switch", "symbol", "this", "throw",
 		"true", "try", "type", "typeof", "undefined", "unknown", "var",
 		"void", "while", "with", "yield",
 	},
@@ -85,6 +97,13 @@ var languageKeywords = map[string][]string{
 		"protected", "public", "reified", "sealed", "suspend", "tailrec",
 		"vararg",
 	},
+	// "get"/"set"/"none"/"left"/"right"/"Type"/"dynamic" are deliberately
+	// absent for the same reason as TS's above: they're ordinary Swift
+	// identifiers (a `var left = 0`, an enum case `.none`, a type parameter
+	// named `Type`) at least as often as they're the contextual keyword
+	// (custom-accessor get/set, operator declaration associativity .left/
+	// .right, @dynamicMemberLookup's `dynamic`), so they auto-inflate every
+	// codebase's score regardless of real usage.
 	"swift": {
 		"associatedtype", "class", "deinit", "enum", "extension",
 		"fileprivate", "func", "import", "init", "inout", "internal", "let",
@@ -94,10 +113,10 @@ var languageKeywords = map[string][]string{
 		"guard", "if", "in", "repeat", "return", "switch", "where", "while",
 		"as", "Any", "catch", "false", "is", "nil", "super", "self", "Self",
 		"throw", "throws", "true", "try", "_", "associativity",
-		"convenience", "dynamic", "didSet", "final", "get", "infix",
-		"indirect", "lazy", "left", "mutating", "none", "nonmutating",
+		"convenience", "didSet", "final", "infix",
+		"indirect", "lazy", "mutating", "nonmutating",
 		"optional", "override", "postfix", "precedence", "prefix",
-		"Protocol", "required", "right", "set", "Type", "unowned", "weak",
+		"Protocol", "required", "unowned", "weak",
 		"willSet",
 	},
 }
@@ -108,10 +127,10 @@ var languageLabels = map[string]string{
 	"ts": "TypeScript/JavaScript", "kotlin": "Kotlin", "swift": "Swift",
 }
 
-// languageKeywordRegex is languageKeywords, precompiled once. Most keywords
-// are plain identifiers (word-boundary match, so "class" in "className"
-// doesn't count); a few tokens aren't valid identifiers at all (Kotlin's
-// "as?", "!in", "!is") and are matched as plain literal substrings instead.
+// languageKeywordRegex is languageKeywords, precompiled once, for the plain
+// identifier tokens (word-boundary match, so "class" in "className" doesn't
+// count). A few tokens aren't valid identifiers at all (Kotlin's "as?",
+// "!in", "!is") and have no entry here — see keywordMatches.
 var languageKeywordRegex = buildLanguageKeywordRegex()
 
 func buildLanguageKeywordRegex() map[string]map[string]*regexp.Regexp {
@@ -119,15 +138,30 @@ func buildLanguageKeywordRegex() map[string]map[string]*regexp.Regexp {
 	for lang, kws := range languageKeywords {
 		m := make(map[string]*regexp.Regexp, len(kws))
 		for _, kw := range kws {
-			pattern := regexp.QuoteMeta(kw)
-			if isIdentifierToken(kw) {
-				pattern = `\b` + pattern + `\b`
+			if !isIdentifierToken(kw) {
+				continue
 			}
-			m[kw] = regexp.MustCompile(pattern)
+			m[kw] = regexp.MustCompile(`\b` + regexp.QuoteMeta(kw) + `\b`)
 		}
 		out[lang] = m
 	}
 	return out
+}
+
+// keywordMatches reports whether keyword kw appears in text (already
+// comment/string-stripped source, newline-joined). Plain-identifier keywords
+// use the precompiled \b-anchored regex; operator-shaped keywords that
+// aren't valid identifiers at all (Kotlin's "as?", "!in", "!is") use
+// containsBounded's boundary check on whichever end is itself a word
+// character — e.g. "as?" requires a non-identifier character before "a"
+// (rejecting the "alias?.foo" that a boundary-less substring search would
+// wrongly count), and "!in"/"!is" require a non-identifier character after
+// "in"/"is" (rejecting "!interfaceEnabled"/"!isValid").
+func keywordMatches(regexes map[string]*regexp.Regexp, text, kw string) bool {
+	if re, ok := regexes[kw]; ok {
+		return re.MatchString(text)
+	}
+	return containsBounded(text, kw)
 }
 
 func isIdentifierToken(s string) bool {
@@ -200,7 +234,7 @@ func (LanguageRichness) Analyze(files []*parser.ParsedFile) any {
 				if found[kw] {
 					continue
 				}
-				if regexes[kw].MatchString(text) {
+				if keywordMatches(regexes, text, kw) {
 					found[kw] = true
 				}
 			}
@@ -253,10 +287,13 @@ func (LanguageRichness) RenderHTML(res any) string {
 	var b strings.Builder
 	b.WriteString(`<div class="as-lr">`)
 	for _, e := range r.Entries {
-		col := healthColor(e.Percent)
+		// A single neutral color, not healthColor's good/warn/crit read: this
+		// is keyword *coverage*, not a quality score — a codebase that only
+		// ever reaches for if/for/return/func isn't "unhealthy," and one that
+		// also uses goto/fallthrough isn't "healthier" for it.
 		fmt.Fprintf(&b, `<div class="as-lr__row"><div class="as-lr__label">%s <span class="as-lr__frac">(%d/%d keywords)</span></div>`+
-			`<div class="as-lr__bar"><div class="as-lr__fill" style="width:%d%%;background:%s"></div></div><span class="as-lr__pct">%d%%</span></div>`,
-			html.EscapeString(e.Label), e.Found, e.Total, e.Percent, col, e.Percent)
+			`<div class="as-lr__bar"><div class="as-lr__fill" style="width:%d%%;background:var(--accent)"></div></div><span class="as-lr__pct">%d%%</span></div>`,
+			html.EscapeString(e.Label), e.Found, e.Total, e.Percent, e.Percent)
 	}
 	b.WriteString(`</div>`)
 	return b.String()
