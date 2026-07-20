@@ -95,6 +95,17 @@ func goParseHook(filePath string, lines []string, pfAny any) {
 			pf.Extra["trafficOutbound"] = out
 		}
 	}
+
+	// Coupling/cohesion metrics (CBO/LCOM/CAM) need real field/method/call
+	// data; Go is the only language that can get it cheaply today (stdlib
+	// go/ast, no new dependency) — see extractGoMembers' doc comment for
+	// the longer-term multi-language plan.
+	if members := extractGoMembers(filePath, lines); len(members) > 0 {
+		if pf.Extra == nil {
+			pf.Extra = map[string]any{}
+		}
+		pf.Extra["members"] = members
+	}
 }
 
 // trimSpace is a tiny local helper to avoid importing strings in this file just

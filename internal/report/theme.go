@@ -294,6 +294,15 @@ code,.mono{font-family:var(--mono)}
 .as-cx__bigo--3{color:#d1590a}
 .as-cx__bigo--4{color:#c0392b}
 
+/* Coupling & Cohesion module */
+.as-cc__gloss{display:flex; gap:8px 24px; flex-wrap:wrap; margin-bottom:10px}
+.as-cc__glosscol{flex:1; min-width:220px; display:flex; flex-direction:column; gap:3px}
+.as-cc__glosshead{font-size:11px; font-weight:700; color:var(--text-dim); margin-bottom:2px}
+.as-cc__term{font-size:11px; color:var(--text-faint)}
+.as-cc__term b{color:var(--text-dim)}
+.as-cc__na{opacity:.6}
+.as-cc__hint{font-size:11px; color:var(--text-faint); margin-top:4px}
+
 /* Memory Leaks */
 .as-ml__summary{font-size:13px; font-weight:600; margin-bottom:10px}
 .as-ml__summary--clean{color:var(--good); margin-bottom:0}
@@ -325,6 +334,7 @@ code,.mono{font-family:var(--mono)}
 .as-lr__bar{flex:1; height:8px; background:var(--bg-inset); border-radius:999px; overflow:hidden}
 .as-lr__fill{height:100%; border-radius:999px; transition:width .3s}
 .as-lr__pct{font-family:var(--mono); font-size:12px; font-weight:600; width:38px; text-align:right}
+.as-lr__missing{font-size:11px; color:var(--text-faint); margin-left:180px; margin-top:-6px; margin-bottom:2px; line-height:1.4}
 
 /* Code Structure module */
 .as-cs__stats{display:flex; gap:18px; flex-wrap:wrap; margin-bottom:10px}

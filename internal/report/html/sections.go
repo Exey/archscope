@@ -3564,8 +3564,8 @@ func renderTabs(res *result.AnalysisResult) string {
 			fmt.Fprintf(&b, `<span class="as-plat-card__stat as-plat-card__stat--arch">%s</span>`, esc(archLabel))
 		}
 		if lv, ok := cultLevels[pg.Platform]; ok {
-			fmt.Fprintf(&b, `<span class="as-cult-lvl" style="background:%s22;color:%s;border-color:%s55" title="🔰 Programming Culture level">%s</span>`,
-				lv.color, lv.color, lv.color, esc(lv.name))
+			fmt.Fprintf(&b, `<a class="as-cult-lvl" href="#as-culture" data-cult-link="%s" style="background:%s22;color:%s;border-color:%s55;text-decoration:none" title="🔰 Programming Culture level — click to see dimension breakdown">%s</a>`,
+				esc(string(pg.Platform)), lv.color, lv.color, lv.color, esc(lv.name))
 		}
 		b.WriteString(`</div>`) // .as-plat-card__summary
 		b.WriteString(`<span class="as-plat-card__chevron">›</span>`)
@@ -3638,7 +3638,7 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 			specPanels = append(specPanels, p)
 		case "traffic":
 			trafficPanels = append(trafficPanels, p)
-		case "designpattern", "datastructures", "algorithms", "complexity", "magicconstants":
+		case "couplingcohesion", "designpattern", "datastructures", "algorithms", "complexity", "magicconstants":
 			constructPanels = append(constructPanels, p)
 		default:
 			otherPanels = append(otherPanels, p)
@@ -4391,6 +4391,8 @@ func moduleIcon(id string) string {
 	switch id {
 	case "architecture":
 		return "🏛️"
+	case "couplingcohesion":
+		return "🔗🧬"
 	case "designpattern":
 		return "🧩"
 	case "oopvspop":

@@ -93,6 +93,28 @@ type ParsedFile struct {
 	Extra map[string]any `json:"extra,omitempty"`
 }
 
+// TypeMembers records one type's fields and methods — currently populated
+// for Go only (internal/lang/golang_members.go, via go/ast in the same
+// parse pass) and stored under ParsedFile.Extra["members"] as []TypeMembers.
+// Consumers (coupling/cohesion analysis) type-assert it and treat absence as
+// "not supported for this language yet" rather than an error. When another
+// language gains the same extraction, it populates the same key with the
+// same shape — no consumer changes needed.
+type TypeMembers struct {
+	TypeName string
+	Fields   []string // field names declared directly on the type
+	Methods  []MethodMembers
+}
+
+// MethodMembers records one method's signature and body-reference footprint,
+// the raw material for coupling/cohesion metrics (LCOM/CAM/CBO).
+type MethodMembers struct {
+	Name         string
+	FieldRefs    []string // this type's own fields touched in the body (for LCOM/CAM)
+	ParamTypes   []string // parameter type names (for CAM)
+	ExternalRefs []string // other declared types referenced in the body (for CBO)
+}
+
 // FileName returns the base name of the file.
 func (p *ParsedFile) FileName() string {
 	return filepath.Base(p.FilePath)

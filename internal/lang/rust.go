@@ -83,6 +83,13 @@ func rustParseHook(filePath string, lines []string, pfAny any) {
 			pf.Imports[i] = imp[:idx]
 		}
 	}
+
+	if members := extractRustMembers(lines); len(members) > 0 {
+		if pf.Extra == nil {
+			pf.Extra = map[string]any{}
+		}
+		pf.Extra["members"] = members
+	}
 }
 
 // rustCrateName walks up from dir looking for a Cargo.toml with a [package]

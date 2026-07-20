@@ -52,19 +52,20 @@ type ModuleMeta struct {
 // MetaByID is the single source of truth for module render order and icons.
 // Modules not listed here sort last (order 99) with a generic icon.
 var MetaByID = map[string]ModuleMeta{
-	"arch":           {Icon: "🏛️", Order: 0},
-	"dddmodel":       {Icon: "🍱", Order: 1},
-	"oopvspop":       {Icon: "⚖️", Order: 1},
-	"traffic":        {Icon: "🛜", Order: 2},
-	"speccoverage":   {Icon: "🧱", Order: 3},
-	"designpattern":  {Icon: "🧩", Order: 4},
-	"datastructures": {Icon: "🌳", Order: 5},
-	"algorithms":     {Icon: "🔀", Order: 6},
-	"complexity":     {Icon: "🧮", Order: 7},
-	"magicconstants": {Icon: "🪄", Order: 8},
-	"langrichness":   {Icon: "🎖️", Order: 9},
-	"codestructure":  {Icon: "💻", Order: 10},
-	"memoryleaks":    {Icon: "💧", Order: 11},
+	"arch":             {Icon: "🏛️", Order: 0},
+	"dddmodel":         {Icon: "🍱", Order: 1},
+	"oopvspop":         {Icon: "⚖️", Order: 1},
+	"traffic":          {Icon: "🛜", Order: 2},
+	"speccoverage":     {Icon: "🧱", Order: 3},
+	"couplingcohesion": {Icon: "🔗🧬", Order: 4},
+	"designpattern":    {Icon: "🧩", Order: 5},
+	"datastructures":   {Icon: "🌳", Order: 6},
+	"algorithms":       {Icon: "🔀", Order: 7},
+	"complexity":       {Icon: "🧮", Order: 8},
+	"magicconstants":   {Icon: "🪄", Order: 9},
+	"langrichness":     {Icon: "🎖️", Order: 10},
+	"codestructure":    {Icon: "💻", Order: 11},
+	"memoryleaks":      {Icon: "💧", Order: 12},
 }
 
 // MetaFor returns the ModuleMeta for id, falling back to a generic entry.

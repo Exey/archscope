@@ -89,6 +89,14 @@ var reStringConcat = regexp.MustCompile(`["']\s*\+`)
 // redaction placeholder like '••••••••••••3f9a', not a real secret.
 var reMaskedValue = regexp.MustCompile(`[•*#x]{4,}`)
 
+// reCamelPhrase matches a value built entirely from letters and shaped like
+// concatenated English words (camelCase transitions) — e.g.
+// "accessTokenRefreshed" returned by a dummy/mock auth stub describing what
+// it did, not a real secret. Genuine secrets are virtually always
+// random-looking (mixed alphanumeric, base64, hex) for entropy; a pure-letter
+// multi-word phrase is a template/placeholder tell.
+var reCamelPhrase = regexp.MustCompile(`^[a-z]+(?:[A-Z][a-z]+)+$`)
+
 // isLowDiversity reports whether s uses too few distinct characters to be
 // real key material — a genuine hash/key drawn from 16 hex symbols uses many
 // of them; a placeholder like "000...0" or "fff...f" uses one or two.
@@ -163,7 +171,7 @@ func detectHardcodedSecrets(filePath string, lines []string) []security.Finding 
 			low := strings.ToLower(val)
 			isJSONKey := jsonKeyValue.MatchString(low) && len(val) <= 40
 			isPlaceholder := reDottedPathValue.MatchString(val) || reMaskedValue.MatchString(val) ||
-				strings.Contains(val, " ") || containsAny(low, secretSkipWords)
+				strings.Contains(val, " ") || containsAny(low, secretSkipWords) || reCamelPhrase.MatchString(val)
 			if !isJSONKey && !isPlaceholder {
 				out = append(out, security.NewFinding(filePath, i, lines))
 				continue

@@ -85,6 +85,10 @@ func swiftParseHook(filePath string, lines []string, pfAny any) {
 		}
 	}
 
+	if members := extractSwiftMembers(lines); len(members) > 0 {
+		pf.Extra["members"] = members
+	}
+
 	var finalC, singletons, assoc, someUse, generics, overrides, nsobject int
 	for _, ln := range lines {
 		t := strings.TrimSpace(ln)

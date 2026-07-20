@@ -105,4 +105,11 @@ func cppParseHook(filePath string, lines []string, pfAny any) {
 			pf.Extra["trafficOutbound"] = out
 		}
 	}
+
+	if members := extractCppMembers(lines); len(members) > 0 {
+		if pf.Extra == nil {
+			pf.Extra = map[string]any{}
+		}
+		pf.Extra["members"] = members
+	}
 }

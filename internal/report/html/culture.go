@@ -119,6 +119,10 @@ type cultureRow struct {
 	archLayerScore                int // 50 (<5 layers) or 100 (≥5)
 	patternCount                  int // distinct deliberate (non-idiom) GoF patterns
 	patternScore                  int // 0/30/70/100 per patternCount
+	hasCouplingCohesion           bool // 🔗🧬 module ran and has Coupling data
+	hasCohesionData               bool // Cohesion specifically has data (only where a members extractor exists)
+	couplingScore, cohesionScore  int
+	couplingCohesionWeight        int // 30 when coupling/cohesion data is available, else 0
 
 	// Code Quality: Long Functions + Long Types + Data Structures + Algorithms
 	// + "Other" (from 💻 Code Structure).
@@ -126,9 +130,9 @@ type cultureRow struct {
 	lfScore, lfWeight        int
 	bigTypes, maxType        int
 	ltScore, ltWeight        int
-	hasDataStructures        bool
+	dsCount                  int // detected data-structure types
 	dsScore                  int
-	hasAlgorithms            bool
+	algoCount                int // detected algorithms
 	algoScore                int
 	csScore, csWeight        int
 	csHasData                bool
@@ -409,24 +413,32 @@ func writeDimCell(b *strings.Builder, v int, detailHTML string) {
 
 // archWeightPct and patternWeightPct are the Design dimension's fixed weights
 // for the Architecture Layers and Design Patterns sub-signals. The rest of
-// the budget goes to Base (DDD/POP score, arch-pattern confidence, 🎖️
-// Language Richness, or a flat neutral value — whichever signal is
-// available) plus, when a real DDD/POP score exists, a separate 🎖️ Language
-// Richness line: DDD/POP is a stronger, more specific signal than a
-// keyword-coverage count, so it keeps most of the weight (30%) while
-// Richness still contributes (45%) rather than being dropped entirely.
-// Without DDD/POP, Richness *is* Base (for TS/JS and any other language with
-// a known keyword list but no domain-model detector) at the full 75%.
+// the budget (designBaseWeightDefault) goes to Base (DDD/POP score,
+// arch-pattern confidence, 🎖️ Language Richness, or a flat neutral value —
+// whichever signal is available) plus, when a real DDD/POP score exists, a
+// separate 🎖️ Language Richness line and a 🔗🧬 Coupling/Cohesion line:
+// DDD/POP is a stronger, more specific signal than a keyword-coverage count,
+// so it keeps most of the weight (30%) while Richness and Coupling/Cohesion
+// split the remainder (10%/30% — see the couplingCohesionWeightPct doc
+// below for how that split is carved out). Without DDD/POP, Richness *is*
+// Base (for TS/JS and any other language with a known keyword list but no
+// domain-model detector) at the full designBaseWeightDefault.
 const (
-	archWeightPct    = 10
+	archWeightPct    = 15
 	patternWeightPct = 15
 	// designBaseWeightDefault is Base's weight whenever there's no DDD/POP
 	// score to share the budget with.
-	designBaseWeightDefault = 100 - archWeightPct - patternWeightPct // 75
+	designBaseWeightDefault = 100 - archWeightPct - patternWeightPct // 70
 	// designBaseWeightWithDDD is Base's (now DDD/POP-only) weight once 🎖️
 	// Language Richness becomes a separate line; the remainder
 	// (designBaseWeightDefault - designBaseWeightWithDDD) goes to Richness.
 	designBaseWeightWithDDD = 30
+	// couplingCohesionWeightPct is 🔗🧬 Coupling/Cohesion's fixed slice of
+	// the same flexible budget, whenever coupling data is available. It's
+	// carved out of whichever weight would otherwise be the "flexible
+	// tail" — Richness's when Richness is a separate line, Base's
+	// otherwise — so the budget still always sums to designBaseWeightDefault.
+	couplingCohesionWeightPct = 30
 )
 
 // Code Quality's Data Structures and Algorithms sub-signals carry fixed
@@ -439,6 +451,18 @@ const (
 	algoWeightPct            = 13
 	lfWeightMin, lfWeightMax = 10, 20
 	ltWeightMin, ltWeightMax = 5, 15
+	// cultureLongFuncMinLines is how long a function has to be before the
+	// culture score treats it as "long" — a much higher bar than
+	// BigFunctions' own ~25-line threshold, so routine mid-size functions
+	// don't drag the score down; only genuine outliers count here.
+	cultureLongFuncMinLines = 200
+	// longFuncOutlierCap bounds how much a small handful (1-3) of outlier
+	// long functions can cost the Long Func score by themselves — a couple
+	// of 1000-line functions is a real smell but shouldn't alone crater the
+	// dimension; the penalty only grows past this once they become a
+	// systemic pattern (4+ long functions).
+	longFuncOutlierCap     = 20
+	longFuncOutlierMaxFunc = 3
 )
 
 // dynamicWeight scales linearly from lo at count=0 to hi at count>=capAt.
@@ -462,11 +486,18 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 	}
 
 	// Files for this platform → LOC, god functions, TODO density, biggest
-	// func/type, and architecture-layer separation.
+	// func/type, and architecture-layer separation. BigFunctions itself
+	// flags anything over ~25 lines (kept low so the Longest Functions
+	// listing stays useful) — the culture score only cares about functions
+	// long enough to be a real smell, so it re-filters at cultureLongFuncMinLines.
 	platFiles := res.FilesForPlatform(pg.Platform)
 	for _, f := range platFiles {
 		r.loc += f.LineCount
-		r.godFuncs += len(f.BigFunctions)
+		for _, bf := range f.BigFunctions {
+			if bf.LineCount > cultureLongFuncMinLines {
+				r.godFuncs++
+			}
+		}
 		r.bigTypes += len(f.BigTypes)
 		r.todos += f.TodoCount + f.FixmeCount
 		if f.LongestFunc != nil && f.LongestFunc.LineCount > r.maxFunc {
@@ -525,10 +556,17 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 					r.patternCount++
 				}
 			}
+		case constructs.CouplingCohesionResult:
+			if v.HasData() {
+				r.hasCouplingCohesion = true
+				r.couplingScore = v.CouplingScore
+				r.hasCohesionData = v.HasCohesionData
+				r.cohesionScore = v.CohesionScore
+			}
 		case constructs.Result: // datastructures
-			r.hasDataStructures = v.HasDetection()
+			r.dsCount = len(v.Matches)
 		case constructs.AlgorithmsResult:
-			r.hasAlgorithms = v.HasDetection()
+			r.algoCount = len(v.Matches)
 		case constructs.CodeStructureReport:
 			r.csHasData = v.HasData()
 			r.csScore = codeStructureScore(v, r.loc)
@@ -594,6 +632,14 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 		r.designBase = 52
 		r.designBaseWeight = designBaseWeightDefault
 	}
+	if r.hasCouplingCohesion {
+		r.couplingCohesionWeight = couplingCohesionWeightPct
+		if r.langRichnessWeight > 0 {
+			r.langRichnessWeight -= couplingCohesionWeightPct
+		} else {
+			r.designBaseWeight -= couplingCohesionWeightPct
+		}
+	}
 	if r.archLayers >= 5 {
 		r.archLayerScore = 100
 	} else {
@@ -609,9 +655,18 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 	default:
 		r.patternScore = 0
 	}
+	// A single Coupling/Cohesion score for the weighted average: the two
+	// bars are shown separately (see designTip), but they share one slot
+	// in the Design mix, so average them when Cohesion data exists, else
+	// fall back to Coupling alone (languages without a members extractor).
+	couplingCohesionScore := r.couplingScore
+	if r.hasCohesionData {
+		couplingCohesionScore = (r.couplingScore + r.cohesionScore + 1) / 2
+	}
 	r.design = clampInt(
 		(r.designBase*r.designBaseWeight+r.langRichnessScore*r.langRichnessWeight+
-			r.archLayerScore*archWeightPct+r.patternScore*patternWeightPct+50)/100,
+			r.archLayerScore*archWeightPct+r.patternScore*patternWeightPct+
+			couplingCohesionScore*r.couplingCohesionWeight+50)/100,
 		5, 100)
 
 	// ── Code Quality (0–100): Long Functions (dynamic 10–30%) + Long Types
@@ -635,6 +690,9 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 	// "leaving things unfinished" signals and neither has its own component
 	// in this breakdown.
 	lfPen += float64(r.todos) / kloc * 2.5
+	if r.godFuncs <= longFuncOutlierMaxFunc && lfPen > longFuncOutlierCap {
+		lfPen = longFuncOutlierCap
+	}
 	r.lfScore = clampInt(100-int(lfPen+0.5), 5, 100)
 	r.lfWeight = dynamicWeight(r.godFuncs, 10, lfWeightMin, lfWeightMax)
 
@@ -650,11 +708,51 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 	r.ltScore = clampInt(100-int(ltPen+0.5), 5, 100)
 	r.ltWeight = dynamicWeight(r.bigTypes, 10, ltWeightMin, ltWeightMax)
 
-	if r.hasDataStructures {
-		r.dsScore = 100
+	// Both curves reward breadth of detection over a single lucky match —
+	// one Stack or one sort algorithm barely moves the needle, a handful
+	// does. Data Structures tops out at 90% (10+ types): finding types
+	// isn't itself mastery, so it never claims a perfect score on its own.
+	// Algorithms keeps climbing 1%/detection past 5 up to 15+, where it
+	// caps at 100%.
+	switch {
+	case r.dsCount >= 10:
+		r.dsScore = 90
+	case r.dsCount == 9:
+		r.dsScore = 86
+	case r.dsCount == 8:
+		r.dsScore = 82
+	case r.dsCount == 7:
+		r.dsScore = 80
+	case r.dsCount == 6:
+		r.dsScore = 70
+	case r.dsCount == 5:
+		r.dsScore = 66
+	case r.dsCount == 4:
+		r.dsScore = 60
+	case r.dsCount == 3:
+		r.dsScore = 55
+	case r.dsCount == 2:
+		r.dsScore = 50
+	case r.dsCount == 1:
+		r.dsScore = 40
+	default:
+		r.dsScore = 0
 	}
-	if r.hasAlgorithms {
+	switch {
+	case r.algoCount >= 15:
 		r.algoScore = 100
+	case r.algoCount >= 5:
+		r.algoScore = 90 + (r.algoCount - 5) // +1%/detection, 5→90% up to 15→100%
+	case r.algoCount == 4:
+		r.algoScore = 80
+	case r.algoCount == 3:
+		r.algoScore = 66
+	case r.algoCount == 2:
+		r.algoScore = 58
+	case r.algoCount == 1:
+		r.algoScore = 50
+	default:
+		r.algoScore = 0
 	}
 	r.csWeight = 100 - r.lfWeight - r.ltWeight - dsWeightPct - algoWeightPct
 
@@ -812,6 +910,14 @@ func designTip(r cultureRow) string {
 	}
 	var b strings.Builder
 	b.WriteString(dimLine(baseTarget, fmt.Sprintf("🍱 %s (%d%% W)", base, r.designBaseWeight)))
+	if r.hasCouplingCohesion {
+		ccTarget := modPanelID(r.key, "couplingcohesion")
+		if r.hasCohesionData {
+			b.WriteString(dimLine(ccTarget, fmt.Sprintf("🔗🧬 %d%%/%d%% Coupling/Cohesion (%d%% W)", r.couplingScore, r.cohesionScore, r.couplingCohesionWeight)))
+		} else {
+			b.WriteString(dimLine(ccTarget, fmt.Sprintf("🔗 %d%% Coupling (%d%% W)", r.couplingScore, r.couplingCohesionWeight)))
+		}
+	}
 	if r.langRichnessWeight > 0 {
 		b.WriteString(dimLine(modPanelID(r.key, "langrichness"), fmt.Sprintf("🎖️ %d%% Richness (%d%% W)", r.langRichnessScore, r.langRichnessWeight)))
 	}

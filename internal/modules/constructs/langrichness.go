@@ -195,6 +195,7 @@ type LangRichness struct {
 	Found   int
 	Total   int
 	Percent int
+	Missing []string // keywords not found in the codebase
 }
 
 // LanguageRichnessReport is the module output — one entry per known language
@@ -243,9 +244,16 @@ func (LanguageRichness) Analyze(files []*parser.ParsedFile) any {
 		if len(kws) > 0 {
 			pct = len(found) * 100 / len(kws)
 		}
+		var missing []string
+		for _, kw := range kws {
+			if !found[kw] {
+				missing = append(missing, kw)
+			}
+		}
 		entries = append(entries, LangRichness{
 			Lang: lang, Label: languageLabels[lang],
 			Found: len(found), Total: len(kws), Percent: pct,
+			Missing: missing,
 		})
 	}
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Label < entries[j].Label })
@@ -278,7 +286,8 @@ func (LanguageRichness) RenderMarkdown(res any) string {
 	return b.String()
 }
 
-// RenderHTML renders one labelled bar per language.
+// RenderHTML renders one labelled bar per language, with missing keywords
+// shown in grey beneath the bar.
 func (LanguageRichness) RenderHTML(res any) string {
 	r, ok := res.(LanguageRichnessReport)
 	if !ok || !r.HasData() {
@@ -294,6 +303,13 @@ func (LanguageRichness) RenderHTML(res any) string {
 		fmt.Fprintf(&b, `<div class="as-lr__row"><div class="as-lr__label">%s <span class="as-lr__frac">(%d/%d keywords)</span></div>`+
 			`<div class="as-lr__bar"><div class="as-lr__fill" style="width:%d%%;background:var(--accent)"></div></div><span class="as-lr__pct">%d%%</span></div>`,
 			html.EscapeString(e.Label), e.Found, e.Total, e.Percent, e.Percent)
+		if len(e.Missing) > 0 {
+			missingStr := strings.Join(e.Missing, ", ")
+			if len(missingStr) > 120 {
+				missingStr = missingStr[:117] + "…"
+			}
+			fmt.Fprintf(&b, `<div class="as-lr__missing">Not found: %s</div>`, html.EscapeString(missingStr))
+		}
 	}
 	b.WriteString(`</div>`)
 	return b.String()
