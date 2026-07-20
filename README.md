@@ -13,13 +13,15 @@ go run ./cmd/archscope ~/code --open
 
 `~/code` is any directory: a single app, a service repo, or a **parent folder** where several repositories are cloned side by side. Modules/services are auto-detected up to 3 levels deep, so `services/<svc>/`, `src/<module>/` and monorepo layouts all work. `--open` launches the finished report in your browser. Use `--format md` for a Markdown report, `--format sarif` for SARIF 2.1.0, or `--format both` for HTML + SARIF together.
 
----
+![report.png](https://i.postimg.cc/vb5zbqx3/collage-4columns.png)
 
 ## What the Report Contains
 
 1. **Summary bar** — lines of code, source files, declarations, modules, **Danger rate** (0–100% scaled from the 1000-point index), and platform count. One tab per detected language.
 
-2. **🔰 Programming Culture** — a heuristic developer-seniority read per language platform (and DevOps), leading the report as the highest-level summary. One table row per platform, each scored across four dimensions — 🏛️ Design/Architecture (DDD/OOP↔POP score, arch-pattern confidence), 🧹 Code Quality (god functions, longest function, TODO/FIXME density), 🛡️ Security (HIGH/MEDIUM findings, plus 🩺 Traffic Health weighted 30% when the platform has traffic data), ⚡ Performance (🅾️ Complexity 90% + 💧 Memory Leaks 10%) — and mapped onto a 10-rung ladder: Trainee → Junior− (Entry-Level) → Junior (Core) → Junior+/Middle− → Middle → Middle+/Senior− → Senior → Senior+/Lead− → Lead → Architect. Rows sort by level, highest first — except for a single-repo scan, where the platform with the most lines of code (the project's actual main language) is always pinned to the top row regardless of level, so a small pristine tooling platform never outranks what the project is really written in. From Senior upward every level is *gated*, not just averaged: Senior requires all four dimensions above 60, Senior+/Lead− requires all four ≥ 70, Lead requires all four ≥ 75, and Architect requires all four ≥ 99 — so one weak dimension (a security HIGH, a god function, a stray O(N³)) can't be averaged away by three excellent ones. A collapsible legend explains what each underlying metric measures and its pitfalls. Below the table, a **🔎 Priority Issues** list pulls the worst signals from the Programming Methods detectors — algorithmic complexity hotspots (O(N³) first, then O(N²)) and credential/database security findings — each a clickable VS Code deep link tagged with its platform. Explicitly a conversation starter, not a verdict.
+2. **🔰 Programming Culture** — a heuristic developer-seniority read per language platform (and DevOps), leading the report as the highest-level summary:
+
+![n8n.png](https://i.postimg.cc/FN0ZNWkg/n8n.png)
 
 3. **🧰 Tech Stack & Modules** — repo-wide tag cloud: languages present + frameworks auto-detected from imports (SwiftUI, Combine, React, Next.js, Django, FastAPI, gRPC, GORM, …) and from config files (docker-compose, go.mod, Makefile). Below it: a package grid sized by LOC with per-language badges.
 
