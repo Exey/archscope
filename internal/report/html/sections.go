@@ -3448,7 +3448,8 @@ func platformFolderNames(pg *scanner.PlatformGroup, rootPath string) []string {
 func renderTabs(res *result.AnalysisResult) string {
 	platforms := orderedPlatformTabs(res)
 	if len(platforms) == 0 {
-		return `<p class="as-empty">No platform has enough code (&ge; 1,000 LOC) for a dedicated view.</p>`
+		return fmt.Sprintf(`<p class="as-empty">No platform has enough code (&ge; %s LOC) for a dedicated view.</p>`,
+			fmtNum(minCultureLOC))
 	}
 
 	loc := map[langspec.Platform]int{}

@@ -346,7 +346,7 @@ internal/
   fetch/       remote git-URL resolution (clone + cleanup)
   modules/     pluggable report modules
     arch/          architecture: client pattern detection + backend layered view
-    constructs/    code-construct detectors — data structures, algorithms, complexity, magic constants, design patterns, memory leaks, code structure, language richness, coupling & cohesion (ported from ArchSwiftScope / ultimate_bug_scanner)
+    constructs/    code-construct detectors — data structures, algorithms, complexity, magic constants, design patterns, memory leaks, code structure, language richness, coupling & cohesion (ported from ArchSwiftScope)
     dddmodel/      DDD vs. Anemic Domain Model analyzer (Go · Python · Kotlin · Java)
     oopvspop/      Swift-only OOP↔POP analyzer
     speccoverage/  API spec coverage: OpenAPI · gRPC · GraphQL vs. code routes (Go · Python · Java · Kotlin · TypeScript)

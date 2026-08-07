@@ -30,10 +30,12 @@ import (
 )
 
 // minCultureLOC is the smallest a language platform can be and still get a
-// Programming Culture row — below this, a handful of files can swing every
-// dimension wildly, so the read isn't meaningful. DevOps is exempt (it has no
-// LOC of its own; it's scored from the DevOps Health Score instead).
-const minCultureLOC = 10000
+// Programming Culture row (and, sharing the same gate, a 🗂️ Platforms tab —
+// see orderedPlatformTabs in sections.go) — below this, a handful of files
+// can swing every dimension wildly, so the read isn't meaningful. DevOps is
+// exempt (it has no LOC of its own; it's scored from the DevOps Health Score
+// instead).
+const minCultureLOC = 3000
 
 // devLevel is one rung on the seniority ladder: the inclusive lower bound of
 // the 0–100 overall culture score that lands on it, plus an optional minDim
