@@ -18,20 +18,20 @@ func writeDetails(b *strings.Builder, c evolution.Comparison, review bool) {
 	} else {
 		fmt.Fprintf(b, `<div class="as-evo__dtitle as-evo__dtitle--down">▼ What got worse, and where <span class="as-count">(%d)</span></div>`, len(c.WorseDetails))
 		for _, d := range c.WorseDetails {
-			writeDetailCard(b, d, review)
+			writeDetailCard(b, d, review, c.DetailLimit())
 		}
 	}
 	if len(c.BetterDetails) > 0 {
 		fmt.Fprintf(b, `<details class="as-evo__better"><summary>▲ What got better <span class="as-count">(%d)</span></summary>`, len(c.BetterDetails))
 		for _, d := range c.BetterDetails {
-			writeDetailCard(b, d, review)
+			writeDetailCard(b, d, review, c.DetailLimit())
 		}
 		b.WriteString(`</details>`)
 	}
 	b.WriteString(`</div>`)
 }
 
-func writeDetailCard(b *strings.Builder, d evolution.Detail, review bool) {
+func writeDetailCard(b *strings.Builder, d evolution.Detail, review bool, limit int) {
 	dir := evoDir(d.Delta)
 	fmt.Fprintf(b, `<div class="as-evo__dcard as-evo__dcard--%s"><div class="as-evo__dhead">`+
 		`<span class="as-plat-badge as-plat-%s">%s</span><span class="as-cult-name">%s</span>`+
@@ -62,8 +62,8 @@ func writeDetailCard(b *strings.Builder, d evolution.Detail, review bool) {
 	if len(d.Added) > 0 {
 		fmt.Fprintf(b, `<div class="as-evo__dsub">Introduced since the baseline <span class="as-count">(%d)</span></div><ul class="as-evo__items">`, len(d.Added))
 		for i, it := range d.Added {
-			if i == evolution.MaxDetailItems {
-				fmt.Fprintf(b, `<li class="as-evo__more">… and %d more</li>`, len(d.Added)-evolution.MaxDetailItems)
+			if i == limit {
+				fmt.Fprintf(b, `<li class="as-evo__more">… and %d more</li>`, len(d.Added)-limit)
 				break
 			}
 			fmt.Fprintf(b, `<li>%s</li>`, itemHTML(it, "", review))
@@ -73,8 +73,8 @@ func writeDetailCard(b *strings.Builder, d evolution.Detail, review bool) {
 	if len(d.Grew) > 0 {
 		fmt.Fprintf(b, `<div class="as-evo__dsub">Grew <span class="as-count">(%d)</span></div><ul class="as-evo__items">`, len(d.Grew))
 		for i, g := range d.Grew {
-			if i == evolution.MaxDetailItems {
-				fmt.Fprintf(b, `<li class="as-evo__more">… and %d more</li>`, len(d.Grew)-evolution.MaxDetailItems)
+			if i == limit {
+				fmt.Fprintf(b, `<li class="as-evo__more">… and %d more</li>`, len(d.Grew)-limit)
 				break
 			}
 			fmt.Fprintf(b, `<li>%s</li>`, itemHTML(g.Item, fmt.Sprintf("%d → %d", g.ThenSize, g.Item.Size), review))

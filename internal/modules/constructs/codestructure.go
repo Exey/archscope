@@ -111,6 +111,10 @@ type CodeStructureReport struct {
 	LooseTypeTotal int          // total `any` + `object` type annotations (TS/JS only)
 	LooseTypeFiles []CSAnyUsage // per-file loose-type counts, sorted worst-first
 
+	StringIssues []CSIssue // 🔤 Strings: concat in loops, go-critic string checks…
+	BugIssues    []CSIssue // 🐛 Suspicious code: Go bug-class checks (dupSubExpr, badLock, offBy1…)
+	DupIssues    []CSIssue // 👯 Duplicate code: identical branch bodies, duplicate case labels
+
 	OvercrowdedFolders []CSFolderStat // folders with > csOvercrowdedFolder files
 	EmptyFolders       []string       // container-only folders (no files of their own)
 	SingleFileFolders  []string       // one-file folders, only set when > csManySingleFileDirs
@@ -120,6 +124,23 @@ type CodeStructureReport struct {
 
 // HasData reports whether any file was successfully read for this platform.
 func (r CodeStructureReport) HasData() bool { return r.scanned }
+
+// ReviewIssueCount is the number of string, suspicious-code and duplicate-code
+// findings — everything that surfaces as a review item.
+func (r CodeStructureReport) ReviewIssueCount() int {
+	return len(r.StringIssues) + len(r.BugIssues) + len(r.DupIssues)
+}
+
+// IssuePoints weighs those findings for the Code Quality score: HIGH 5, MEDIUM
+// 2, LOW 0.5 (unscored advice such as "use isEmpty" must not drown real bugs).
+func (r CodeStructureReport) IssuePoints() float64 {
+	var pts float64
+	for _, set := range [][]CSIssue{r.StringIssues, r.BugIssues, r.DupIssues} {
+		h, m, l := issueSevCounts(set)
+		pts += float64(h)*5 + float64(m)*2 + float64(l)*0.5
+	}
+	return pts
+}
 
 // HasFolderSmells reports whether any folder-layout issue was flagged.
 func (r CodeStructureReport) HasFolderSmells() bool {
@@ -325,6 +346,13 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 			}
 		}
 
+		rep.StringIssues = append(rep.StringIssues, scanStringSmells(f.FilePath, stripped, raw)...)
+		if fe := ext(f.FilePath); csStringLang(fe) != csStrNone && csStringLang(fe) != csStrPython {
+			masked := maskSource(raw, fe)
+			rep.BugIssues = append(rep.BugIssues, scanBugSmells(f.FilePath, masked)...)
+			rep.DupIssues = append(rep.DupIssues, scanDuplicateCode(f.FilePath, masked)...)
+		}
+
 		for _, fr := range csFuncRanges(stripped) {
 			nest := nestDepthOf(stripped, fr.start, fr.end)
 			if nest > rep.WorstNest.Value {
@@ -348,6 +376,9 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 	sort.SliceStable(rep.DeepNestFuncs, func(i, j int) bool { return rep.DeepNestFuncs[i].Value > rep.DeepNestFuncs[j].Value })
 	sort.SliceStable(rep.LooseTypeFiles, func(i, j int) bool { return rep.LooseTypeFiles[i].Total() > rep.LooseTypeFiles[j].Total() })
 
+	sortIssues(rep.StringIssues)
+	sortIssues(rep.BugIssues)
+	sortIssues(rep.DupIssues)
 	analyzeFolderLayout(files, &rep)
 	return rep
 }
@@ -422,6 +453,9 @@ func (CodeStructure) SummaryCards(res any) []modules.SummaryCard {
 	if r.LooseTypeTotal > 0 {
 		cards = append(cards, modules.SummaryCard{Num: strconv.Itoa(r.LooseTypeTotal), Label: "any / object types"})
 	}
+	if n := r.ReviewIssueCount(); n > 0 {
+		cards = append(cards, modules.SummaryCard{Num: strconv.Itoa(n), Label: "review issues"})
+	}
 	return cards
 }
 
@@ -471,6 +505,10 @@ func (CodeStructure) RenderMarkdown(res any) string {
 		b.WriteString("\n")
 	}
 
+	issuesMarkdown(&b, "🔤 Strings", r.StringIssues, false)
+	issuesMarkdown(&b, "🐛 Suspicious code (Go)", r.BugIssues, true)
+	issuesMarkdown(&b, "👯 Duplicate code", r.DupIssues, true)
+
 	if r.HasFolderSmells() {
 		b.WriteString("Folder-structure smells:\n\n")
 		for _, fs := range r.OvercrowdedFolders {
@@ -512,11 +550,17 @@ func (CodeStructure) RenderHTML(res any) string {
 	if r.LooseTypeTotal > 0 {
 		writeCSStat(&b, strconv.Itoa(r.LooseTypeTotal), "any / object types", healthColor(100-r.LooseTypeTotal*2))
 	}
+	if n := r.ReviewIssueCount(); n > 0 {
+		writeCSStat(&b, strconv.Itoa(n), "review issues", healthColor(100-n*2))
+	}
 	b.WriteString(`</div>`)
 
 	writeCSOffenders(&b, fmt.Sprintf("Functions with too many parameters (&gt; %d)", csMaxParams), "PARAMS", r.HighParamFuncs)
 	writeCSOffenders(&b, fmt.Sprintf("Deeply nested functions (&gt; %d levels)", csMaxNestDepth), "DEPTH", r.DeepNestFuncs)
 	writeCSLooseTypes(&b, r.LooseTypeFiles, r.LooseTypeTotal)
+	writeIssueSubcard(&b, "🔤", "Strings", "String building and comparison idioms — concatenation in loops, go-critic's string checks, interpolation over `+` chains.", r.StringIssues, false)
+	writeIssueSubcard(&b, "🐛", "Suspicious code (Go)", "Bug-class patterns from go-critic: identical operands, impossible conditions, off-by-one, missing return after http.Error, bad locks…", r.BugIssues, true)
+	writeIssueSubcard(&b, "👯", "Duplicate code", "Neighbouring if/else branches with the same body and repeated case labels.", r.DupIssues, true)
 
 	if r.HasFolderSmells() {
 		b.WriteString(`<div class="as-cs__viol-title">🗑️ Folder structure smells</div><ul class="as-cs__folders">`)

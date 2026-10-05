@@ -267,6 +267,12 @@ func Compare(ref Ref, now, then []Score) Comparison {
 		}
 		for i := 1; i < len(Dims); i++ { // skip Overall: it is derived from the four
 			d := r.Delta(i)
+			if d == 0 && c.IsReview() {
+				// Score unchanged, but new offenders are exactly what a reviewer wants to see.
+				if det := buildDetail(r, i); len(det.Added) > 0 || len(det.Grew) > 0 {
+					c.WorseDetails = append(c.WorseDetails, det)
+				}
+			}
 			if d != 0 {
 				// A move with nothing behind it (no signal, offender or size change —
 				// e.g. DevOps, or a rounding-level shift) has nothing to explain,
@@ -530,27 +536,33 @@ func RenderMarkdown(c Comparison) string {
 	} else {
 		b.WriteString("#### ▼ What got worse, and where\n\n")
 		for _, d := range c.WorseDetails {
-			writeDetailMD(&b, d)
+			writeDetailMD(&b, d, c.DetailLimit())
 		}
 	}
 	if len(c.BetterDetails) > 0 {
 		b.WriteString("#### ▲ What got better\n\n")
 		for _, d := range c.BetterDetails {
-			writeDetailMD(&b, d)
+			writeDetailMD(&b, d, c.DetailLimit())
 		}
 	}
 	b.WriteString("_Scores are the same Programming Culture heuristic evaluated on both trees; a platform is only scored once it has enough code. A conversation starter, not a verdict._\n")
 	return b.String()
 }
 
+// IsReview reports whether the comparison is a review-mode run (baseline = merge-base).
+func (c Comparison) IsReview() bool { return strings.HasPrefix(c.Ref.Spec, "review:") }
+
+// DetailLimit is how many offenders a Detail lists per kind (MaxDetailItems).
+func (c Comparison) DetailLimit() int { return MaxDetailItems }
+
 // MaxDetailItems caps how many introduced offenders a Detail lists per kind of
 // list before collapsing the rest into "+N more".
-const MaxDetailItems = 10
+const MaxDetailItems = 30
 
 // FormatMetric renders a metric value with its unit.
 func FormatMetric(v int, unit string) string { return fmt.Sprintf("%d%s", v, unit) }
 
-func writeDetailMD(b *strings.Builder, d Detail) {
+func writeDetailMD(b *strings.Builder, d Detail, limit int) {
 	fmt.Fprintf(b, "**%s · %s %s: %d → %d (%s)**\n\n", d.Label, Dims[d.Dim].Icon, Dims[d.Dim].Name, d.Then, d.Now, SignedInt(d.Delta))
 	for _, m := range d.Metrics {
 		arrow := "▲"
@@ -565,8 +577,8 @@ func writeDetailMD(b *strings.Builder, d Detail) {
 	if len(d.Added) > 0 {
 		fmt.Fprintf(b, "- **Introduced (%d):**\n", len(d.Added))
 		for i, it := range d.Added {
-			if i == MaxDetailItems {
-				fmt.Fprintf(b, "  - … and %d more\n", len(d.Added)-MaxDetailItems)
+			if i == limit {
+				fmt.Fprintf(b, "  - … and %d more\n", len(d.Added)-limit)
 				break
 			}
 			fmt.Fprintf(b, "  - %s\n", itemMD(it))
@@ -575,8 +587,8 @@ func writeDetailMD(b *strings.Builder, d Detail) {
 	if len(d.Grew) > 0 {
 		fmt.Fprintf(b, "- **Grew (%d):**\n", len(d.Grew))
 		for i, g := range d.Grew {
-			if i == MaxDetailItems {
-				fmt.Fprintf(b, "  - … and %d more\n", len(d.Grew)-MaxDetailItems)
+			if i == limit {
+				fmt.Fprintf(b, "  - … and %d more\n", len(d.Grew)-limit)
 				break
 			}
 			fmt.Fprintf(b, "  - %s — %d → %d\n", itemMD(g.Item), g.ThenSize, g.Item.Size)

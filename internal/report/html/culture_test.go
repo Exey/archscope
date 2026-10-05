@@ -1,6 +1,11 @@
 package html
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/exey/archscope/internal/modules/constructs"
+	"github.com/exey/archscope/internal/security"
+)
 
 // TestCurveScore locks in the shared curve's shape (used by both 🛡️ Dangers
 // and ⚡ Performance): a single HIGH-weight point source (7 points) should
@@ -84,9 +89,18 @@ func TestMemLeaksPoints_MirrorsDangerWeights(t *testing.T) {
 // (0-leak) platform must score curveScore(0)=100 on that slice, contributing
 // exactly perfMemLeaksWeightPct (10) points to r.perf, all else being equal.
 func TestMemoryLeaksWorth10PercentOfPerformance(t *testing.T) {
-	if perfComplexityWeightPct+perfMemLeaksWeightPct != 100 {
-		t.Fatalf("perfComplexityWeightPct(%d) + perfMemLeaksWeightPct(%d) must sum to 100",
-			perfComplexityWeightPct, perfMemLeaksWeightPct)
+	if perfComplexityWeightPct+perfMemLeaksWeightPct+perfRegexWeightPct+perfConcWeightPct != 100 {
+		t.Fatalf("⚡ Performance weights must sum to 100, got %d+%d+%d+%d",
+			perfComplexityWeightPct, perfMemLeaksWeightPct, perfRegexWeightPct, perfConcWeightPct)
+	}
+	for _, c := range []struct{ rx, cc bool }{{true, true}, {true, false}, {false, true}, {false, false}} {
+		cx, ml, rx, cc := perfWeights(c.rx, c.cc)
+		if cx+ml+rx+cc != 100 {
+			t.Errorf("perfWeights(%v,%v) = %d+%d+%d+%d, must sum to 100", c.rx, c.cc, cx, ml, rx, cc)
+		}
+		if (rx > 0) != c.rx || (cc > 0) != c.cc {
+			t.Errorf("perfWeights(%v,%v): a component's weight must exist exactly when it applies", c.rx, c.cc)
+		}
 	}
 
 	clean := cultureRow{n3: 5} // some fixed complexity signal, held constant below
@@ -110,5 +124,27 @@ func TestMemoryLeaksWorth10PercentOfPerformance(t *testing.T) {
 	}
 	if gotDrop <= 0 {
 		t.Error("introducing memory leaks should lower the Performance score, it didn't move")
+	}
+}
+
+// TestReviewIssuePointsAreSeverityWeighted: string / suspicious-code /
+// duplicate-code findings feed the 💻 Code Structure score through IssuePoints,
+// where a HIGH finding must outweigh a LOW one.
+func TestReviewIssuePointsAreSeverityWeighted(t *testing.T) {
+	mk := func(sev security.Severity, n int) constructs.CodeStructureReport {
+		r := constructs.CodeStructureReport{BugIssues: make([]constructs.CSIssue, n)}
+		for i := range r.BugIssues {
+			r.BugIssues[i].Severity = sev
+		}
+		return r
+	}
+	if got := mk(security.SevHigh, 10).IssuePoints(); got != 50 {
+		t.Errorf("10 HIGH = %v points, want 50", got)
+	}
+	if hi, lo := mk(security.SevHigh, 4).IssuePoints(), mk(security.SevLow, 4).IssuePoints(); hi <= lo {
+		t.Errorf("HIGH (%v) must weigh more than LOW (%v)", hi, lo)
+	}
+	if n := mk(security.SevLow, 3).ReviewIssueCount(); n != 3 {
+		t.Errorf("ReviewIssueCount = %d, want 3", n)
 	}
 }

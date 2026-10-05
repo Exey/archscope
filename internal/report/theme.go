@@ -455,6 +455,10 @@ code,.mono{font-family:var(--mono)}
 .as-cs__more{color:var(--text-faint); font-size:11px}
 .as-cs__folders{margin:0; padding-left:18px; font-size:12.5px; color:var(--text-dim)}
 .as-cs__folders li{margin:3px 0}
+.as-cs__sub{border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-elev-2); padding:10px 12px 8px; margin:12px 0}
+.as-cs__sub-head{font-size:13px; font-weight:650; margin-bottom:4px; display:flex; align-items:baseline; gap:6px; flex-wrap:wrap}
+.as-cs__sub-hint{color:var(--text-dim); font-size:11.5px; line-height:1.4; margin-bottom:8px}
+.as-cs__fix{color:var(--text-dim); font-size:11.5px; line-height:1.4}
 
 /* OOP vs POP module */
 .as-pop__verdict{font-size:15px; font-weight:650; margin-bottom:12px}

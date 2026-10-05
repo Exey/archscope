@@ -91,6 +91,7 @@ func cultureMetrics(r cultureRow) []evolution.Metric {
 	add(dimQuality, "Algorithms detected", r.algoCount, "", true)
 	if r.csHasData {
 		add(dimQuality, "Code-structure score", r.csScore, "%", true)
+		add(dimQuality, "String / bug / duplicate-code issues", r.reviewIssues, "", false)
 	}
 
 	// 🛡️ Security
@@ -105,6 +106,14 @@ func cultureMetrics(r cultureRow) []evolution.Metric {
 	add(dimPerf, "O(N²) hotspots", r.n2, "", false)
 	add(dimPerf, "Memory leaks (HIGH)", r.memLeaksHigh, "", false)
 	add(dimPerf, "Memory leaks (MEDIUM)", r.memLeaksMed, "", false)
+	if r.hasRegex {
+		add(dimPerf, "Regex issues (HIGH)", r.regexHigh, "", false)
+		add(dimPerf, "Regex issues (MEDIUM)", r.regexMed, "", false)
+	}
+	if r.hasConc {
+		add(dimPerf, "Concurrency / API issues (HIGH)", r.concHigh, "", false)
+		add(dimPerf, "Concurrency / API issues (MEDIUM)", r.concMed, "", false)
+	}
 	return m
 }
 
@@ -202,6 +211,16 @@ func cultureItems(res *result.AnalysisResult, r cultureRow, pmap map[string]lang
 					Note: fmt.Sprintf("%d params", o.Value), Path: o.FilePath, Line: o.Line,
 					Size: o.Value, Weight: 1}, key("params", relPath(root, o.FilePath), o.Symbol))
 			}
+			addIssues := func(kind string, set []constructs.CSIssue) {
+				for _, o := range set {
+					add(evolution.Item{Dim: dimQuality, Kind: kind, Name: o.Rule,
+						Note: o.Snippet, Path: o.FilePath, Line: o.Line, Weight: issueWeight(o.Severity)},
+						key("cs", o.RuleID, relPath(root, o.FilePath), o.Snippet))
+				}
+			}
+			addIssues("String issue", v.StringIssues)
+			addIssues("Suspicious code", v.BugIssues)
+			addIssues("Duplicate code", v.DupIssues)
 		case constructs.ComplexityReport:
 			for _, viol := range v.TimeViolations {
 				weight := 0
@@ -216,6 +235,18 @@ func cultureItems(res *result.AnalysisResult, r cultureRow, pmap map[string]lang
 				add(evolution.Item{Dim: dimPerf, Kind: bigOString(viol.Order), Name: viol.Symbol,
 					Note: viol.Reason, Path: viol.FilePath, Line: viol.Line, Weight: weight},
 					key("cx", relPath(root, viol.FilePath), viol.Symbol, fmt.Sprint(viol.Order)))
+			}
+		case constructs.RegexReport:
+			for _, o := range v.Issues {
+				add(evolution.Item{Dim: dimPerf, Kind: perfIssueKind(o, "Regex"), Name: o.Rule,
+					Note: o.Snippet, Path: o.FilePath, Line: o.Line, Weight: issueWeight(o.Severity)},
+					key("rx", o.RuleID, relPath(root, o.FilePath), o.Snippet))
+			}
+		case constructs.ConcurrencyReport:
+			for _, o := range v.Issues {
+				add(evolution.Item{Dim: dimPerf, Kind: "Concurrency / API", Name: o.Rule,
+					Note: o.Snippet, Path: o.FilePath, Line: o.Line, Weight: issueWeight(o.Severity)},
+					key("cc", o.RuleID, relPath(root, o.FilePath), o.Snippet))
 			}
 		case constructs.MemoryLeaksReport:
 			for _, fd := range v.Findings {
@@ -235,4 +266,25 @@ func cultureItems(res *result.AnalysisResult, r cultureRow, pmap map[string]lang
 		}
 	}
 	return items
+}
+
+// issueWeight is a review item's weight: the same HIGH 7 / MEDIUM 2 scale the
+// scored dimensions use, with unscored advice at 1.
+func issueWeight(s security.Severity) int {
+	switch s {
+	case security.SevHigh:
+		return 7
+	case security.SevMedium:
+		return 2
+	}
+	return 1
+}
+
+// perfIssueKind names a Regex-card item: the regex checks, or the Go
+// performance idioms that share the card.
+func perfIssueKind(o constructs.CSIssue, fallback string) string {
+	if o.Group != "" && o.Group != "Regex" {
+		return o.Group
+	}
+	return fallback
 }

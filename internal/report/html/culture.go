@@ -115,12 +115,12 @@ type cultureRow struct {
 	designBaseWeight              int // 30 when DDD/POP drives Base, else 75
 	langRichness                  int // raw keyword-coverage %, for display
 	hasLangRichness               bool
-	langRichnessScore             int // softened 0–100 score (same curve as Base)
-	langRichnessWeight            int // 45 when DDD/POP + richness both present, else 0
-	archLayers                    int // distinct architectural layers detected
-	archLayerScore                int // 50 (<5 layers) or 100 (≥5)
-	patternCount                  int // distinct deliberate (non-idiom) GoF patterns
-	patternScore                  int // 0/30/70/100 per patternCount
+	langRichnessScore             int  // softened 0–100 score (same curve as Base)
+	langRichnessWeight            int  // 45 when DDD/POP + richness both present, else 0
+	archLayers                    int  // distinct architectural layers detected
+	archLayerScore                int  // 50 (<5 layers) or 100 (≥5)
+	patternCount                  int  // distinct deliberate (non-idiom) GoF patterns
+	patternScore                  int  // 0/30/70/100 per patternCount
 	hasCouplingCohesion           bool // 🔗🧬 module ran and has Coupling data
 	hasCohesionData               bool // Cohesion specifically has data (only where a members extractor exists)
 	couplingScore, cohesionScore  int
@@ -138,6 +138,7 @@ type cultureRow struct {
 	algoScore                int
 	csScore, csWeight        int
 	csHasData                bool
+	reviewIssues             int // string + suspicious-code + duplicate-code findings
 
 	// Security: findings-based score (HIGH/MEDIUM out of every rule ArchScope
 	// checked) + 🩺 Traffic Health, weighted 30% when traffic data exists.
@@ -148,7 +149,7 @@ type cultureRow struct {
 	hasTrafficHealth         bool
 	trafficHealthWeight      int
 
-	// Performance: 🅾️ Complexity (90% W) + 💧 Memory Leaks (10% W) — a clean
+	// Performance: 🅾️ Complexity (70% W) + 💧 Memory Leaks (10% W) + 🔎 Regex (5% W) + 🧵 Concurrency (15% W) — a clean
 	// (0-leak) platform earns the full 10 points; leaks pull that slice down
 	// via the same curveScore as everything else.
 	n3, n2                    int
@@ -156,14 +157,45 @@ type cultureRow struct {
 	memLeaks                  int // High + Medium 💧 Memory Leaks findings, for display
 	memLeaksHigh, memLeaksMed int // same findings split by severity, for scoring
 	memLeaksScore             int
+
+	// 🔎 Regex and 🧵 Concurrency & API misuse — weighted slices of ⚡
+	// Performance when their module ran on this platform (otherwise their
+	// weight folds back into 🅾️ Complexity). Scored over HIGH×7 / MEDIUM×2.
+	hasRegex, hasConc                  bool
+	regexHigh, regexMed, regexTotal    int
+	regexScore                         int
+	concHigh, concMed, concTotal       int
+	concScore                          int
+	perfWCx, perfWMl, perfWRx, perfWCc int
 }
 
-// perfComplexityWeightPct and perfMemLeaksWeightPct split ⚡ Performance
-// between 🅾️ Big-O complexity and 💧 Memory Leaks; they must sum to 100.
+// ⚡ Performance is split between 🅾️ Big-O complexity, 💧 Memory Leaks,
+// 🔎 Regex and 🧵 Concurrency & API misuse; at full strength they sum to 100.
+// Regex and Concurrency only count where their module ran (see perfWeights).
 const (
-	perfComplexityWeightPct = 90
+	perfComplexityWeightPct = 70
 	perfMemLeaksWeightPct   = 10
+	perfRegexWeightPct      = 5
+	perfConcWeightPct       = 15
 )
+
+// perfWeights returns the ⚡ Performance weights for a platform; a component that
+// doesn't apply (no regex-capable files, no Go) gives its share back to
+// 🅾️ Complexity so a platform is never rewarded for a check it was never given.
+func perfWeights(hasRegex, hasConc bool) (cx, ml, rx, cc int) {
+	cx, ml = perfComplexityWeightPct, perfMemLeaksWeightPct
+	if hasRegex {
+		rx = perfRegexWeightPct
+	} else {
+		cx += perfRegexWeightPct
+	}
+	if hasConc {
+		cc = perfConcWeightPct
+	} else {
+		cx += perfConcWeightPct
+	}
+	return
+}
 
 // curveScoreFloor and curveScoreDecay shape the shared asymptotic scoring
 // curve used by both 🛡️ Dangers and ⚡ Performance: score = floor +
@@ -581,6 +613,7 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 		case constructs.CodeStructureReport:
 			r.csHasData = v.HasData()
 			r.csScore = codeStructureScore(v, r.loc)
+			r.reviewIssues = v.ReviewIssueCount()
 		case constructs.ComplexityReport:
 			r.perf = v.TimeHealth
 			for _, viol := range v.TimeViolations {
@@ -595,6 +628,12 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 			r.memLeaks = v.High + v.Medium
 			r.memLeaksHigh = v.High
 			r.memLeaksMed = v.Medium
+		case constructs.RegexReport:
+			r.hasRegex = true
+			r.regexHigh, r.regexMed, r.regexTotal = v.High, v.Medium, v.Total()
+		case constructs.ConcurrencyReport:
+			r.hasConc = true
+			r.concHigh, r.concMed, r.concTotal = v.High, v.Medium, v.Total()
 		}
 	}
 
@@ -807,8 +846,11 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 		r.complexityScore = curveScore(cxPoints)
 	}
 	r.memLeaksScore = curveScore(memLeaksPoints(r))
+	r.regexScore = curveScore(r.regexHigh*7 + r.regexMed*2)
+	r.concScore = curveScore(r.concHigh*7 + r.concMed*2)
+	r.perfWCx, r.perfWMl, r.perfWRx, r.perfWCc = perfWeights(r.hasRegex, r.hasConc)
 	r.perf = clampInt(
-		(r.complexityScore*perfComplexityWeightPct+r.memLeaksScore*perfMemLeaksWeightPct+50)/100,
+		(r.complexityScore*r.perfWCx+r.memLeaksScore*r.perfWMl+r.regexScore*r.perfWRx+r.concScore*r.perfWCc+50)/100,
 		0, 100)
 
 	r.overall = overallScore(r.design, r.quality, r.security, r.perf)
@@ -834,6 +876,8 @@ func codeStructureScore(v constructs.CodeStructureReport, loc int) int {
 		pen += float64(v.WorstNest.Value-constructs.MaxNestDepth) * 4
 	}
 	pen += float64(len(v.HighParamFuncs)) / kloc * 5
+	// 🔤 Strings, 🐛 Suspicious code and 👯 Duplicate code, severity-weighted per KLOC.
+	pen += math.Min(15, v.IssuePoints()/kloc)
 	if v.HasFolderSmells() {
 		pen += 8
 	}
@@ -942,7 +986,7 @@ func qualityTip(r cultureRow) string {
 		return "<div>DevOps: static-analysis pass rate across Dockerfile/Compose/Helm.</div>"
 	}
 	var b strings.Builder
-	b.WriteString(dimLine(modPanelID(r.key, "codestructure"), fmt.Sprintf("💻 %d%% Code Structure (%d%% W)", r.csScore, r.csWeight)))
+	b.WriteString(dimLine(modPanelID(r.key, "codestructure"), fmt.Sprintf("💻 %d%% Code Structure incl. %d string / bug / duplicate-code issues (%d%% W)", r.csScore, r.reviewIssues, r.csWeight)))
 	b.WriteString(dimLine(modPanelID(r.key, "datastructures"), fmt.Sprintf("🌳 %d%% Data Structures (%d%% W)", r.dsScore, dsWeightPct)))
 	b.WriteString(dimLine(modPanelID(r.key, "algorithms"), fmt.Sprintf("🔀 %d%% Algorithms (%d%% W)", r.algoScore, algoWeightPct)))
 	b.WriteString(dimLine(cultAnchorID("biggesttypes", r.key), fmt.Sprintf("📐 %d%% Big Types (%d%% W)", r.ltScore, r.ltWeight)))
@@ -967,8 +1011,14 @@ func perfTip(r cultureRow) string {
 		return "<div>DevOps: resource limits / budgets (neutral proxy).</div>"
 	}
 	var b strings.Builder
-	b.WriteString(dimLine(modPanelID(r.key, "complexity"), fmt.Sprintf("🅾️ %d 𝒪(n³)+ / %d 𝒪(n²) — %d%% (%d%% W)", r.n3, r.n2, r.complexityScore, perfComplexityWeightPct)))
-	b.WriteString(dimLine(modPanelID(r.key, "memoryleaks"), fmt.Sprintf("💧 %d Memory Leaks %d%% (%d%% W)", r.memLeaks, r.memLeaksScore, perfMemLeaksWeightPct)))
+	b.WriteString(dimLine(modPanelID(r.key, "complexity"), fmt.Sprintf("🅾️ %d 𝒪(n³)+ / %d 𝒪(n²) — %d%% (%d%% W)", r.n3, r.n2, r.complexityScore, r.perfWCx)))
+	b.WriteString(dimLine(modPanelID(r.key, "memoryleaks"), fmt.Sprintf("💧 %d Memory Leaks %d%% (%d%% W)", r.memLeaks, r.memLeaksScore, r.perfWMl)))
+	if r.hasRegex {
+		b.WriteString(dimLine(modPanelID(r.key, "regex"), fmt.Sprintf("🔎 %d Regex %d%% (%d%% W)", r.regexTotal, r.regexScore, r.perfWRx)))
+	}
+	if r.hasConc {
+		b.WriteString(dimLine(modPanelID(r.key, "concurrency"), fmt.Sprintf("🧵 %d Concurrency %d%% (%d%% W)", r.concTotal, r.concScore, r.perfWCc)))
+	}
 	return b.String()
 }
 

@@ -3631,7 +3631,7 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 		switch p.ModuleID {
 		case "architecture":
 			// rendered in the dedicated Architecture section above; skip
-		case "codestructure", "langrichness", "memoryleaks":
+		case "codestructure", "langrichness", "memoryleaks", "regex", "concurrency":
 			// rendered as their own subcards in 💡 Module Insights; skip
 		case "dddmodel", "oopvspop":
 			dddPanels = append(dddPanels, p)
@@ -3891,6 +3891,12 @@ func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup,
 	if ml := renderMemoryLeaksInsight(res, pg); ml != "" {
 		parts = append(parts, ml)
 	}
+	if rx := renderInsightCard(res, pg, "regex", "🔎", "Regex"); rx != "" {
+		parts = append(parts, rx)
+	}
+	if cc := renderInsightCard(res, pg, "concurrency", "🧵", "Concurrency & API Misuse"); cc != "" {
+		parts = append(parts, cc)
+	}
 	if t := renderTodosFixmes(files); t != "" {
 		parts = append(parts, t)
 	}
@@ -3964,6 +3970,23 @@ func renderMemoryLeaksInsight(res *result.AnalysisResult, pg *scanner.PlatformGr
 		var b strings.Builder
 		fmt.Fprintf(&b, `<div class="as-section" id="%s"><div class="as-section__head"><span class="ico">💧</span><h3>Memory Leaks</h3></div>`,
 			esc(modPanelID(p.Platform, p.ModuleID)))
+		b.WriteString(p.HTML)
+		b.WriteString(`</div>`)
+		return b.String()
+	}
+	return ""
+}
+
+// renderInsightCard renders a module's panel as a Module Insights subcard (the
+// 🔎 Regex and 🧵 Concurrency & API Misuse cards, after 💧 Memory Leaks).
+func renderInsightCard(res *result.AnalysisResult, pg *scanner.PlatformGroup, moduleID, icon, title string) string {
+	for _, p := range res.PanelsForPlatform(pg.Platform) {
+		if p.ModuleID != moduleID || strings.TrimSpace(p.HTML) == "" {
+			continue
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, `<div class="as-section" id="%s"><div class="as-section__head"><span class="ico">%s</span><h3>%s</h3></div>`,
+			esc(modPanelID(p.Platform, p.ModuleID)), esc(icon), esc(title))
 		b.WriteString(p.HTML)
 		b.WriteString(`</div>`)
 		return b.String()
