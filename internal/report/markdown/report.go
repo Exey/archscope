@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/exey/archscope/internal/evolution"
 	"github.com/exey/archscope/internal/git"
 	"github.com/exey/archscope/internal/langspec"
 	"github.com/exey/archscope/internal/modules"
@@ -47,6 +48,18 @@ func Render(res *result.AnalysisResult) string {
 	}
 
 	b.WriteString("---\n\n")
+
+	// ── Programming Culture evolution (only with --evolution) ─────────────────
+	if len(res.Evolution) > 0 {
+		b.WriteString("## 📈 Evolution — Programming Culture, then vs. now\n\n")
+		if tl, ok := evolution.NewTimeline(res.Evolution); ok {
+			fmt.Fprintf(&b, "### ⏱ Timeline: %s\n\n%s\n", tl.Heading(), evolution.RenderTimelineMarkdown(tl))
+		}
+		for _, c := range res.Evolution {
+			fmt.Fprintf(&b, "### %s\n\n%s\n", c.Ref.Title, evolution.RenderMarkdown(c))
+		}
+		b.WriteString("---\n\n")
+	}
 
 	// ── Per-platform sections ──────────────────────────────────────────────────
 	platforms := sortedPlatforms(res)

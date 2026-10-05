@@ -101,13 +101,18 @@ code,.mono{font-family:var(--mono)}
   background:var(--bg-elev); border:1px solid var(--border); border-radius:var(--radius);
   padding:20px 22px; margin:16px 0;
 }
-.as-section__head{display:flex; align-items:center; gap:9px; margin-bottom:14px}
+.as-section__head{margin-bottom:14px}
 .as-section__head h2,.as-section__head h3{font-size:15.5px}
 .as-section__head .ico{font-size:17px; line-height:1}
+/* Title bars are inline flow (not flex) so a copied title is ONE line —
+   browsers insert a newline between flex items when copying. */
+.as-section__head>*,.as-insights__head>*,.as-pm__head>*,.as-modpanel__head>*{display:inline; vertical-align:middle}
+.as-section__head .ico,.as-insights__head .ico,.as-pm__head .ico,.as-modpanel__head .ico{display:inline-block; margin-right:4px}
+.as-section__head .as-toggle{float:right}
 .as-section__sub{color:var(--text-dim); font-size:12.5px; margin:8px 0 14px}
 .as-sub{color:var(--text-dim); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; margin:14px 0 8px}
 .as-insights{margin:16px 0}
-.as-insights__head{display:flex; align-items:center; gap:9px; margin-bottom:10px}
+.as-insights__head{margin-bottom:10px}
 .as-insights__head h3{font-size:16px; font-weight:650; margin:0}
 .as-insights__head .ico{font-size:19px; line-height:1}
 .as-insights-grid{display:flex; flex-direction:column; gap:12px}
@@ -115,7 +120,7 @@ code,.mono{font-family:var(--mono)}
 
 /* Programming Methods group (design patterns · data structures · algorithms) */
 .as-pm{margin:16px 0}
-.as-pm__head{display:flex; align-items:center; gap:9px; margin-bottom:6px}
+.as-pm__head{margin-bottom:6px}
 .as-pm__head h3{font-size:16px; font-weight:650; margin:0}
 .as-pm__head .ico{font-size:19px; line-height:1}
 .as-pm .as-modpanel:first-of-type{margin-top:8px}
@@ -236,6 +241,79 @@ code,.mono{font-family:var(--mono)}
 .as-arch__version-name{font-size:12.5px; font-weight:600}
 .as-arch__version-num{font-size:13px; color:var(--accent); font-variant-numeric:tabular-nums}
 .as-arch__version-cat{font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.05em}
+
+/* 📈 Evolution — Programming Culture then-vs-now */
+.as-evo{margin-top:18px; padding:14px 16px; border:1px solid var(--border); border-radius:var(--radius); background:var(--bg-elev-2)}
+.as-evo--hint{display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 12px; padding:10px 14px; background:transparent; border-style:dashed}
+.as-evo__hintxt{color:var(--text-dim); font-size:12.5px}
+.as-evo__hintxt code{font-family:var(--mono); font-size:11.5px}
+.as-evo__bar{display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px; margin-bottom:10px}
+.as-evo__title{font-size:14px; font-weight:650}
+.as-evo__tabs{display:flex; flex-wrap:wrap; gap:6px; flex:1}
+.as-evo__tab{font:inherit; font-size:12px; padding:4px 12px; border-radius:999px; border:1px solid var(--border); background:var(--bg-inset); color:var(--text-dim); cursor:pointer}
+.as-evo__tab:hover{color:var(--text)}
+.as-evo__tab--on{background:var(--accent-dim); color:var(--text); border-color:var(--accent)}
+.as-evo__export{font-size:12px}
+.as-evo__meta{color:var(--text-dim); font-size:12.5px; margin:0 0 10px}
+.as-evo__meta code{font-family:var(--mono); font-size:11.5px}
+.as-evo__banner{display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; padding:10px 12px; border-radius:var(--radius-sm); border:1px solid var(--border); border-left-width:4px; margin-bottom:10px}
+.as-evo__banner--up{border-left-color:var(--good)}
+.as-evo__banner--down{border-left-color:var(--crit)}
+.as-evo__banner--flat{border-left-color:var(--text-faint)}
+.as-evo__verdict{font-weight:650; font-size:13.5px; margin-right:4px}
+.as-evo__chip{font-size:12px; font-weight:600; padding:2px 10px; border-radius:999px}
+.as-evo__chip--up{color:var(--good); background:var(--good-bg)}
+.as-evo__chip--down{color:var(--crit); background:var(--crit-bg)}
+.as-evo__chip--flat{color:var(--text-dim); background:var(--bg-inset)}
+.as-evo__move{font-size:12px; font-weight:600}
+.as-evo__then{color:var(--text-faint)}
+.as-evo__to{color:var(--text-faint); margin:0 4px}
+.as-evo__d{font-size:11.5px; font-weight:700; white-space:nowrap}
+.as-evo__d--up,.as-evo__dot--up{color:var(--good)}
+.as-evo__d--down,.as-evo__dot--down{color:var(--crit)}
+.as-evo__d--flat,.as-evo__dot--flat{color:var(--text-faint)}
+.as-evo__tag{font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--text-dim); background:var(--bg-inset); padding:1px 6px; border-radius:4px}
+.as-evo__details{margin-top:16px}
+.as-evo__dtitle{font-size:13px; font-weight:650; margin:16px 0 8px}
+.as-evo__dtitle--down{color:var(--crit)}
+.as-evo__dcard{border:1px solid var(--border); border-left-width:4px; border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:10px; background:var(--bg-elev)}
+.as-evo__dcard--down{border-left-color:var(--crit)}
+.as-evo__dcard--up{border-left-color:var(--good)}
+.as-evo__dcard--flat{border-left-color:var(--text-faint)}
+.as-evo__dhead{display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; font-size:12.5px}
+.as-evo__ddim{font-weight:650; margin-left:4px}
+.as-evo__dlist{list-style:none; margin:8px 0 0; padding:0; font-size:12.5px}
+.as-evo__dlist li{padding:2px 0}
+.as-evo__info{color:var(--text-dim); font-size:12px}
+.as-evo__dsub{font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-dim); margin:10px 0 4px}
+.as-evo__items{list-style:none; margin:0; padding:0; font-size:12.5px}
+.as-evo__items li{padding:3px 0; border-top:1px solid var(--border)}
+.as-evo__items li:first-child{border-top:0}
+.as-evo__more{color:var(--text-faint); font-style:italic}
+.as-evo__kind{display:inline-block; font-size:10.5px; font-weight:700; padding:1px 7px; border-radius:4px; background:var(--bg-inset); color:var(--text-dim); white-space:nowrap}
+.as-evo__kind--w7{background:var(--crit-bg); color:var(--crit)}
+.as-evo__kind--w3,.as-evo__kind--w2{background:var(--warn-bg); color:var(--warn)}
+.as-evo__note{color:var(--text-faint); font-size:11.5px; font-style:normal}
+.as-evo__resolved{color:var(--good); font-size:12px; margin:8px 0 0}
+.as-evo__better{margin-top:12px}
+.as-evo__better>summary,.as-evo__step>summary{cursor:pointer; font-size:13px; font-weight:600; padding:6px 0; display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px}
+.as-evo__step{border:1px solid var(--border); border-radius:var(--radius-sm); padding:4px 12px; margin-bottom:8px; background:var(--bg-elev-2)}
+.as-evo__step[open]>summary{border-bottom:1px solid var(--border); margin-bottom:4px}
+.as-evo__bells{display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:12px; margin-top:14px}
+.as-evo__bell{border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; background:var(--bg-elev)}
+.as-evo__bellhead{display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:12.5px; font-weight:600}
+.as-evo__row{display:grid; grid-template-columns:116px 1fr minmax(92px,auto); align-items:center; gap:10px; font-size:11.5px; padding:3px 0}
+.as-evo__rowlbl{color:var(--text-dim); white-space:nowrap}
+.as-evo__rowval{font-family:var(--mono); text-align:right; white-space:nowrap}
+.as-evo__track{position:relative; height:14px}
+.as-evo__track::before{content:""; position:absolute; left:0; right:0; top:6px; height:2px; background:var(--border); border-radius:2px}
+.as-evo__link{position:absolute; top:5px; height:4px; border-radius:2px; opacity:.85}
+.as-evo__link--up{background:var(--good)}
+.as-evo__link--down{background:var(--crit)}
+.as-evo__link--flat{background:var(--text-faint)}
+.as-evo__dot{position:absolute; top:2px; width:10px; height:10px; margin-left:-5px; border-radius:50%; box-sizing:border-box}
+.as-evo__dot--then{background:var(--bg-elev); border:2px solid var(--text-faint)}
+.as-evo__dot--now{background:currentColor; border:2px solid var(--bg-elev); box-shadow:0 0 0 1px currentColor}
 
 /* Design-pattern module */
 .as-dp{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:18px}
@@ -373,7 +451,8 @@ code,.mono{font-family:var(--mono)}
 
 /* Module panel wrapper inside a tab */
 .as-modpanel{margin-top:16px}
-.as-modpanel__head{display:flex; align-items:baseline; gap:10px; margin-bottom:4px}
+.as-modpanel__head{margin-bottom:4px}
+.as-modpanel__head>*{margin-right:7px}
 .as-modpanel__head h4{font-size:14px}
 
 /* Git tables */
@@ -586,7 +665,7 @@ a.as-chip:hover{opacity:.8}
 
 /* Contribution calendar */
 .as-contributions{margin-bottom:18px}
-.as-card__head{font-size:13px;font-weight:600;color:var(--text-dim);margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.as-card__head{font-size:13px;font-weight:600;color:var(--text-dim);margin-bottom:6px}
 .as-card__icon{font-size:14px}
 .as-head-badge{font-size:10px;font-family:var(--mono);color:var(--text-faint);background:var(--bg-inset);
   border:1px solid var(--border);border-radius:4px;padding:1px 6px;margin-left:4px}
@@ -1004,6 +1083,33 @@ const JS = `
       saveBtn.classList.add('as-prompt__save--ok');
       saveBtn.textContent='Saved!';
       setTimeout(function(){saveBtn.classList.remove('as-prompt__save--ok');saveBtn.textContent='Save .md';},1800);
+    }
+  });
+
+  // 📈 Evolution: range tabs switch the visible comparison; Export MD downloads
+  // the one on screen (its markdown sits in the pane's hidden <textarea>).
+  document.addEventListener('click',function(e){
+    var tab=e.target.closest('.as-evo__tab');
+    if(tab){
+      var root=tab.closest('.as-evo');
+      var idx=tab.getAttribute('data-evo');
+      root.querySelectorAll('.as-evo__tab').forEach(function(t){t.classList.toggle('as-evo__tab--on',t===tab);});
+      root.querySelectorAll('.as-evo__pane').forEach(function(p){p.style.display=(p.getAttribute('data-evo-pane')===idx)?'':'none';});
+      return;
+    }
+    var exp=e.target.closest('.as-evo__export');
+    if(exp){
+      var pane=null;
+      exp.closest('.as-evo').querySelectorAll('.as-evo__pane').forEach(function(p){if(p.style.display!=='none')pane=p;});
+      if(!pane)return;
+      var md=pane.querySelector('.as-evo__md');
+      if(!md)return;
+      var blob=new Blob([md.value],{type:'text/markdown;charset=utf-8'});
+      var a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download=pane.getAttribute('data-evo-file')||'evolution.md';
+      document.body.appendChild(a);a.click();document.body.removeChild(a);
+      setTimeout(function(){URL.revokeObjectURL(a.href);},1000);
     }
   });
 

@@ -5,6 +5,7 @@
 package result
 
 import (
+	"github.com/exey/archscope/internal/evolution"
 	"github.com/exey/archscope/internal/git"
 	"github.com/exey/archscope/internal/graph"
 	"github.com/exey/archscope/internal/langspec"
@@ -32,6 +33,10 @@ type AnalysisResult struct {
 	DevOpsTools    []scanner.DevOpsTool // CI/CD, container, orchestration tools
 	DevOpsLint     *scanner.DevOpsLint  // Dockerfile / compose / Helm static analysis (nil when none found)
 	K8sLint        *scanner.K8sLint     // Kubernetes manifest/cluster-dump static analysis (nil when none found)
+
+	// Evolution holds the Programming Culture then-vs-now comparisons requested
+	// with --evolution (empty when the flag is absent). See evolution.go.
+	Evolution []evolution.Comparison
 
 	// ModulePanels are report-module outputs already rendered to HTML, grouped
 	// per platform tab. This is the pragmatic form of DESIGN's ModuleResults:

@@ -17,6 +17,7 @@
 //	--lang-platforms  group all files of a language into one platform tab (shorthand for --group-by=language)
 //	--group-by      how to group platform tabs: language | folder | gitrepo (default: auto-detected)
 //	--scan-all-files  also scan git-submodule (third-party/vendored) directories, skipped by default
+//	--evolution     compare Programming Culture now vs. git history: 2w,1m,last-tag,<date>,<commit> or auto (e.g. --evolution 1m 2w)
 package main
 
 import (
@@ -32,6 +33,7 @@ import (
 	"time"
 
 	"github.com/exey/archscope/internal/config"
+	"github.com/exey/archscope/internal/evolution"
 	"github.com/exey/archscope/internal/fetch"
 	_ "github.com/exey/archscope/internal/lang" // register language specs
 	"github.com/exey/archscope/internal/modules"
@@ -42,12 +44,23 @@ import (
 	_ "github.com/exey/archscope/internal/modules/speccoverage"
 	_ "github.com/exey/archscope/internal/modules/traffic"
 	"github.com/exey/archscope/internal/report"
-	_ "github.com/exey/archscope/internal/report/html"     // register html emitter
-	_ "github.com/exey/archscope/internal/report/markdown" // register md emitter
-	_ "github.com/exey/archscope/internal/report/sarif"    // register sarif emitter
+	reporthtml "github.com/exey/archscope/internal/report/html" // register html emitter; also provides CultureScores
+	_ "github.com/exey/archscope/internal/report/markdown"      // register md emitter
+	_ "github.com/exey/archscope/internal/report/sarif"         // register sarif emitter
 	"github.com/exey/archscope/internal/result"
 	"github.com/exey/archscope/internal/scanner"
 )
+
+// isExtraEvolutionSpec reports whether arg is a further --evolution value:
+// spec-shaped (see evolution.LooksLikeSpec) and not the name of an existing
+// file or directory, which is far more likely to be the scan target.
+func isExtraEvolutionSpec(arg string) bool {
+	if strings.HasPrefix(arg, "-") || !evolution.LooksLikeSpec(arg) {
+		return false
+	}
+	_, err := os.Stat(arg)
+	return err != nil
+}
 
 // exitCodeError is returned by run when a specific exit code is required.
 // Exit code 2 signals --fail-on threshold exceeded; 1 is reserved for
@@ -59,13 +72,12 @@ type exitCodeError struct {
 
 func (e *exitCodeError) Error() string { return e.msg }
 
-func main() {
-	// Pre-pass: walk os.Args to separate the one positional argument (target
-	// path or URL) from the flag arguments. This lets flags appear in any
-	// position relative to the target:
-	//   archscope ~/repo --open
-	//   archscope --open ~/repo
-	//
+// splitArgs separates the one positional argument (target path or URL) from
+// the flag arguments, so flags may appear in any position relative to the target:
+//
+//	archscope ~/repo --open
+//	archscope --open ~/repo
+func splitArgs(rawArgs []string) (target string, flagArgs []string, err error) {
 	// valFlags lists flags whose next argument is their value (no '=' inline).
 	valFlags := map[string]bool{
 		"output": true, "o": true,
@@ -76,41 +88,66 @@ func main() {
 		"fail-on":  true,
 		"group-by": true,
 	}
-	rawArgs := os.Args[1:]
-	var target string
-	var flagArgs []string
 	for i := 0; i < len(rawArgs); i++ {
 		a := rawArgs[i]
 		if a == "--" {
 			for _, rest := range rawArgs[i+1:] {
-				if target == "" {
-					target = rest
-				} else {
-					fmt.Fprintf(os.Stderr, "archscope: unexpected argument %q\n", rest)
-					os.Exit(1)
+				if target != "" {
+					return "", nil, fmt.Errorf("unexpected argument %q", rest)
 				}
+				target = rest
 			}
 			break
 		}
 		if !strings.HasPrefix(a, "-") {
-			if target == "" {
-				target = a
-			} else {
-				fmt.Fprintf(os.Stderr, "archscope: unexpected argument %q (target already set to %q)\n", a, target)
-				os.Exit(1)
+			if target != "" {
+				return "", nil, fmt.Errorf("unexpected argument %q (target already set to %q)", a, target)
 			}
+			target = a
 			continue
 		}
-		flagArgs = append(flagArgs, a)
 		// For flags that take a separate value arg (not inline with '='),
 		// consume the next raw argument so it doesn't get mis-classified.
 		name := strings.TrimLeft(a, "-")
-		if idx := strings.IndexByte(name, '='); idx < 0 && valFlags[name] {
+		flagName, _, inline := strings.Cut(name, "=")
+		switch {
+		case flagName == "evolution":
+			// --evolution takes several space-separated specs ("--evolution 1m 2w"
+			// = two baselines + now = three points). The first value is taken
+			// as-is; further args join it only while they are unmistakably specs
+			// (duration/date/last-tag/auto/commit id) and not an existing path, so
+			// `--evolution 1m ~/repo` and `--evolution 1m 2w ./repo` both still
+			// find their target.
+			val := ""
+			if inline {
+				val = a[strings.IndexByte(a, '=')+1:]
+			} else if i+1 < len(rawArgs) && !strings.HasPrefix(rawArgs[i+1], "-") {
+				i++
+				val = rawArgs[i]
+			}
+			for i+1 < len(rawArgs) && isExtraEvolutionSpec(rawArgs[i+1]) {
+				i++
+				val += "," + rawArgs[i]
+			}
+			flagArgs = append(flagArgs, "--evolution="+val)
+		case !inline && valFlags[name]:
+			flagArgs = append(flagArgs, a)
 			if i+1 < len(rawArgs) {
 				i++
 				flagArgs = append(flagArgs, rawArgs[i])
 			}
+		default:
+			flagArgs = append(flagArgs, a)
 		}
+	}
+	return target, flagArgs, nil
+}
+
+func main() {
+	target, flagArgs, err := splitArgs(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "archscope: %v\n", err)
+		os.Exit(1)
 	}
 
 	fs := flag.NewFlagSet("archscope", flag.ContinueOnError)
@@ -129,6 +166,7 @@ func main() {
 		failOn        string
 		groupBy       string
 		scanAllFiles  bool
+		evolutionSpec string
 	)
 
 	fs.BoolVar(&openFlag, "open", false, "open the HTML report in the browser when done")
@@ -143,6 +181,8 @@ func main() {
 	fs.StringVar(&failOn, "fail-on", "", "exit 2 when findings exist at or above threshold: low | medium | high")
 	fs.StringVar(&groupBy, "group-by", "", "how to group platform tabs: language | folder | gitrepo (default: auto-detected from .git count, prompts interactively when 2+ repos are found)")
 	fs.BoolVar(&scanAllFiles, "scan-all-files", false, "also scan git-submodule (third-party/vendored) directories, skipped by default")
+
+	fs.StringVar(&evolutionSpec, "evolution", "", "compare Programming Culture now vs. git history, comma- or space-separated: 2w | 1m | 3m | last-tag | YYYY-MM-DD | <commit> | auto (= 2w,1m,last-tag)")
 
 	if err := fs.Parse(flagArgs); err != nil {
 		if err != flag.ErrHelp {
@@ -174,7 +214,7 @@ func main() {
 		groupBy = "language"
 	}
 
-	if err := run(target, ref, depth, cfgPath, outputDir, format, failOn, groupBy, openFlag, renderModules, scanAllFiles); err != nil {
+	if err := run(target, ref, depth, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec, openFlag, renderModules, scanAllFiles); err != nil {
 		if ec, ok := err.(*exitCodeError); ok {
 			if ec.msg != "" {
 				fmt.Fprintln(os.Stderr, ec.msg)
@@ -188,7 +228,7 @@ func main() {
 
 // run executes the full analysis. Deferred cleanup (clone temp dir removal)
 // fires on every return path because os.Exit in main would bypass it.
-func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, groupBy string, openFlag, renderModules, scanAllFiles bool) error {
+func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec string, openFlag, renderModules, scanAllFiles bool) error {
 	cfg := config.Load(cfgPath)
 	if outputDir == "" {
 		outputDir = cfg.Output.Dir
@@ -246,6 +286,12 @@ func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, grou
 	if resolved.WasClone {
 		res.IsRemote = true
 		res.SourceURL = target
+	}
+
+	if specs := evolution.ParseSpecs(evolutionSpec); len(specs) > 0 {
+		res.Evolution = result.RunEvolution(res, cfg, specs, reporthtml.CultureScores, func(msg string) {
+			fmt.Printf(" → [%5.1fs] %s\n", time.Since(pipelineStart).Seconds(), msg)
+		})
 	}
 
 	printCapabilityTable(res)
@@ -395,6 +441,10 @@ Flags:
                       (default: auto — one git repo groups by language, 2+ prompts interactively)
   --render-modules    include the Modules & Microservices section (and its CDN-loaded graphs); omitted by default
   --scan-all-files    also scan git-submodule (third-party/vendored) directories, skipped by default
+  --evolution <list>  compare Programming Culture now vs. git history (adds a 📈 Evolution card + MD export).
+                      Comma-separated: 2w | 14d | 1m | 3m | 1y | last-tag | YYYY-MM-DD | <commit/branch/tag>
+                      or "auto" (= 2w,1m,last-tag). Several values: comma- or space-separated,
+                      e.g. --evolution 1m 2w  (3 points: 1 month ago -> 2 weeks ago -> now)
 `)
 }
 

@@ -35,7 +35,7 @@ import (
 // can swing every dimension wildly, so the read isn't meaningful. DevOps is
 // exempt (it has no LOC of its own; it's scored from the DevOps Health Score
 // instead).
-const minCultureLOC = 3000
+const minCultureLOC = 1000
 
 // devLevel is one rung on the seniority ladder: the inclusive lower bound of
 // the 0–100 overall culture score that lands on it, plus an optional minDim
@@ -378,6 +378,9 @@ func renderProgrammingCulture(res *result.AnalysisResult) string {
 	}
 	b.WriteString(`</tbody></table></div>`)
 
+	// 📈 Evolution subcard (then-vs-now from git history) or its CLI hint.
+	b.WriteString(renderEvolution(res))
+
 	// Priority issues from Programming Methods.
 	platforms := res.Scan.PlatformsOrdered()
 	pmap := make(map[string]langspec.Platform, len(res.Files))
@@ -495,6 +498,12 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 	platFiles := res.FilesForPlatform(pg.Platform)
 	for _, f := range platFiles {
 		r.loc += f.LineCount
+		// Tests (and benchmarks) are not product code: their long functions,
+		// types and TODOs say nothing about the design being scored. The report
+		// modules (complexity, code structure, memory leaks) already skip them.
+		if security.IsTestOrBenchPath(f.FilePath) {
+			continue
+		}
 		for _, bf := range f.BigFunctions {
 			if bf.LineCount > cultureLongFuncMinLines {
 				r.godFuncs++
@@ -595,7 +604,7 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 	r.secTotalRules = len(security.Default.Rules())
 	for _, rr := range res.Security {
 		for _, f := range rr.Findings {
-			if pmap[f.FullPath] != pg.Platform {
+			if pmap[f.FullPath] != pg.Platform || security.IsTestOrBenchPath(f.FullPath) {
 				continue
 			}
 			switch rr.Rule.Severity {

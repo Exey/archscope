@@ -15,6 +15,43 @@ go run ./cmd/archscope ~/code --open
 
 ![report.png](https://i.postimg.cc/vb5zbqx3/collage-4columns.png)
 
+## 📈 Evolution — what got better, what got worse
+
+Add `--evolution` and ArchScope also scores the code **as it was in git history**, with the exact same 🔰 Programming Culture model, and adds a **📈 Evolution** card under the Programming Culture table:
+
+- a verdict banner (`▲ 5 better · ▼ 2 worse`) and a then → now table per platform and dimension, plus a dumbbell chart per dimension;
+- **▼ What got worse, and where** — below each comparison, for every platform/dimension that dropped: the signals that moved (`Long functions 3 → 4`, `MEDIUM findings 5 → 14`, `O(N²) hotspots 8 → 54`, …), the **offenders introduced since the baseline** with `file:line` links (new findings, new O(N²) functions, new 300-line functions, deeper nesting), the ones that **grew**, and how many were **resolved**. What got better is listed too, collapsed;
+- with **two or more baselines, a ⏱ Timeline tab** leads: `--evolution 1m 2w` gives three points — 1 month ago → 2 weeks ago → now — as a table (`60 → 70 → 80`), a multi-dot track per dimension, and each leg as its own step with its own what-got-worse details.
+
+Switch views with the tabs; **⬇ Export MD** downloads the view on screen. `--format md` includes the same tables and details.
+
+```bash
+# three points on the timeline: 1 month ago -> 2 weeks ago -> now
+go run ./cmd/archscope ~/code --evolution 1m 2w --open
+
+# 2 weeks and 1 month back, plus everything since the last git tag
+go run ./cmd/archscope ~/code --evolution 2w,1m,last-tag --open
+
+# shorthand for exactly that set (last-tag is skipped quietly when the repo has no tags)
+go run ./cmd/archscope ~/code --evolution auto
+
+# since a specific commit, branch, tag or date — mix freely with the above
+go run ./cmd/archscope ~/code --evolution a1b2c3d,release/1.4,2026-09-01
+```
+
+| Value | Baseline |
+|-------|----------|
+| `2w`, `14d`, `1m`, `3m`, `1y` | the last commit that is at least that old |
+| `last-tag` | the most recent tag (the previous one when `HEAD` itself is tagged) |
+| `YYYY-MM-DD` | the repository as of the end of that day |
+| `<sha>` · `<branch>` · `<tag>` | exactly that commit |
+| `auto` | `2w,1m,last-tag` |
+
+Give several baselines either comma-separated (`--evolution 2w,1m,last-tag`) or space-separated (`--evolution 1m 2w`). Space-separated values are only picked up when they are unmistakably specs — a duration, a date, `last-tag`, `auto` or a commit id (7+ hex chars) that is not also an existing path — so `--evolution 1m 2w ./repo` still finds its target. Branch names, tags and `HEAD~N` go in the comma form: `--evolution 1m,release/1.4`.
+
+How it works: each baseline commit is extracted with `git archive` into a temp dir (your checkout and index are never touched), analysed with the same config, scored, and diffed against the **current working tree**. Scoring runs once per distinct commit, so expect roughly one extra analysis per range (a few seconds each — about 4 s on a 100k-line repo). Specs that can't be resolved (no tags, history shorter than the range, unknown ref) are reported in the progress log and skipped. The scanned path must be inside a git repository; with a remote URL, keep full history (`--depth 0`, the default) so older commits exist.
+
+
 ## What the Report Contains
 
 1. **Summary bar** — lines of code, source files, declarations, modules, **Danger rate** (0–100% scaled from the 1000-point index), and platform count. One tab per detected language.
@@ -197,6 +234,7 @@ go build -o archscope ./cmd/archscope
 | `--group-by` | how to group platform tabs: `language` \| `folder` \| `gitrepo` | auto-detected (see below) |
 | `--render-modules` | include the Modules & Microservices section (file inventory, declarations, its graph) per platform, plus the global Architecture Graph — omitted by default | off |
 | `--scan-all-files` | also scan git-submodule (third-party/vendored) directories | off — submodules are skipped by default |
+| `--evolution` | compare 🔰 Programming Culture against git history: `2w`, `1m`, `last-tag`, a date, a commit/branch/tag (comma- or space-separated, e.g. `1m 2w`) or `auto` — see [Evolution](#-evolution--what-got-better-what-got-worse) | off |
 
 Outputs are written as `<project-name>.html`, `<project-name>.md`, and/or `<project-name>.sarif` inside the output directory.
 
@@ -343,6 +381,7 @@ internal/
     universal/   cross-language rules (secrets, private keys, SQLi)
   graph/       module dependency graph + PageRank + edges
   git/         history, blame, branching-model classifier
+  evolution/   Programming Culture then-vs-now: baseline resolution (2w · last-tag · date · commit), git-archive checkout, score diff + Markdown
   fetch/       remote git-URL resolution (clone + cleanup)
   modules/     pluggable report modules
     arch/          architecture: client pattern detection + backend layered view

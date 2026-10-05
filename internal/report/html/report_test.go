@@ -70,3 +70,14 @@ func TestRenderIsSelfContained(t *testing.T) {
 		t.Errorf("report should be self-contained (no external link/src)")
 	}
 }
+
+func TestSpaceTitleParts(t *testing.T) {
+	in := `<div class="as-section__head"><span class="ico">🔰</span><h2>Programming Culture</h2><span class="as-cult-badge">Senior</span></div>` +
+		`<div class="as-section"><p>x</p></div>`
+	got := spaceTitleParts(in)
+	want := `<div class="as-section__head"><span class="ico">🔰</span> <h2>Programming Culture</h2> <span class="as-cult-badge">Senior</span></div>` +
+		`<div class="as-section"><p>x</p></div>`
+	if got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}

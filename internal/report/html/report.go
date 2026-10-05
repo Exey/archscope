@@ -9,6 +9,7 @@ package html
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -127,7 +128,21 @@ func Render(res *result.AnalysisResult) string {
 	b.WriteString(`</div><script>`)
 	b.WriteString(report.JS)
 	b.WriteString(`</script></body></html>`)
-	return b.String()
+	return spaceTitleParts(b.String())
+}
+
+// titleHeadRe matches a title bar's contents (icon, h2/h3/h4, badges — never
+// nested divs) so spaceTitleParts can separate its parts.
+var titleHeadRe = regexp.MustCompile(`(<div class="as-(?:section|insights|pm|modpanel)__head">)(.*?)(</div>)`)
+
+// spaceTitleParts puts a real space between the adjacent elements of every
+// title bar. The bars are inline flow (see theme.go), so a copied title reads
+// "🔰 Programming Culture" on ONE line instead of one element per line.
+func spaceTitleParts(doc string) string {
+	return titleHeadRe.ReplaceAllStringFunc(doc, func(m string) string {
+		sub := titleHeadRe.FindStringSubmatch(m)
+		return sub[1] + strings.ReplaceAll(sub[2], "><", "> <") + sub[3]
+	})
 }
 
 func projectTypeSuffix(langs string) string {
