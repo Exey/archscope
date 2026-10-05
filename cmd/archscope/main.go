@@ -17,6 +17,7 @@
 //	--lang-platforms  group all files of a language into one platform tab (shorthand for --group-by=language)
 //	--group-by      how to group platform tabs: language | folder | gitrepo (default: auto-detected)
 //	--scan-all-files  also scan git-submodule (third-party/vendored) directories, skipped by default
+//	--review        review mode: Evolution since <commit|branch> with GitLab MR-line buttons
 //	--evolution     compare Programming Culture now vs. git history: 2w,1m,last-tag,<date>,<commit> or auto (e.g. --evolution 1m 2w)
 package main
 
@@ -62,6 +63,11 @@ func isExtraEvolutionSpec(arg string) bool {
 	return err != nil
 }
 
+func isExistingDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}
+
 // exitCodeError is returned by run when a specific exit code is required.
 // Exit code 2 signals --fail-on threshold exceeded; 1 is reserved for
 // operational errors (returned as plain errors from run).
@@ -87,6 +93,7 @@ func splitArgs(rawArgs []string) (target string, flagArgs []string, err error) {
 		"depth":    true,
 		"fail-on":  true,
 		"group-by": true,
+		"against":  true,
 	}
 	for i := 0; i < len(rawArgs); i++ {
 		a := rawArgs[i]
@@ -130,6 +137,15 @@ func splitArgs(rawArgs []string) (target string, flagArgs []string, err error) {
 				val += "," + rawArgs[i]
 			}
 			flagArgs = append(flagArgs, "--evolution="+val)
+		case flagName == "review" && !inline:
+			// Bare `--review` reviews against the local default branch ("auto");
+			// a following value is the ref, unless it is a flag or the scan target.
+			val := "auto"
+			if i+1 < len(rawArgs) && !strings.HasPrefix(rawArgs[i+1], "-") && !isExistingDir(rawArgs[i+1]) {
+				i++
+				val = rawArgs[i]
+			}
+			flagArgs = append(flagArgs, "--review="+val)
 		case !inline && valFlags[name]:
 			flagArgs = append(flagArgs, a)
 			if i+1 < len(rawArgs) {
@@ -167,6 +183,8 @@ func main() {
 		groupBy       string
 		scanAllFiles  bool
 		evolutionSpec string
+		reviewRef     string
+		againstRef    string
 	)
 
 	fs.BoolVar(&openFlag, "open", false, "open the HTML report in the browser when done")
@@ -183,6 +201,10 @@ func main() {
 	fs.BoolVar(&scanAllFiles, "scan-all-files", false, "also scan git-submodule (third-party/vendored) directories, skipped by default")
 
 	fs.StringVar(&evolutionSpec, "evolution", "", "compare Programming Culture now vs. git history, comma- or space-separated: 2w | 1m | 3m | last-tag | YYYY-MM-DD | <commit> | auto (= 2w,1m,last-tag)")
+
+	fs.StringVar(&reviewRef, "review", "", "review mode: Evolution since a commit or branch (merge-base, like a merge request diff) with per-issue GitLab \"MR with line\" buttons; bare --review (or auto) = the local default branch (origin/HEAD, main, master, develop); \"last-commit\" = HEAD~1")
+
+	fs.StringVar(&againstRef, "against", "", "review mode: compare the branch under review with this branch instead of the one you are on (e.g. --review feat/x --against main)")
 
 	if err := fs.Parse(flagArgs); err != nil {
 		if err != flag.ErrHelp {
@@ -214,7 +236,7 @@ func main() {
 		groupBy = "language"
 	}
 
-	if err := run(target, ref, depth, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec, openFlag, renderModules, scanAllFiles); err != nil {
+	if err := run(target, ref, depth, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec, reviewRef, againstRef, openFlag, renderModules, scanAllFiles); err != nil {
 		if ec, ok := err.(*exitCodeError); ok {
 			if ec.msg != "" {
 				fmt.Fprintln(os.Stderr, ec.msg)
@@ -228,7 +250,7 @@ func main() {
 
 // run executes the full analysis. Deferred cleanup (clone temp dir removal)
 // fires on every return path because os.Exit in main would bypass it.
-func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec string, openFlag, renderModules, scanAllFiles bool) error {
+func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec, reviewRef, againstRef string, openFlag, renderModules, scanAllFiles bool) error {
 	cfg := config.Load(cfgPath)
 	if outputDir == "" {
 		outputDir = cfg.Output.Dir
@@ -288,10 +310,15 @@ func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, grou
 		res.SourceURL = target
 	}
 
-	if specs := evolution.ParseSpecs(evolutionSpec); len(specs) > 0 {
-		res.Evolution = result.RunEvolution(res, cfg, specs, reporthtml.CultureScores, func(msg string) {
-			fmt.Printf(" → [%5.1fs] %s\n", time.Since(pipelineStart).Seconds(), msg)
-		})
+	progressFn := func(msg string) {
+		fmt.Printf(" → [%5.1fs] %s\n", time.Since(pipelineStart).Seconds(), msg)
+	}
+	specs := evolution.ParseSpecs(evolutionSpec)
+	switch {
+	case reviewRef != "":
+		res.Evolution = result.RunReview(res, cfg, reviewRef, againstRef, specs, reporthtml.CultureScores, progressFn)
+	case len(specs) > 0:
+		res.Evolution = result.RunEvolution(res, cfg, specs, reporthtml.CultureScores, progressFn)
 	}
 
 	printCapabilityTable(res)
@@ -441,6 +468,9 @@ Flags:
                       (default: auto — one git repo groups by language, 2+ prompts interactively)
   --render-modules    include the Modules & Microservices section (and its CDN-loaded graphs); omitted by default
   --scan-all-files    also scan git-submodule (third-party/vendored) directories, skipped by default
+  --review [<ref>]    review mode (bare = against the local default branch: origin/HEAD, main, master, develop): Evolution since a commit/branch (merge-base, like an MR diff) plus GitLab
+                      "MR with line" buttons on every introduced issue; "last-commit" = HEAD~1
+  --against <ref>     with --review <branch>: compare that branch with <ref> (default: the branch you are on)
   --evolution <list>  compare Programming Culture now vs. git history (adds a 📈 Evolution card + MD export).
                       Comma-separated: 2w | 14d | 1m | 3m | 1y | last-tag | YYYY-MM-DD | <commit/branch/tag>
                       or "auto" (= 2w,1m,last-tag). Several values: comma- or space-separated,

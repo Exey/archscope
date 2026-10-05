@@ -49,6 +49,43 @@ go run ./cmd/archscope ~/code --evolution a1b2c3d,release/1.4,2026-09-01
 
 Give several baselines either comma-separated (`--evolution 2w,1m,last-tag`) or space-separated (`--evolution 1m 2w`). Space-separated values are only picked up when they are unmistakably specs — a duration, a date, `last-tag`, `auto` or a commit id (7+ hex chars) that is not also an existing path — so `--evolution 1m 2w ./repo` still finds its target. Branch names, tags and `HEAD~N` go in the comma form: `--evolution 1m,release/1.4`.
 
+### 🦊 Review mode — `--review [<branch|commit>]`
+
+Reviewing a merge request? `--review` turns the 📈 Evolution card into **📈 Evolution (Review mode)**: it compares a branch with where it left its base — the merge-base, exactly what an MR diffs — and adds GitLab links to every issue it finds.
+
+**Which side is which?** ArchScope works it out locally and the report always says (`Reviewing origin/feat/x against dev (merge-base 492506d)`). The ref you name is resolved in your local repository, **also as `origin/<name>`** — so a branch someone pushed that you never checked out works:
+
+| You run | Reviewed | Compared against |
+|---|---|---|
+| `--review feat/x` (any branch that is not a target) | **`feat/x`** — even if only `origin/feat/x` exists; no checkout needed | the branch you are on (merge-base) |
+| `--review feat/x --against main` | `feat/x` | `main` (merge-base) |
+| `--review main` / `develop` / `master` / `dev` / an ancestor of `HEAD` | what you have checked out (`HEAD`) | that target (merge-base) |
+| `--review` (bare) or `--review auto` | what you have checked out | the local default branch: `origin/HEAD` → `main` → `master` → `develop` → `origin/*` |
+| `--review last-commit` | what you have checked out | `HEAD~1` |
+| `--review feat/x` while `feat/x` is checked out | `feat/x` | the default branch |
+
+```bash
+go run ./cmd/archscope ~/code --review feat/PHARMZAKAZ-994p2 --open    # from dev: what does this branch add?
+go run ./cmd/archscope ~/code --review main --open                     # on my branch: what do I add vs main?
+go run ./cmd/archscope ~/code --review feat/x --against main           # pin the base explicitly
+go run ./cmd/archscope ~/code --review last-commit --open              # "Evolution since the last commit"
+```
+
+If you are checked out *on* the default branch with a bare `--review`, there is nothing to merge, so it reviews the last commit and says so. A local branch can lag its remote — if `main` is stale, pass `origin/main` after a `git fetch`. If the ref cannot be found, the card says so instead of showing the generic hint.
+
+**What the card shows**
+
+- **Changes: 29 files +1860 −1072** and the **file list**, files with issues first: every file is **✓ OK** (green) or **⚠ N issues** (red, expanded with the issues and their `MR ↗ L<line>` buttons) — an issue is anything the change *introduced or grew*: a new finding, an O(N²) function, a 300-line function, deeper nesting.
+- The usual Evolution comparison (score table, dumbbells, what got worse / better) for the reviewed branch vs its base.
+- Inputs for the 🦊 **GitLab project path**, the **host** to its right and the **MR number**, at the top of the card.
+
+The 🦊 **GitLab MR links** inputs hold the GitLab **project path** (`group/project`), the **host** on its right and the **MR number**. They are prefilled — project and host from `git remote get-url origin`, the MR number from `refs/merge-requests/<IID>/head` (local refs if you fetch them with `+refs/merge-requests/*:refs/remotes/origin/merge-requests/*`, otherwise `git ls-remote origin`; an MR whose head is `HEAD` wins) — editable, and remembered in your browser. Every issue under **What got worse, and where** gets an **MR ↗ L123** button that
+
+1. copies `path/to/file#L123` to the clipboard, ready to paste into a comment, and
+2. opens `https://<host>/<project>/-/merge_requests/<IID>/diffs#<file-sha1>_<old>_<new>` — GitLab's own diff-line anchor, computed from `git diff` so it lands on the line. With no MR number it opens `…/-/blob/<branch>/path#L123` instead.
+
+Lines that are not part of the diff fall back to the file anchor. `--review` can be combined with `--evolution` (`--review main --evolution 2w`) and works with the same scanned-inside-a-git-repo requirement.
+
 How it works: each baseline commit is extracted with `git archive` into a temp dir (your checkout and index are never touched), analysed with the same config, scored, and diffed against the **current working tree**. Scoring runs once per distinct commit, so expect roughly one extra analysis per range (a few seconds each — about 4 s on a 100k-line repo). Specs that can't be resolved (no tags, history shorter than the range, unknown ref) are reported in the progress log and skipped. The scanned path must be inside a git repository; with a remote URL, keep full history (`--depth 0`, the default) so older commits exist.
 
 
@@ -234,6 +271,8 @@ go build -o archscope ./cmd/archscope
 | `--group-by` | how to group platform tabs: `language` \| `folder` \| `gitrepo` | auto-detected (see below) |
 | `--render-modules` | include the Modules & Microservices section (file inventory, declarations, its graph) per platform, plus the global Architecture Graph — omitted by default | off |
 | `--scan-all-files` | also scan git-submodule (third-party/vendored) directories | off — submodules are skipped by default |
+| `--review` | review mode: review a branch (works for remote-only `origin/<name>`) against the one you are on, or review your checkout against a target like `main`; changed-file list with ✓ OK / ⚠ issues and GitLab "MR with line" buttons; bare = against the local default branch; `last-commit` = `HEAD~1` — see [Review mode](#-review-mode---review-commitbranch) | off |
+| `--against` | with `--review <branch>`: compare that branch with `<ref>` instead of the branch you are on | current branch |
 | `--evolution` | compare 🔰 Programming Culture against git history: `2w`, `1m`, `last-tag`, a date, a commit/branch/tag (comma- or space-separated, e.g. `1m 2w`) or `auto` — see [Evolution](#-evolution--what-got-better-what-got-worse) | off |
 
 Outputs are written as `<project-name>.html`, `<project-name>.md`, and/or `<project-name>.sarif` inside the output directory.

@@ -40,6 +40,48 @@ func (r TLRow) Series(dim int) (vals []int, ok []bool) {
 	return
 }
 
+// Constant reports whether the row has a reading at every point and never moved
+// meaningfully in any dimension (for DevOps, by no more than DevOpsNoise).
+func (r TLRow) Constant() bool {
+	for _, s := range r.Scores {
+		if s == nil {
+			return false
+		}
+	}
+	tol := 0
+	if r.IsDevOps {
+		tol = DevOpsNoise
+	}
+	for i := range Dims {
+		vals, _ := r.Series(i)
+		lo, hi := vals[0], vals[0]
+		for _, v := range vals {
+			lo, hi = min(lo, v), max(hi, v)
+		}
+		if hi-lo > tol {
+			return false
+		}
+	}
+	for _, s := range r.Scores {
+		if s.Level != r.Scores[0].Level {
+			return false
+		}
+	}
+	return true
+}
+
+// VisibleRows drops a DevOps row that never changed (see Comparison.VisibleRows).
+func (t Timeline) VisibleRows() []TLRow {
+	var out []TLRow
+	for _, r := range t.Rows {
+		if r.IsDevOps && r.Constant() {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
 // Timeline lines several baselines up in date order, ending at "now": with
 // `--evolution 1m 2w` that is 1 month ago → 2 weeks ago → now.
 type Timeline struct {
@@ -133,7 +175,7 @@ func RenderTimelineMarkdown(t Timeline) string {
 		b.WriteString("---:|")
 	}
 	b.WriteString("\n")
-	for _, r := range t.Rows {
+	for _, r := range t.VisibleRows() {
 		fmt.Fprintf(&b, "| %s |", r.Label)
 		for i := range Dims {
 			vals, ok := r.Series(i)

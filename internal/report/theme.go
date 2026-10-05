@@ -299,6 +299,30 @@ code,.mono{font-family:var(--mono)}
 .as-evo__better>summary,.as-evo__step>summary{cursor:pointer; font-size:13px; font-weight:600; padding:6px 0; display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px}
 .as-evo__step{border:1px solid var(--border); border-radius:var(--radius-sm); padding:4px 12px; margin-bottom:8px; background:var(--bg-elev-2)}
 .as-evo__step[open]>summary{border-bottom:1px solid var(--border); margin-bottom:4px}
+.as-gl{margin-bottom:14px; padding:12px 14px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-elev)}
+.as-gl__title{font-size:13px; font-weight:650; margin-bottom:4px}
+.as-rv{margin-bottom:14px}
+.as-rv__head{display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; font-size:13px; margin-bottom:8px}
+.as-rv__files{border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-elev); overflow:hidden}
+.as-rv__file{display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; padding:6px 12px; border-top:1px solid var(--border); font-size:12.5px}
+.as-rv__file:first-child{border-top:0}
+.as-rv__file>summary{display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; cursor:pointer; width:100%}
+.as-rv__file--bad{display:block; background:var(--crit-bg)}
+.as-rv__file--bad .as-evo__items{margin:6px 0 4px 4px}
+.as-rv__status{font-size:11px; font-weight:700; padding:1px 8px; border-radius:999px; white-space:nowrap}
+.as-rv__status--ok{color:var(--good); background:var(--good-bg)}
+.as-rv__status--bad{color:var(--crit); background:var(--bg-elev)}
+.as-rv__path{flex:1; min-width:200px; word-break:break-all}
+.as-gl__row{display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px}
+.as-gl__in{padding:6px 10px; background:var(--bg-inset); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:var(--mono); font-size:12px; outline:none}
+.as-gl__in:focus{border-color:var(--accent)}
+.as-gl__in--project{flex:1; min-width:200px}
+.as-gl__in--host{flex:1; min-width:200px}
+.as-gl__in--num{width:70px; margin-left:4px}
+.as-gl__mr{font-size:12px; color:var(--text-dim); white-space:nowrap}
+.as-gl__hint{display:block; margin-top:8px; font-size:11.5px; color:var(--text-faint)}
+.as-evo__mr{font:inherit; font-size:10.5px; font-weight:700; padding:1px 8px; border-radius:999px; border:1px solid var(--accent); background:transparent; color:var(--accent); cursor:pointer; white-space:nowrap; margin-left:4px}
+.as-evo__mr:hover{background:var(--accent-dim); color:var(--text)}
 .as-evo__bells{display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:12px; margin-top:14px}
 .as-evo__bell{border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; background:var(--bg-elev)}
 .as-evo__bellhead{display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:12.5px; font-weight:600}
@@ -1112,6 +1136,58 @@ const JS = `
       setTimeout(function(){URL.revokeObjectURL(a.href);},1000);
     }
   });
+
+  // 🦊 Review mode: GitLab settings persist in the browser; "MR ↗ L<line>" copies
+  // path#L<line> and opens the line in the merge request (or the file at the
+  // branch/commit when no MR number is known).
+  (function(){
+    var card=document.getElementById('as-gl-card');
+    if(!card)return;
+    var key=card.getAttribute('data-store')||'archscope-gl';
+    var ids=['as-gl-project','as-gl-host','as-gl-mr'];
+    var saved={};
+    try{saved=JSON.parse(localStorage.getItem(key)||'{}');}catch(e){}
+    ids.forEach(function(id){
+      var el=document.getElementById(id);
+      if(!el)return;
+      if(saved[id]!==undefined)el.value=saved[id];
+      el.addEventListener('input',function(){
+        saved[id]=el.value;
+        try{localStorage.setItem(key,JSON.stringify(saved));}catch(e){}
+      });
+    });
+    function val(id){return (document.getElementById(id).value||'').trim();}
+    function copy(text){
+      try{
+        if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text);return;}
+      }catch(e){}
+      var ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';
+      document.body.appendChild(ta);ta.select();
+      try{document.execCommand('copy');}catch(e){}
+      document.body.removeChild(ta);
+    }
+    document.addEventListener('click',function(e){
+      var btn=e.target.closest('.as-evo__mr');
+      if(!btn)return;
+      var path=btn.getAttribute('data-path'),line=btn.getAttribute('data-line');
+      var old=btn.getAttribute('data-old'),hash=btn.getAttribute('data-hash');
+      copy(path+'#L'+line);
+      var host=val('as-gl-host').replace(/\/+$/,''),project=val('as-gl-project').replace(/^\/+|\/+$/g,''),mr=val('as-gl-mr').replace(/[^0-9]/g,'');
+      var old0=btn.textContent;
+      btn.textContent='✓ copied';
+      setTimeout(function(){btn.textContent=old0;},1400);
+      if(!host||!project){card.scrollIntoView({behavior:'smooth',block:'center'});return;}
+      if(!/^https?:\/\//.test(host))host='https://'+host;
+      var url;
+      if(mr){
+        url=host+'/'+project+'/-/merge_requests/'+mr+'/diffs#'+hash;
+        if(old!==''&&old!=='-1')url+='_'+old+'_'+line;
+      }else{
+        url=host+'/'+project+'/-/blob/'+encodeURIComponent(card.getAttribute('data-ref')||'HEAD').replace(/%2F/g,'/')+'/'+path+'#L'+line;
+      }
+      window.open(url,'_blank','noopener');
+    });
+  })();
 
   // ── Accordion: click header to expand/collapse platform card ─────────────
   document.addEventListener('click',function(e){

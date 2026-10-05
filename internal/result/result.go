@@ -38,6 +38,12 @@ type AnalysisResult struct {
 	// with --evolution (empty when the flag is absent). See evolution.go.
 	Evolution []evolution.Comparison
 
+	// Review is set by --review: the merge request (and GitLab location) the run
+	// is about. nil outside review mode.
+	Review *evolution.Review
+	// ReviewNote explains why --review produced no comparison (unknown branch, …).
+	ReviewNote string
+
 	// ModulePanels are report-module outputs already rendered to HTML, grouped
 	// per platform tab. This is the pragmatic form of DESIGN's ModuleResults:
 	// the pipeline runs each applicable module against a platform's files and

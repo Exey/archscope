@@ -319,3 +319,60 @@ func TestLooksLikeSpec(t *testing.T) {
 		}
 	}
 }
+
+func TestUnchangedDevOpsIsHiddenAndNotCounted(t *testing.T) {
+	dev := sc("devops", 72, 72, 72, 72, 73, 4)
+	dev.IsDevOps, dev.Label = true, "DevOps"
+	go1 := sc("go", 60, 60, 60, 60, 60, 3)
+	go2 := sc("go", 70, 60, 60, 60, 62, 3)
+
+	c := Compare(Ref{Title: "x", SHA: "abc1234"}, []Score{go2, dev}, []Score{go1, dev})
+	if rows := c.VisibleRows(); len(rows) != 1 || rows[0].Key != "go" {
+		t.Errorf("unchanged DevOps must be hidden, got %+v", rows)
+	}
+	if c.Same != 3 || c.Better != 1 {
+		t.Errorf("DevOps must not inflate the unchanged count: better=%d same=%d", c.Better, c.Same)
+	}
+	if strings.Contains(RenderMarkdown(c), "DevOps") {
+		t.Error("markdown must not list unchanged DevOps")
+	}
+
+	dev2 := dev
+	dev2.Security = 60
+	c = Compare(Ref{Title: "x", SHA: "abc1234"}, []Score{go2, dev2}, []Score{go1, dev})
+	if len(c.VisibleRows()) != 2 || c.Worse != 1 {
+		t.Errorf("a changed DevOps row must show in the table and be counted: rows=%d worse=%d", len(c.VisibleRows()), c.Worse)
+	}
+}
+
+func TestUnexplainedMoveGetsNoDetailCard(t *testing.T) {
+	dev := sc("go", 71, 72, 72, 72, 73, 4)
+	dev2 := dev
+	dev2.Design = 70
+	c := Compare(Ref{Title: "x", SHA: "abc1234"}, []Score{dev2}, []Score{dev})
+	if len(c.WorseDetails) != 0 {
+		t.Errorf("a move with no signals must not produce a detail card: %+v", c.WorseDetails)
+	}
+	if c.Worse != 1 || len(c.VisibleRows()) != 1 {
+		t.Errorf("the change itself must still be counted and shown in the table: worse=%d rows=%d", c.Worse, len(c.VisibleRows()))
+	}
+	if strings.Contains(RenderMarkdown(c), "No tracked signal") {
+		t.Error("no placeholder text expected")
+	}
+}
+
+func TestDevOpsReweightNoiseIsIgnored(t *testing.T) {
+	mk := func(d int) Score {
+		s := sc("devops", 71+d, 71+d, 71+d, 71+d, 72+d, 4)
+		s.IsDevOps = true
+		return s
+	}
+	c := Compare(Ref{Title: "x", SHA: "abc1234"}, []Score{mk(-1)}, []Score{mk(0)})
+	if len(c.VisibleRows()) != 0 || c.Worse != 0 || c.Same != 0 {
+		t.Errorf("a uniform ±1 DevOps shift is noise: rows=%d worse=%d same=%d", len(c.VisibleRows()), c.Worse, c.Same)
+	}
+	c = Compare(Ref{Title: "x", SHA: "abc1234"}, []Score{mk(-3)}, []Score{mk(0)})
+	if len(c.VisibleRows()) != 1 || c.Worse == 0 {
+		t.Errorf("a real DevOps drop must show: rows=%d worse=%d", len(c.VisibleRows()), c.Worse)
+	}
+}

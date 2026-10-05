@@ -37,6 +37,10 @@ type evoPane struct {
 // leads: oldest → … → now, i.e. `--evolution 1m 2w` shows three points.
 func renderEvolution(res *result.AnalysisResult) string {
 	if len(res.Evolution) == 0 {
+		if res.ReviewNote != "" {
+			return `<div class="as-evo as-evo--hint"><span class="as-evo__title">📈 Evolution (Review mode)</span>` +
+				`<span class="as-evo__hintxt">⚠ The review could not run — ` + esc(res.ReviewNote) + `</span></div>`
+		}
 		return evoHint
 	}
 	var panes []evoPane
@@ -53,12 +57,18 @@ func renderEvolution(res *result.AnalysisResult) string {
 			label: c.Ref.Label, title: c.Ref.Title + " · " + c.Ref.Short(),
 			file: "evolution-" + slug(c.Ref.Label) + ".md",
 			md:   "# Programming Culture evolution — " + c.Ref.Title + "\n\n" + evolution.RenderMarkdown(c),
-			body: func(b *strings.Builder) { writeComparisonBody(b, c) },
+			body: func(b *strings.Builder) {
+				writeComparisonBody(b, c, reviewFor(res, c))
+			},
 		})
 	}
 
+	title := "📈 Evolution"
+	if res.Review != nil {
+		title = "📈 Evolution (Review mode)"
+	}
 	var b strings.Builder
-	b.WriteString(`<div class="as-evo" id="as-evo"><div class="as-evo__bar"><span class="as-evo__title">📈 Evolution</span><div class="as-evo__tabs">`)
+	b.WriteString(`<div class="as-evo" id="as-evo"><div class="as-evo__bar"><span class="as-evo__title">` + title + `</span><div class="as-evo__tabs">`)
 	for i, p := range panes {
 		on := ""
 		if i == 0 {
@@ -67,6 +77,7 @@ func renderEvolution(res *result.AnalysisResult) string {
 		fmt.Fprintf(&b, `<button type="button" class="as-evo__tab%s" data-evo="%d" title="%s">%s</button>`, on, i, esc(p.title), esc(p.label))
 	}
 	b.WriteString(`</div><button type="button" class="as-toggle as-evo__export" title="Download the view shown as a Markdown file">⬇ Export MD</button></div>`)
+	b.WriteString(renderGitLabCard(res))
 	for i, p := range panes {
 		show := ""
 		if i != 0 {
@@ -105,7 +116,18 @@ func writeBanner(b *strings.Builder, c evolution.Comparison) {
 
 // writeComparisonBody renders one baseline-vs-now comparison: meta line, banner,
 // numbers, dumbbells, and below them what got worse (and better) with its causes.
-func writeComparisonBody(b *strings.Builder, c evolution.Comparison) {
+// reviewFor returns the review info when c is the review comparison, else nil.
+func reviewFor(res *result.AnalysisResult, c evolution.Comparison) *evolution.Review {
+	if res.Review != nil && strings.HasPrefix(c.Ref.Spec, evolution.ReviewPrefix) {
+		return res.Review
+	}
+	return nil
+}
+
+func writeComparisonBody(b *strings.Builder, c evolution.Comparison, rv *evolution.Review) {
+	if rv != nil {
+		writeReviewChanges(b, rv)
+	}
 	fmt.Fprintf(b, `<p class="as-evo__meta">Baseline: <strong>%s</strong> · <code>%s</code> %s`,
 		esc(c.Ref.Title), esc(c.Ref.Short()), esc(c.Ref.Date.Format("2006-01-02")))
 	if c.Ref.Subject != "" {
@@ -124,7 +146,7 @@ func writeComparisonBody(b *strings.Builder, c evolution.Comparison) {
 		fmt.Fprintf(b, `<th>%s %s</th>`, d.Icon, esc(d.Name))
 	}
 	b.WriteString(`<th>LOC</th></tr></thead><tbody>`)
-	for _, r := range c.Rows {
+	for _, r := range c.VisibleRows() {
 		b.WriteString(`<tr>`)
 		fmt.Fprintf(b, `<td class="as-cult-plat"><span class="as-plat-badge as-plat-%s">%s</span><span class="as-cult-name">%s</span></td>`,
 			esc(r.Lang), esc(r.Abbr), esc(r.Label))
@@ -157,7 +179,7 @@ func writeComparisonBody(b *strings.Builder, c evolution.Comparison) {
 
 	// Step 3 — the picture: one dumbbell per dimension, then → now on a 0–100 track.
 	b.WriteString(`<div class="as-evo__bells">`)
-	for _, r := range c.Rows {
+	for _, r := range c.VisibleRows() {
 		if !r.Both() {
 			continue
 		}
@@ -171,7 +193,7 @@ func writeComparisonBody(b *strings.Builder, c evolution.Comparison) {
 	b.WriteString(`</div>`)
 
 	// Step 4 — below it all: what got worse, and where it was added.
-	writeDetails(b, c)
+	writeDetails(b, c, rv != nil)
 }
 
 // writeTrack draws one dimension as a path across 0–100: a dot per point joined

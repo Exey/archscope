@@ -142,6 +142,8 @@ func TestEvolutionDetailsShowWhereItGotWorse(t *testing.T) {
 func TestEvolutionNothingWorse(t *testing.T) {
 	a := evoScore("go", 60, 60, 60, 60, 60)
 	b := evoScore("go", 70, 60, 60, 60, 62)
+	a.Metrics = []evolution.Metric{{Dim: 1, Name: "Design patterns", Value: 1, HigherBetter: true}}
+	b.Metrics = []evolution.Metric{{Dim: 1, Name: "Design patterns", Value: 3, HigherBetter: true}}
 	res := minimalResult()
 	res.Evolution = []evolution.Comparison{evolution.Compare(evolution.Ref{Label: "x", Title: "x", SHA: "abc1234"}, []evolution.Score{b}, []evolution.Score{a})}
 	out := renderEvolution(res)
@@ -210,5 +212,73 @@ func TestTestFilesAreNotScoredNorListed(t *testing.T) {
 	}
 	if len(s.Items) != 1 || s.Items[0].Rel != "main.go" {
 		t.Errorf("items = %+v, want just the production finding", s.Items)
+	}
+}
+
+func TestReviewModeShowsGitLabCardAndMRButtons(t *testing.T) {
+	then, now := detailScores()
+	now.Items[1].RepoPath, now.Items[1].OldPos = "src/x.py", 118
+	c := evolution.Compare(evolution.Ref{Label: "review: main", Title: "merge-base with main", SHA: "abc1234", Spec: evolution.ReviewPrefix + "main"},
+		[]evolution.Score{now}, []evolution.Score{then})
+	res := minimalResult()
+	res.Evolution = []evolution.Comparison{c}
+
+	if renderGitLabCard(res) != "" {
+		t.Error("no GitLab card outside review mode")
+	}
+	if strings.Contains(renderEvolution(res), "as-evo__mr") {
+		t.Error("no MR buttons outside review mode")
+	}
+
+	res.Review = &evolution.Review{Ref: "main", BaseSHA: "abc1234def", HeadSHA: "fff", Branch: "feature/x",
+		MRIID: 42, MRSource: "local refs", Host: "https://gitlab.example.com", Project: "group/proj"}
+	card := renderGitLabCard(res)
+	for _, want := range []string{`id="as-gl-project"`, `value="group/proj"`, `id="as-gl-host"`, `value="https://gitlab.example.com"`,
+		`id="as-gl-mr"`, `value="42"`, `data-ref="feature/x"`, "detected from local refs", "against <code>main</code>"} {
+		if !strings.Contains(card, want) {
+			t.Errorf("GitLab card missing %q", want)
+		}
+	}
+	res.Review.Files = []evolution.ReviewFile{
+		{Path: "src/x.py", Add: 12, Del: 3, Issues: []evolution.Item{now.Items[1]}},
+		{Path: "README.md", Add: 5},
+	}
+	res.Review.Adds, res.Review.Dels = 17, 3
+	out := renderEvolution(res)
+	for _, want := range []string{"📈 Evolution (Review mode)", "Changes:</strong> 2 files", "+17", "✓ 1 OK", "⚠ 1 with issues",
+		"⚠ 1 issue", "✓ OK", "README.md", `id="as-gl-host"`, // GitLab inputs live inside the Evolution card
+		`class="as-evo__mr"`, `data-path="src/x.py"`, `data-line="120"`, `data-old="118"`,
+		`data-hash="` + evolution.FileHash("src/x.py") + `"`, "MR ↗ L120"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("MR button missing %q", want)
+		}
+	}
+	if !strings.Contains(out, `id="as-evo"`) || strings.Index(out, `id="as-gl-host"`) < strings.Index(out, `id="as-evo"`) {
+		t.Error("the GitLab inputs must be inside the 📈 Evolution card")
+	}
+
+	res.Review.MRIID = 0
+	if !strings.Contains(renderGitLabCard(res), "No merge request found") {
+		t.Error("missing-MR hint expected")
+	}
+}
+
+func TestFailedReviewExplainsItself(t *testing.T) {
+	res := minimalResult()
+	res.ReviewNote = `Evolution "review:x" skipped: "x" is not a commit or branch`
+	out := renderEvolution(res)
+	if !strings.Contains(out, "Review mode") || !strings.Contains(out, "could not run") || !strings.Contains(out, "is not a commit or branch") {
+		t.Errorf("a failed review must say why instead of the generic hint:\n%s", out)
+	}
+}
+
+func TestMRButtonKeepsZeroOldPositionForNewFiles(t *testing.T) {
+	it := evolution.Item{Kind: "O(N²)", Name: "f", Rel: "a/new.go", RepoPath: "a/new.go", Line: 61, OldPos: 0}
+	if out := itemHTML(it, "", true); !strings.Contains(out, `data-old="0"`) {
+		t.Errorf("old position 0 (new file) must reach the button:\n%s", out)
+	}
+	it.OldPos = -1
+	if out := itemHTML(it, "", true); !strings.Contains(out, `data-old="-1"`) {
+		t.Errorf("-1 marks a line outside the diff:\n%s", out)
 	}
 }

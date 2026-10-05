@@ -11,27 +11,27 @@ import (
 // for every (platform, dimension) that got worse — the changed signals and the
 // concrete offenders that were introduced, each linked to its file:line. What
 // got better follows in a collapsed section.
-func writeDetails(b *strings.Builder, c evolution.Comparison) {
+func writeDetails(b *strings.Builder, c evolution.Comparison, review bool) {
 	b.WriteString(`<div class="as-evo__details">`)
 	if len(c.WorseDetails) == 0 {
 		b.WriteString(`<p class="as-clean">✓ Nothing got worse.</p>`)
 	} else {
 		fmt.Fprintf(b, `<div class="as-evo__dtitle as-evo__dtitle--down">▼ What got worse, and where <span class="as-count">(%d)</span></div>`, len(c.WorseDetails))
 		for _, d := range c.WorseDetails {
-			writeDetailCard(b, d)
+			writeDetailCard(b, d, review)
 		}
 	}
 	if len(c.BetterDetails) > 0 {
 		fmt.Fprintf(b, `<details class="as-evo__better"><summary>▲ What got better <span class="as-count">(%d)</span></summary>`, len(c.BetterDetails))
 		for _, d := range c.BetterDetails {
-			writeDetailCard(b, d)
+			writeDetailCard(b, d, review)
 		}
 		b.WriteString(`</details>`)
 	}
 	b.WriteString(`</div>`)
 }
 
-func writeDetailCard(b *strings.Builder, d evolution.Detail) {
+func writeDetailCard(b *strings.Builder, d evolution.Detail, review bool) {
 	dir := evoDir(d.Delta)
 	fmt.Fprintf(b, `<div class="as-evo__dcard as-evo__dcard--%s"><div class="as-evo__dhead">`+
 		`<span class="as-plat-badge as-plat-%s">%s</span><span class="as-cult-name">%s</span>`+
@@ -66,7 +66,7 @@ func writeDetailCard(b *strings.Builder, d evolution.Detail) {
 				fmt.Fprintf(b, `<li class="as-evo__more">… and %d more</li>`, len(d.Added)-evolution.MaxDetailItems)
 				break
 			}
-			fmt.Fprintf(b, `<li>%s</li>`, itemHTML(it, ""))
+			fmt.Fprintf(b, `<li>%s</li>`, itemHTML(it, "", review))
 		}
 		b.WriteString(`</ul>`)
 	}
@@ -77,22 +77,19 @@ func writeDetailCard(b *strings.Builder, d evolution.Detail) {
 				fmt.Fprintf(b, `<li class="as-evo__more">… and %d more</li>`, len(d.Grew)-evolution.MaxDetailItems)
 				break
 			}
-			fmt.Fprintf(b, `<li>%s</li>`, itemHTML(g.Item, fmt.Sprintf("%d → %d", g.ThenSize, g.Item.Size)))
+			fmt.Fprintf(b, `<li>%s</li>`, itemHTML(g.Item, fmt.Sprintf("%d → %d", g.ThenSize, g.Item.Size), review))
 		}
 		b.WriteString(`</ul>`)
 	}
 	if d.Resolved > 0 {
 		fmt.Fprintf(b, `<p class="as-evo__resolved">✓ %d offender(s) resolved since the baseline</p>`, d.Resolved)
 	}
-	if !d.Explained() && d.LOCThen == d.LOCNow {
-		b.WriteString(`<p class="as-evo__info">No tracked signal changed — a rounding-level shift from re-weighting.</p>`)
-	}
 	b.WriteString(`</div>`)
 }
 
 // itemHTML renders one offender: kind chip, symbol, file:line (a VS Code link when
 // the file exists in the working tree) and its note. override replaces the note.
-func itemHTML(it evolution.Item, override string) string {
+func itemHTML(it evolution.Item, override string, review bool) string {
 	loc := it.Rel
 	if it.Line > 0 {
 		loc = fmt.Sprintf("%s:%d", it.Rel, it.Line)
@@ -109,6 +106,11 @@ func itemHTML(it evolution.Item, override string) string {
 		minInt(it.Weight, 7), esc(it.Kind), esc(it.Name), locHTML)
 	if note != "" {
 		out += fmt.Sprintf(` <em class="as-evo__note">%s</em>`, esc(note))
+	}
+	if review && it.RepoPath != "" && it.Line > 0 {
+		out += fmt.Sprintf(` <button type="button" class="as-evo__mr" data-path="%s" data-line="%d" data-old="%d" data-hash="%s" `+
+			`title="Copies %s#L%d and opens this line in the merge request">MR ↗ L%d</button>`,
+			esc(it.RepoPath), it.Line, it.OldPos, evolution.FileHash(it.RepoPath), esc(it.RepoPath), it.Line, it.Line)
 	}
 	return out
 }
@@ -143,7 +145,7 @@ func writeTimelinePane(b *strings.Builder, tl evolution.Timeline) {
 		fmt.Fprintf(b, `<th>%s %s</th>`, d.Icon, esc(d.Name))
 	}
 	b.WriteString(`</tr></thead><tbody>`)
-	for _, r := range tl.Rows {
+	for _, r := range tl.VisibleRows() {
 		fmt.Fprintf(b, `<tr><td class="as-cult-plat"><span class="as-plat-badge as-plat-%s">%s</span><span class="as-cult-name">%s</span></td>`,
 			esc(r.Lang), esc(r.Abbr), esc(r.Label))
 		for i := range evolution.Dims {
@@ -180,7 +182,7 @@ func writeTimelinePane(b *strings.Builder, tl evolution.Timeline) {
 	b.WriteString(`</tbody></table></div>`)
 
 	b.WriteString(`<div class="as-evo__bells">`)
-	for _, r := range tl.Rows {
+	for _, r := range tl.VisibleRows() {
 		complete := true
 		for _, s := range r.Scores {
 			if s == nil {
@@ -209,7 +211,7 @@ func writeTimelinePane(b *strings.Builder, tl evolution.Timeline) {
 		fmt.Fprintf(b, `<details class="as-evo__step"%s><summary><strong>Step %d</strong> · %s <span class="as-evo__to">→</span> %s `+
 			`<span class="as-evo__chip as-evo__chip--up">▲ %d</span><span class="as-evo__chip as-evo__chip--down">▼ %d</span><span class="as-evo__chip as-evo__chip--flat">= %d</span></summary>`,
 			open, i+1, esc(tl.Points[i].Title()), esc(tl.Points[i+1].Title()), st.Better, st.Worse, st.Same)
-		writeDetails(b, st)
+		writeDetails(b, st, false)
 		b.WriteString(`</details>`)
 	}
 }

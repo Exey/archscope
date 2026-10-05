@@ -62,11 +62,18 @@ type Item struct {
 	Size   int // lines / depth / parameter count, for "grew" detection; 0 = not sized
 	Weight int // severity weight for ordering (HIGH 7, MEDIUM 2, …)
 	Key    string
+
+	// Filled only in review mode, for the "MR with line" buttons.
+	RepoPath string // path relative to the git repository root
+	OldPos   int    // GitLab diff "old line" position of this new line (0 = new file); -1 = line not in the diff
 }
 
 // Ref is a resolved baseline commit.
 type Ref struct {
 	Spec    string // what the user asked for: "2w", "last-tag", "a1b2c3d", …
+	HeadSHA string // review mode: the tip being reviewed when it is not the working tree
+	Against string // review mode: the branch the reviewed tip is compared with
+	Target  string // review mode: the branch/commit actually compared against (after "auto" is resolved)
 	Label   string // short tab label: "2 weeks", "since v1.2.0"
 	Title   string // longer description: "2 weeks ago", "last tag v1.2.0"
 	SHA     string
@@ -121,12 +128,49 @@ func (r Row) Delta(i int) int {
 	return Dims[i].Get(*r.Now) - Dims[i].Get(*r.Then)
 }
 
+// DevOpsNoise is the largest per-dimension move treated as noise for DevOps.
+// Its scores come from a single health percentage, so a ±1 shift in every
+// dimension at once is just that number being re-weighted, not a real change.
+const DevOpsNoise = 1
+
+// Unchanged reports whether the platform has a reading on both sides and nothing
+// meaningful moved: no level change and no dimension change (for DevOps, none
+// beyond DevOpsNoise).
+func (r Row) Unchanged() bool {
+	if !r.Both() || r.LevelShift() != 0 || r.Then.Level != r.Now.Level {
+		return false
+	}
+	tol := 0
+	if r.IsDevOps {
+		tol = DevOpsNoise
+	}
+	for i := range Dims {
+		if absInt(r.Delta(i)) > tol {
+			return false
+		}
+	}
+	return true
+}
+
 // LevelShift is the change in ladder rungs (positive = promoted).
 func (r Row) LevelShift() int {
 	if !r.Both() {
 		return 0
 	}
 	return r.Now.LevelRank - r.Then.LevelRank
+}
+
+// VisibleRows is Rows without a DevOps row that did not change: DevOps has no
+// code of its own to evolve, so it appears only when something moved.
+func (c Comparison) VisibleRows() []Row {
+	var out []Row
+	for _, r := range c.Rows {
+		if r.IsDevOps && r.Unchanged() {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // Mover is one notable dimension change, for the "biggest moves" summary.
@@ -150,6 +194,11 @@ type Comparison struct {
 
 	// One Detail per (platform, dimension) that moved: why, and where.
 	WorseDetails, BetterDetails []Detail
+
+	// Every offender introduced (or grown) across ALL platforms and dimensions,
+	// whether or not a score moved — what review mode lists per file.
+	Introduced []Item
+	Grown      []Grown
 }
 
 // MetricChange is one raw signal that differs between then and now.
@@ -213,17 +262,21 @@ func Compare(ref Ref, now, then []Score) Comparison {
 		}
 	}
 	for _, r := range c.Rows {
-		if !r.Both() {
-			continue
+		if !r.Both() || (r.IsDevOps && r.Unchanged()) {
+			continue // DevOps is only tracked once it actually changes
 		}
 		for i := 1; i < len(Dims); i++ { // skip Overall: it is derived from the four
 			d := r.Delta(i)
 			if d != 0 {
-				det := buildDetail(r, i)
-				if d < 0 {
-					c.WorseDetails = append(c.WorseDetails, det)
-				} else {
-					c.BetterDetails = append(c.BetterDetails, det)
+				// A move with nothing behind it (no signal, offender or size change —
+				// e.g. DevOps, or a rounding-level shift) has nothing to explain,
+				// so it gets no detail card; the table still shows the delta.
+				if det := buildDetail(r, i); det.Explained() || det.LOCThen != det.LOCNow {
+					if d < 0 {
+						c.WorseDetails = append(c.WorseDetails, det)
+					} else {
+						c.BetterDetails = append(c.BetterDetails, det)
+					}
 				}
 			}
 			switch {
@@ -242,6 +295,23 @@ func Compare(ref Ref, now, then []Score) Comparison {
 			}
 		}
 	}
+	for _, r := range c.Rows {
+		if !r.Both() {
+			continue
+		}
+		for i := 1; i < len(Dims); i++ {
+			added, grew, _ := diffItems(r.Then.Items, r.Now.Items, i)
+			c.Introduced = append(c.Introduced, added...)
+			c.Grown = append(c.Grown, grew...)
+		}
+	}
+	sort.SliceStable(c.Introduced, func(i, j int) bool {
+		a, b := c.Introduced[i], c.Introduced[j]
+		if a.Weight != b.Weight {
+			return a.Weight > b.Weight
+		}
+		return a.Rel < b.Rel
+	})
 	sort.SliceStable(c.WorseDetails, func(i, j int) bool { return c.WorseDetails[i].Delta < c.WorseDetails[j].Delta })
 	sort.SliceStable(c.BetterDetails, func(i, j int) bool { return c.BetterDetails[i].Delta > c.BetterDetails[j].Delta })
 	return c
@@ -276,31 +346,7 @@ func buildDetail(r Row, dim int) Detail {
 		return absInt(d.Metrics[i].Now-d.Metrics[i].Then) > absInt(d.Metrics[j].Now-d.Metrics[j].Then)
 	})
 
-	thenI := map[string]Item{}
-	for _, it := range r.Then.Items {
-		if it.Dim == dim {
-			thenI[it.Key] = it
-		}
-	}
-	nowKeys := map[string]bool{}
-	for _, it := range r.Now.Items {
-		if it.Dim != dim {
-			continue
-		}
-		nowKeys[it.Key] = true
-		t, existed := thenI[it.Key]
-		switch {
-		case !existed:
-			d.Added = append(d.Added, it)
-		case it.Size > 0 && t.Size > 0 && it.Size-t.Size >= maxInt(3, t.Size/10):
-			d.Grew = append(d.Grew, Grown{Item: it, ThenSize: t.Size})
-		}
-	}
-	for k := range thenI {
-		if !nowKeys[k] {
-			d.Resolved++
-		}
-	}
+	d.Added, d.Grew, d.Resolved = diffItems(r.Then.Items, r.Now.Items, dim)
 	sort.SliceStable(d.Added, func(i, j int) bool {
 		a, b := d.Added[i], d.Added[j]
 		if a.Weight != b.Weight {
@@ -315,6 +361,37 @@ func buildDetail(r Row, dim int) Detail {
 		return d.Grew[i].Item.Size-d.Grew[i].ThenSize > d.Grew[j].Item.Size-d.Grew[j].ThenSize
 	})
 	return d
+}
+
+// diffItems compares the offenders of one dimension: which are new, which grew
+// (by at least max(3, 10%)), and how many are gone.
+func diffItems(then, now []Item, dim int) (added []Item, grew []Grown, resolved int) {
+	thenI := map[string]Item{}
+	for _, it := range then {
+		if it.Dim == dim {
+			thenI[it.Key] = it
+		}
+	}
+	nowKeys := map[string]bool{}
+	for _, it := range now {
+		if it.Dim != dim {
+			continue
+		}
+		nowKeys[it.Key] = true
+		t, existed := thenI[it.Key]
+		switch {
+		case !existed:
+			added = append(added, it)
+		case it.Size > 0 && t.Size > 0 && it.Size-t.Size >= maxInt(3, t.Size/10):
+			grew = append(grew, Grown{Item: it, ThenSize: t.Size})
+		}
+	}
+	for k := range thenI {
+		if !nowKeys[k] {
+			resolved++
+		}
+	}
+	return
 }
 
 func absInt(v int) int {
@@ -424,7 +501,7 @@ func RenderMarkdown(c Comparison) string {
 		b.WriteString("---:|")
 	}
 	b.WriteString("---:|\n")
-	for _, r := range c.Rows {
+	for _, r := range c.VisibleRows() {
 		fmt.Fprintf(&b, "| %s | %s |", r.Label, levelCellMD(r))
 		for i, d := range Dims {
 			switch {
@@ -507,9 +584,6 @@ func writeDetailMD(b *strings.Builder, d Detail) {
 	}
 	if d.Resolved > 0 {
 		fmt.Fprintf(b, "- ✓ %d offender(s) resolved\n", d.Resolved)
-	}
-	if !d.Explained() && d.LOCThen == d.LOCNow {
-		b.WriteString("- No tracked signal changed — a rounding-level shift from re-weighting.\n")
 	}
 	b.WriteString("\n")
 }

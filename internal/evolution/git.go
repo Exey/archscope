@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +43,10 @@ func ParseSpecs(v string) []string {
 	}
 	return out
 }
+
+// ReviewPrefix marks a spec as a review baseline: the merge-base of HEAD and the
+// given commit/branch (see the --review flag).
+const ReviewPrefix = "review:"
 
 // ErrNoTag is returned by Resolve for "last-tag" when the repo has no usable tag.
 var ErrNoTag = fmt.Errorf("no tag found")
@@ -100,6 +105,13 @@ func Resolve(repo, spec string, now time.Time) (Ref, error) {
 	var sha string
 
 	switch {
+	case strings.HasPrefix(spec, ReviewPrefix):
+		if err := resolveReview(repo, strings.TrimPrefix(spec, ReviewPrefix), &ref); err != nil {
+			return ref, err
+		}
+		sha = ref.SHA
+		ref.SHA = ""
+
 	case strings.EqualFold(spec, "last-tag"):
 		tag, err := lastTag(repo)
 		if err != nil {
@@ -138,8 +150,8 @@ func Resolve(repo, spec string, now time.Time) (Ref, error) {
 		sha = out
 
 	default:
-		out, err := git(repo, "rev-parse", "--verify", "--quiet", spec+"^{commit}")
-		if err != nil || out == "" {
+		out := resolveCommit(repo, spec)
+		if out == "" {
 			return ref, fmt.Errorf("%q is not a duration, date, tag or commit in this repository", spec)
 		}
 		sha = out
@@ -162,6 +174,177 @@ func Resolve(repo, spec string, now time.Time) (Ref, error) {
 	ref.Date, _ = time.Parse(time.RFC3339, parts[1])
 	ref.Subject = parts[2]
 	return ref, nil
+}
+
+// resolveCommit turns a commit-ish into a sha, also finding a branch that only
+// exists on a remote (feat/x → origin/feat/x) — typical for a branch someone
+// else pushed and you have not checked out. "" when nothing matches.
+func resolveCommit(repo, name string) string {
+	try := func(n string) string {
+		out, err := git(repo, "rev-parse", "--verify", "--quiet", n+"^{commit}")
+		if err != nil {
+			return ""
+		}
+		return out
+	}
+	if sha := try(name); sha != "" {
+		return sha
+	}
+	if remotes, err := git(repo, "remote"); err == nil {
+		// origin first, then any other remote.
+		list := strings.Fields(remotes)
+		sort.SliceStable(list, func(i, j int) bool { return list[i] == "origin" && list[j] != "origin" })
+		for _, r := range list {
+			if sha := try("refs/remotes/" + r + "/" + name); sha != "" {
+				return sha
+			}
+		}
+	}
+	return ""
+}
+
+// resolvedName is the name to show/use for a commit-ish after resolveCommit:
+// the name as typed when it resolves directly, else its remote-tracking form.
+func resolvedName(repo, name string) string {
+	if _, err := git(repo, "rev-parse", "--verify", "--quiet", name+"^{commit}"); err == nil {
+		return name
+	}
+	if remotes, err := git(repo, "remote"); err == nil {
+		list := strings.Fields(remotes)
+		sort.SliceStable(list, func(i, j int) bool { return list[i] == "origin" && list[j] != "origin" })
+		for _, r := range list {
+			if _, err := git(repo, "rev-parse", "--verify", "--quiet", "refs/remotes/"+r+"/"+name+"^{commit}"); err == nil {
+				return r + "/" + name
+			}
+		}
+	}
+	return name
+}
+
+// isDefaultBranchName reports whether name (with or without a remote prefix) is
+// the repository's default/target branch by name: such a ref is a merge TARGET,
+// never the thing being reviewed.
+func isDefaultBranchName(repo, name string) bool {
+	bare := name
+	if i := strings.IndexByte(bare, '/'); i > 0 && (strings.HasPrefix(bare, "origin/") || strings.HasPrefix(bare, "upstream/")) {
+		bare = bare[i+1:]
+	}
+	switch bare {
+	case "main", "master", "develop", "dev", "trunk":
+		return true
+	}
+	d := DefaultBranch(repo)
+	return d != "" && (name == d || strings.TrimPrefix(d, "origin/") == bare)
+}
+
+// resolveReview fills ref for a review spec "<ref>[@@<against>]":
+//
+//   - ref is a merge TARGET (a default branch such as main/develop, an ancestor of
+//     HEAD, or empty/auto): review HEAD (the working tree) against the merge-base,
+//     exactly what an MR from the current branch diffs.
+//   - otherwise ref is the BRANCH UNDER REVIEW (say feat/x, even if only on
+//     origin and not checked out): review its tip against the merge-base of ref
+//     and the current branch (or @@against), i.e. "what feat/x adds".
+//
+// ref.SHA receives the base commit; ref.HeadSHA the reviewed tip ("" = working tree).
+func resolveReview(repo, spec string, ref *Ref) error {
+	target, against, _ := strings.Cut(spec, "@@")
+	auto := target == "" || strings.EqualFold(target, "auto")
+	if auto {
+		if target = DefaultBranch(repo); target == "" {
+			return fmt.Errorf("could not find a main/master/develop branch to review against — name one: --review <branch>")
+		}
+	}
+	if strings.EqualFold(target, "last-commit") {
+		target = "HEAD~1"
+	}
+	tip := resolveCommit(repo, target)
+	if tip == "" {
+		return fmt.Errorf("%q is not a commit or branch in this repository (also looked for it on the remotes)", target)
+	}
+	target = resolvedName(repo, target)
+	head, _ := git(repo, "rev-parse", "HEAD")
+	isAnc := func(a, b string) bool {
+		return exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", a, b).Run() == nil
+	}
+	ref.Target = target
+
+	switch {
+	case auto && tip == head:
+		// Checked out on the default branch itself: nothing to merge — review the last commit.
+		prev := resolveCommit(repo, "HEAD~1")
+		if prev == "" {
+			return fmt.Errorf("on %s with no earlier commit — nothing to review", target)
+		}
+		ref.Target = "HEAD~1"
+		ref.Label, ref.Title = "review: last commit", "last commit (you are on "+DefaultBranch(repo)+")"
+		ref.SHA = prev
+
+	case against == "" && (auto || isDefaultBranchName(repo, target) || isAnc(tip, head) && tip != head):
+		// ref is the target: where the current branch left it.
+		ref.SHA = tip
+		if mb, err := git(repo, "merge-base", "HEAD", tip); err == nil && mb != "" {
+			ref.SHA = mb
+		}
+		ref.Label, ref.Title = "review: "+target, "merge-base with "+target
+
+	default:
+		// ref is the branch under review. Compare it with --against, else with the
+		// default branch, else with where you are now.
+		baseName := against
+		if baseName == "" {
+			if tip == head {
+				baseName = DefaultBranch(repo) // reviewing the current branch itself
+			} else {
+				baseName = "HEAD"
+			}
+		}
+		if baseName == "" {
+			return fmt.Errorf("%s is the checked-out branch and no default branch was found — pass --against <branch>", target)
+		}
+		baseSHA := resolveCommit(repo, baseName)
+		if baseSHA == "" {
+			return fmt.Errorf("--against %q is not a commit or branch in this repository", baseName)
+		}
+		baseName = resolvedName(repo, baseName)
+		ref.SHA = baseSHA
+		if mb, err := git(repo, "merge-base", tip, baseSHA); err == nil && mb != "" {
+			ref.SHA = mb
+		}
+		ref.Against = baseName
+		if baseName == "HEAD" {
+			if b, err := git(repo, "rev-parse", "--abbrev-ref", "HEAD"); err == nil && b != "HEAD" {
+				ref.Against = b
+			}
+		}
+		if tip != head {
+			ref.HeadSHA = tip
+		}
+		ref.Label, ref.Title = "review: "+target, target+" vs "+ref.Against
+	}
+	return nil
+}
+
+// DefaultBranch finds the branch a merge request would target, locally: the
+// remote's default (origin/HEAD) when known, else the first of main, master,
+// develop (local, then origin/). "" when none exists.
+func DefaultBranch(repo string) string {
+	if out, err := git(repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil && out != "" {
+		if _, err := git(repo, "rev-parse", "--verify", "--quiet", out+"^{commit}"); err == nil {
+			return out
+		}
+	}
+	for _, name := range []string{"main", "master", "develop", "origin/main", "origin/master", "origin/develop"} {
+		if _, err := git(repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+name+"^{commit}"); err == nil {
+			return name
+		}
+		if strings.HasPrefix(name, "origin/") {
+			if _, err := git(repo, "rev-parse", "--verify", "--quiet", "refs/remotes/"+name+"^{commit}"); err == nil {
+				return name
+			}
+		}
+	}
+	return ""
 }
 
 // lastTag returns the most recent tag reachable from HEAD, stepping back one
