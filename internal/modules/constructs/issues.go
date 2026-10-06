@@ -14,6 +14,36 @@ import (
 	"github.com/exey/archscope/internal/security"
 )
 
+// suppressIssues drops issues covered by a `# noqa` / `# pylint: disable` /
+// `//nolint` / `eslint-disable` … comment on (or above) their line.
+func suppressIssues(sup *security.Suppressor, issues []CSIssue) []CSIssue {
+	if sup == nil || len(issues) == 0 {
+		return issues
+	}
+	kept := issues[:0:0]
+	for _, is := range issues {
+		if !sup.Suppressed(is.Line, is.RuleID) {
+			kept = append(kept, is)
+		}
+	}
+	return kept
+}
+
+// suppressOffenders trims offenders appended since index from (this file's)
+// that carry a suppression for the given alias key ("params", "nesting", "cyclomatic").
+func suppressOffenders(sup *security.Suppressor, list []CSFuncOffender, from int, key string) []CSFuncOffender {
+	if sup == nil || from >= len(list) {
+		return list
+	}
+	out := list[:from]
+	for _, o := range list[from:] {
+		if !sup.Suppressed(o.Line, key) {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
 // CSIssue is one flagged construct.
 type CSIssue struct {
 	RuleID   string            // stable id, e.g. "concat-in-loop"
@@ -179,7 +209,7 @@ func writeIssueSubcard(b *strings.Builder, key, icon, title, hint string, issues
 }
 
 // issuesMarkdown renders issues grouped by rule as a markdown table.
-func issuesMarkdown(b *strings.Builder, title string, issues []CSIssue, withSev bool) {
+func issuesMarkdown(b *strings.Builder, title string, issues []CSIssue, withSev bool, maxLoc int) {
 	if len(issues) == 0 {
 		return
 	}
@@ -190,10 +220,7 @@ func issuesMarkdown(b *strings.Builder, title string, issues []CSIssue, withSev 
 		b.WriteString("| Issue | Hits | Examples |\n|-------|-----:|----------|\n")
 	}
 	for _, g := range groupIssues(issues) {
-		limit := maxIssueExamples
-		if withSev {
-			limit = maxIssueLocations
-		}
+		limit := maxLoc
 		var ex []string
 		for i, is := range g.Items {
 			if i == limit {
@@ -292,7 +319,7 @@ func issueCardMarkdown(b *strings.Builder, noun string, issues []CSIssue) {
 		if title == "" {
 			title = noun
 		}
-		issuesMarkdown(b, title, grp.items, true)
+		issuesMarkdown(b, title, grp.items, true, maxIssueLocations)
 	}
 }
 

@@ -57,7 +57,7 @@ func (Concurrency) Analyze(files []*parser.ParsedFile) any {
 			continue
 		}
 		if raw := cache.rawLines(f.FilePath); raw != nil {
-			rep.Issues = append(rep.Issues, scanConcurrency(f.FilePath, maskSource(raw, ".go"))...)
+			rep.Issues = append(rep.Issues, suppressIssues(security.NewSuppressor(raw), scanConcurrency(f.FilePath, maskSource(raw, ".go")))...)
 		}
 	}
 	sortIssuesBySeverity(rep.Issues)

@@ -105,16 +105,29 @@ type CodeStructureReport struct {
 	DeepNestFuncs  []CSFuncOffender // nesting > csMaxNestDepth
 	WorstNest      CSFuncOffender   // deepest nesting found anywhere (zero Value = none)
 
+	HighComplexity []CSFuncOffender // cyclomatic complexity > csMaxCyclomatic
+	WorstCC        CSFuncOffender   // most complex function found anywhere (zero Value = none)
+	ShapeIssues    []CSIssue        // 📐 pylint-style shape limits: returns, branches, locals, class size, module size
+
 	CommentPercent    int // 0–100, lines that are comment-only ÷ total lines
 	PreprocDirectives int // total #define/#include/#if.../Swift #if.../… lines
 
 	LooseTypeTotal int          // total `any` + `object` type annotations (TS/JS only)
 	LooseTypeFiles []CSAnyUsage // per-file loose-type counts, sorted worst-first
 
-	BugIssues   []CSIssue // 🐛 Suspicious code: Go bug-class checks (dupSubExpr, badLock, offBy1…)
-	DupIssues   []CSIssue // 👯 Duplicate code: identical branch bodies, duplicate case labels
-	HookIssues  []CSIssue // ⚛️ React hooks & state (TS/JS): missing deps, effect loops, direct mutation…
-	ReactIssues []CSIssue // 🧩 React components (TS/JS): size, props, JSX depth, prop drilling
+	BugIssues    []CSIssue // 🐛 Suspicious code: Go bug-class checks (dupSubExpr, badLock, offBy1…)
+	DupIssues    []CSIssue // 👯 Duplicate code: identical branch bodies, duplicate case labels
+	HookIssues   []CSIssue // ⚛️ React hooks & state (TS/JS): missing deps, effect loops, direct mutation…
+	ReactIssues  []CSIssue // 🧩 React components (TS/JS): size, props, JSX depth, prop drilling
+	MarkerIssues []CSIssue // 🔀 Merge conflict markers and pasted diff headers (all languages)
+
+	PyFuncs, PyTyped int            // Python functions / fully annotated ones
+	PyAny            int            // `Any` uses in Python annotations
+	TypeIgnores      int            // `# type: ignore` / `@ts-ignore` / `@ts-nocheck` / `@ts-expect-error`
+	TypingFiles      []CSTypingFile // Python files with untyped functions, worst first
+	DocPublic        int            // public functions/classes/types
+	DocDocumented    int            // …of which carry a doc comment
+	DocFiles         []CSDocFile    // files with undocumented public API, worst first
 
 	OvercrowdedFolders []CSFolderStat // folders with > csOvercrowdedFolder files
 	EmptyFolders       []string       // container-only folders (no files of their own)
@@ -129,16 +142,26 @@ func (r CodeStructureReport) HasData() bool { return r.scanned }
 // ReviewIssueCount is the number of suspicious-code, duplicate-code and React
 // findings — everything this card surfaces as a review item.
 func (r CodeStructureReport) ReviewIssueCount() int {
-	return len(r.BugIssues) + len(r.DupIssues) + len(r.HookIssues) + len(r.ReactIssues)
+	return len(r.BugIssues) + len(r.DupIssues) + len(r.HookIssues) + len(r.ReactIssues) + len(r.ShapeIssues) + len(r.HighComplexity) + len(r.MarkerIssues)
 }
 
 // IssuePoints weighs those findings for the Code Quality score: HIGH 5, MEDIUM
 // 2, LOW 0.5 (unscored advice such as "use isEmpty" must not drown real bugs).
 func (r CodeStructureReport) IssuePoints() float64 {
 	var pts float64
-	for _, set := range [][]CSIssue{r.BugIssues, r.DupIssues, r.HookIssues, r.ReactIssues} {
+	for _, set := range [][]CSIssue{r.BugIssues, r.DupIssues, r.HookIssues, r.ReactIssues, r.ShapeIssues, r.MarkerIssues} {
 		h, m, l := issueSevCounts(set)
 		pts += float64(h)*5 + float64(m)*2 + float64(l)*0.5
+	}
+	for _, o := range r.HighComplexity { // McCabe bands: 11–20 moderate, 21–50 high, 50+ untestable
+		switch {
+		case o.Value > 50:
+			pts += 5
+		case o.Value > 20:
+			pts += 2
+		default:
+			pts += 0.5
+		}
 	}
 	return pts
 }
@@ -321,6 +344,11 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 		}
 		rep.scanned = true
 		totalLines += len(raw)
+		sup := security.NewSuppressor(raw)
+		nHP, nDN, nCC := len(rep.HighParamFuncs), len(rep.DeepNestFuncs), len(rep.HighComplexity)
+		nShape, nBug, nDup := len(rep.ShapeIssues), len(rep.BugIssues), len(rep.DupIssues)
+		nHook, nReact, nMark := len(rep.HookIssues), len(rep.ReactIssues), len(rep.MarkerIssues)
+		rep.MarkerIssues = append(rep.MarkerIssues, scanMarkers(f.FilePath, raw)...)
 
 		for i, s := range stripped {
 			if i >= len(raw) {
@@ -347,8 +375,32 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 			}
 		}
 
-		if fe := ext(f.FilePath); csStringLang(fe) != csStrNone && csStringLang(fe) != csStrPython {
+		fe := ext(f.FilePath)
+		lang := csStringLang(fe)
+		if lang != csStrNone {
 			masked := maskSource(raw, fe)
+			rep.ShapeIssues = append(rep.ShapeIssues, moduleSizeIssue(f.FilePath, raw)...)
+			rep.TypeIgnores += countTypeIgnores(raw)
+			if ds, ok := docStats(f.FilePath, masked); ok && ds.Public > 0 {
+				rep.DocPublic += ds.Public
+				rep.DocDocumented += ds.Documented
+				if ds.Documented < ds.Public {
+					rep.DocFiles = append(rep.DocFiles, ds)
+				}
+			}
+			if lang == csStrPython {
+				rep.analyzePython(f.FilePath, masked)
+				if ts := pyTypingStats(f.FilePath, masked); ts.Funcs > 0 {
+					rep.PyFuncs += ts.Funcs
+					rep.PyTyped += ts.Typed
+					rep.PyAny += ts.AnyCount
+					if ts.Typed < ts.Funcs || ts.AnyCount > 0 {
+						ts.Ignores = countTypeIgnores(raw)
+						rep.TypingFiles = append(rep.TypingFiles, ts)
+					}
+				}
+				rep.BugIssues = append(rep.BugIssues, scanPyBugs(f.FilePath, masked)...)
+			}
 			rep.BugIssues = append(rep.BugIssues, scanBugSmells(f.FilePath, masked)...)
 			rep.DupIssues = append(rep.DupIssues, scanDuplicateCode(f.FilePath, masked)...)
 			h, c := scanReact(f.FilePath, masked)
@@ -357,6 +409,11 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 		}
 
 		for _, fr := range csFuncRanges(stripped) {
+			if lang != csStrNone && lang != csStrPython {
+				st := bodyStats(lang, fe, stripped[fr.start:min(fr.end+1, len(stripped))], nil)
+				st.name, st.line = fr.name, fr.start+1
+				rep.recordFunc(f.FilePath, raw, st)
+			}
 			nest := nestDepthOf(stripped, fr.start, fr.end)
 			if nest > rep.WorstNest.Value {
 				rep.WorstNest = CSFuncOffender{Symbol: fr.name, FilePath: f.FilePath, Line: fr.start + 1, Value: nest}
@@ -370,21 +427,87 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 					CSFuncOffender{Symbol: fr.name, FilePath: f.FilePath, Line: fr.start + 1, Value: params})
 			}
 		}
+		// honour suppression comments for everything this file produced
+		if sup != nil {
+			rep.HighParamFuncs = suppressOffenders(sup, rep.HighParamFuncs, nHP, "params")
+			rep.DeepNestFuncs = suppressOffenders(sup, rep.DeepNestFuncs, nDN, "nesting")
+			rep.HighComplexity = suppressOffenders(sup, rep.HighComplexity, nCC, "cyclomatic")
+			rep.ShapeIssues = append(rep.ShapeIssues[:nShape], suppressIssues(sup, rep.ShapeIssues[nShape:])...)
+			rep.BugIssues = append(rep.BugIssues[:nBug], suppressIssues(sup, rep.BugIssues[nBug:])...)
+			rep.DupIssues = append(rep.DupIssues[:nDup], suppressIssues(sup, rep.DupIssues[nDup:])...)
+			rep.HookIssues = append(rep.HookIssues[:nHook], suppressIssues(sup, rep.HookIssues[nHook:])...)
+			rep.ReactIssues = append(rep.ReactIssues[:nReact], suppressIssues(sup, rep.ReactIssues[nReact:])...)
+			rep.MarkerIssues = append(rep.MarkerIssues[:nMark], suppressIssues(sup, rep.MarkerIssues[nMark:])...)
+		}
 	}
 
 	if totalLines > 0 {
 		rep.CommentPercent = int(float64(commentLines)/float64(totalLines)*100 + 0.5)
 	}
+	sort.SliceStable(rep.HighComplexity, func(i, j int) bool { return rep.HighComplexity[i].Value > rep.HighComplexity[j].Value })
+	sortIssues(rep.ShapeIssues)
 	sort.SliceStable(rep.HighParamFuncs, func(i, j int) bool { return rep.HighParamFuncs[i].Value > rep.HighParamFuncs[j].Value })
 	sort.SliceStable(rep.DeepNestFuncs, func(i, j int) bool { return rep.DeepNestFuncs[i].Value > rep.DeepNestFuncs[j].Value })
 	sort.SliceStable(rep.LooseTypeFiles, func(i, j int) bool { return rep.LooseTypeFiles[i].Total() > rep.LooseTypeFiles[j].Total() })
 
+	rep.DupIssues = append(rep.DupIssues, scanClones(files, cache)...)
 	sortIssues(rep.BugIssues)
 	sortIssues(rep.DupIssues)
 	sortIssues(rep.HookIssues)
 	sortIssues(rep.ReactIssues)
+	sortIssues(rep.MarkerIssues)
+	sort.SliceStable(rep.TypingFiles, func(i, j int) bool {
+		a, b := rep.TypingFiles[i], rep.TypingFiles[j]
+		return a.Funcs-a.Typed+a.AnyCount > b.Funcs-b.Typed+b.AnyCount
+	})
+	sort.SliceStable(rep.DocFiles, func(i, j int) bool {
+		return rep.DocFiles[i].Public-rep.DocFiles[i].Documented > rep.DocFiles[j].Public-rep.DocFiles[j].Documented
+	})
 	analyzeFolderLayout(files, &rep)
 	return rep
+}
+
+// recordFunc files one function's complexity and shape numbers.
+func (r *CodeStructureReport) recordFunc(filePath string, raw []string, st funcStat) {
+	if st.cc > r.WorstCC.Value {
+		r.WorstCC = CSFuncOffender{Symbol: st.name, FilePath: filePath, Line: st.line, Value: st.cc}
+	}
+	if st.cc > csMaxCyclomatic {
+		r.HighComplexity = append(r.HighComplexity, CSFuncOffender{Symbol: st.name, FilePath: filePath, Line: st.line, Value: st.cc})
+	}
+	r.ShapeIssues = append(r.ShapeIssues, funcShapeIssues(filePath, raw, st)...)
+}
+
+// analyzePython measures every def of a Python file (the brace-based pass can't
+// see them): parameters, nesting, cyclomatic complexity and the shape limits,
+// plus class and module size.
+func (r *CodeStructureReport) analyzePython(filePath string, m maskedFile) {
+	funcs, classes := pyParse(m)
+	starts := pyLogicalStarts(m.code)
+	for _, f := range funcs {
+		sym := f.name
+		if f.class != "" {
+			sym = f.class + "." + f.name
+		}
+		nest := pyNestDepth(m.code, starts, f)
+		if nest > r.WorstNest.Value {
+			r.WorstNest = CSFuncOffender{Symbol: sym, FilePath: filePath, Line: f.start + 1, Value: nest}
+		}
+		if nest > csMaxNestDepth {
+			r.DeepNestFuncs = append(r.DeepNestFuncs, CSFuncOffender{Symbol: sym, FilePath: filePath, Line: f.start + 1, Value: nest})
+		}
+		if n := pyParamCount(f.params); n > csMaxParams {
+			r.HighParamFuncs = append(r.HighParamFuncs, CSFuncOffender{Symbol: sym, FilePath: filePath, Line: f.start + 1, Value: n})
+		}
+		end := f.end + 1
+		if end > len(m.code) {
+			end = len(m.code)
+		}
+		st := bodyStats(csStrPython, ".py", m.code[f.bodyStart:max(f.bodyStart, end)], pyParamNames(f.params))
+		st.name, st.line = sym, f.start+1
+		r.recordFunc(filePath, m.raw, st)
+	}
+	r.ShapeIssues = append(r.ShapeIssues, pyClassShape(filePath, m, classes, funcs)...)
 }
 
 // analyzeFolderLayout groups files by their containing directory and flags
@@ -478,6 +601,18 @@ func (CodeStructure) RenderMarkdown(res any) string {
 	if r.LooseTypeTotal > 0 {
 		fmt.Fprintf(&b, " · **`any` / `object` types:** %d", r.LooseTypeTotal)
 	}
+	if r.PyFuncs > 0 {
+		fmt.Fprintf(&b, " · **Typed functions:** %d%% (%d/%d)", r.PyTyped*100/r.PyFuncs, r.PyTyped, r.PyFuncs)
+		if r.PyAny > 0 {
+			fmt.Fprintf(&b, " · **`Any`:** %d", r.PyAny)
+		}
+	}
+	if r.TypeIgnores > 0 {
+		fmt.Fprintf(&b, " · **Type-check ignores:** %d", r.TypeIgnores)
+	}
+	if r.DocPublic > 0 {
+		fmt.Fprintf(&b, " · **Documented public API:** %d%% (%d/%d)", r.DocDocumented*100/r.DocPublic, r.DocDocumented, r.DocPublic)
+	}
 	b.WriteString("\n\n")
 
 	writeOffenders := func(title string, offenders []CSFuncOffender) {
@@ -496,6 +631,8 @@ func (CodeStructure) RenderMarkdown(res any) string {
 	}
 	writeOffenders("High-parameter functions", r.HighParamFuncs)
 	writeOffenders("Deeply nested functions", r.DeepNestFuncs)
+	writeOffenders("Cyclomatic complexity", r.HighComplexity)
+	issuesMarkdown(&b, "📐 Shape limits", r.ShapeIssues, true, 5*maxIssueExamples)
 
 	if len(r.LooseTypeFiles) > 0 {
 		fmt.Fprintf(&b, "`any` / `object` types by file (%d total)\n\n| File | any | object | Location |\n|------|----:|-------:|----------|\n", r.LooseTypeTotal)
@@ -509,10 +646,11 @@ func (CodeStructure) RenderMarkdown(res any) string {
 		b.WriteString("\n")
 	}
 
-	issuesMarkdown(&b, "🐛 Suspicious code (Go)", r.BugIssues, true)
-	issuesMarkdown(&b, "👯 Duplicate code", r.DupIssues, true)
-	issuesMarkdown(&b, "⚛️ React hooks & state", r.HookIssues, true)
-	issuesMarkdown(&b, "🧩 React components", r.ReactIssues, true)
+	issuesMarkdown(&b, "🔀 Merge & diff markers", r.MarkerIssues, true, 5*maxIssueExamples)
+	issuesMarkdown(&b, "🐛 Suspicious code", r.BugIssues, true, 5*maxIssueExamples)
+	issuesMarkdown(&b, "👯 Duplicate code", r.DupIssues, true, 5*maxIssueExamples)
+	issuesMarkdown(&b, "⚛️ React hooks & state", r.HookIssues, true, 5*maxIssueExamples)
+	issuesMarkdown(&b, "🧩 React components", r.ReactIssues, true, 5*maxIssueExamples)
 
 	if r.HasFolderSmells() {
 		b.WriteString("Folder-structure smells:\n\n")
@@ -546,11 +684,16 @@ func (CodeStructure) RenderHTML(res any) string {
 	writeCSHeader(&b, r)
 
 	writeCSOffenders(&b, "params", "🔢", fmt.Sprintf("Functions with too many parameters (&gt; %d)", csMaxParams), "PARAMS", r.HighParamFuncs)
+	writeCSOffenders(&b, "cyclo", "🌀", fmt.Sprintf("Cyclomatic complexity (&gt; %d)", csMaxCyclomatic), "CC", r.HighComplexity)
 	writeCSOffenders(&b, "nest", "🪆", fmt.Sprintf("Deeply nested functions (&gt; %d levels)", csMaxNestDepth), "DEPTH", r.DeepNestFuncs)
 	writeCSLooseTypes(&b, r.LooseTypeFiles, r.LooseTypeTotal)
-	writeIssueSubcard(&b, "bug", "🐛", "Suspicious code (Go)", "Bug-class patterns from go-critic: identical operands, impossible conditions, off-by-one, missing return after http.Error, bad locks…", r.BugIssues, true, maxIssueExamples)
-	writeIssueSubcard(&b, "dup", "👯", "Duplicate code", "Neighbouring if/else branches with the same body and repeated case labels.", r.DupIssues, true, maxIssueExamples)
+	writeCSTypingSubcard(&b, r.TypingFiles, r.PyFuncs, r.PyTyped)
+	writeCSDocSubcard(&b, r.DocFiles, r.DocPublic, r.DocDocumented)
+	writeIssueSubcard(&b, "markers", "🔀", "Merge & diff markers", "Unresolved merge-conflict markers and pasted diff headers left in source (ported from dodgy).", r.MarkerIssues, true, maxIssueExamples)
+	writeIssueSubcard(&b, "bug", "🐛", "Suspicious code", "Bug-class patterns from go-critic (Go) and pylint/pyflakes (Python): identical operands, impossible conditions, off-by-one, mutable default arguments, bare/swallowed except, bad locks…", r.BugIssues, true, maxIssueExamples)
+	writeIssueSubcard(&b, "dup", "👯", "Duplicate code", "Code copied between places (blocks of 15+ identical lines across or within files), neighbouring if/else branches with the same body, and repeated case labels.", r.DupIssues, true, maxIssueExamples)
 	writeIssueSubcard(&b, "hooks", "⚛️", "React hooks & state", "Hook and state mistakes (ported from react-code-audit): missing dependencies, setState loops, in-place state mutation, derived state, index keys…", r.HookIssues, true, maxIssueExamples)
+	writeIssueSubcard(&b, "shape", "📐", "Shape limits", "pylint-style limits: too many returns (> 6), branches (> 12) or locals (> 15) in a function; too many attributes, public methods or bases in a Python class; modules over 1000 lines.", r.ShapeIssues, true, maxIssueExamples)
 	writeIssueSubcard(&b, "react", "🧩", "React components", "Component size, prop count, JSX nesting depth and prop drilling.", r.ReactIssues, true, maxIssueExamples)
 
 	if r.HasFolderSmells() {
@@ -614,6 +757,78 @@ func csTone(h, m, l int) string {
 	return "var(--good)"
 }
 
+// ccColor colours a cyclomatic-complexity value by McCabe's bands.
+func ccColor(v int) string {
+	switch {
+	case v > 50:
+		return "var(--crit)"
+	case v > 20:
+		return "var(--bad)"
+	case v > csMaxCyclomatic:
+		return "var(--warn)"
+	}
+	return "var(--good)"
+}
+
+func ccTarget(r CodeStructureReport) string {
+	if len(r.HighComplexity) > 0 {
+		return "cyclo"
+	}
+	return ""
+}
+
+func docTarget(r CodeStructureReport) string {
+	if len(r.DocFiles) > 0 {
+		return "docs"
+	}
+	return ""
+}
+
+// writeCSTypingSubcard lists the Python files with the most untyped functions / Any.
+func writeCSTypingSubcard(b *strings.Builder, files []CSTypingFile, funcs, typed int) {
+	if len(files) == 0 {
+		return
+	}
+	writeSubOpen(b, "typing", "🏷️", fmt.Sprintf("Typing — %d of %d functions fully annotated", typed, funcs), len(files),
+		"Python functions need an annotation on every parameter and on the return value for mypy/pyright to check their callers.")
+	b.WriteString(`<table class="as-table as-cs__table"><thead><tr><th>File</th><th>Functions</th><th>Typed</th><th>Any</th><th>Ignores</th><th>First untyped</th></tr></thead><tbody>`)
+	for i, f := range files {
+		if i == csMaxAnyListShown {
+			fmt.Fprintf(b, `<tr><td colspan="6" class="as-cs__more">… and %d more</td></tr>`, len(files)-csMaxAnyListShown)
+			break
+		}
+		loc := ""
+		if f.FirstUntyped > 0 {
+			loc = occurrenceLink(fmt.Sprintf("%s:%d", baseName(f.FilePath), f.FirstUntyped), f.FilePath, f.FirstUntyped)
+		}
+		fmt.Fprintf(b, `<tr><td class="mono">%s</td><td class="mono">%d</td><td class="mono">%d%%</td><td class="mono">%d</td><td class="mono">%d</td><td class="mono">%s</td></tr>`,
+			html.EscapeString(baseName(f.FilePath)), f.Funcs, f.Typed*100/max(f.Funcs, 1), f.AnyCount, f.Ignores, loc)
+	}
+	b.WriteString(`</tbody></table>`)
+	writeSubClose(b)
+}
+
+// writeCSDocSubcard lists the files with the most undocumented public API.
+func writeCSDocSubcard(b *strings.Builder, files []CSDocFile, public, documented int) {
+	if len(files) == 0 {
+		return
+	}
+	writeSubOpen(b, "docs", "📝", fmt.Sprintf("Documentation — %d of %d public symbols documented", documented, public), len(files),
+		"Public functions, classes and types without a doc comment (docstring, godoc, JSDoc, KDoc/Javadoc, ///), by file.")
+	b.WriteString(`<table class="as-table as-cs__table"><thead><tr><th>File</th><th>Public</th><th>Documented</th><th>First missing</th></tr></thead><tbody>`)
+	for i, f := range files {
+		if i == csMaxAnyListShown {
+			fmt.Fprintf(b, `<tr><td colspan="4" class="as-cs__more">… and %d more</td></tr>`, len(files)-csMaxAnyListShown)
+			break
+		}
+		loc := occurrenceLink(fmt.Sprintf("%s:%d", baseName(f.FilePath), f.FirstMissing), f.FilePath, f.FirstMissing)
+		fmt.Fprintf(b, `<tr><td class="mono">%s</td><td class="mono">%d</td><td class="mono">%d%%</td><td class="mono">%s</td></tr>`,
+			html.EscapeString(baseName(f.FilePath)), f.Public, f.Documented*100/max(f.Public, 1), loc)
+	}
+	b.WriteString(`</tbody></table>`)
+	writeSubClose(b)
+}
+
 // nestTarget links the worst-nesting minicard to the nesting subcard when one exists.
 func nestTarget(r CodeStructureReport) string {
 	if len(r.DeepNestFuncs) > 0 {
@@ -646,11 +861,28 @@ func writeCSHeader(b *strings.Builder, r CodeStructureReport) {
 	if r.WorstNest.Value > 0 {
 		writeCSMini(b, strconv.Itoa(r.WorstNest.Value), "worst nesting", r.WorstNest.Symbol, healthColor(100-r.WorstNest.Value*15), nestTarget(r))
 	}
+	if r.WorstCC.Value > 0 {
+		writeCSMini(b, strconv.Itoa(r.WorstCC.Value), "worst complexity", r.WorstCC.Symbol, ccColor(r.WorstCC.Value), ccTarget(r))
+	}
 	if n := len(r.DeepNestFuncs); n > 0 {
 		writeCSMini(b, strconv.Itoa(n), "deeply nested", fmt.Sprintf("functions > %d levels", csMaxNestDepth), healthColor(100-n*5), "nest")
 	}
 	if n := len(r.HighParamFuncs); n > 0 {
 		writeCSMini(b, strconv.Itoa(n), "many parameters", fmt.Sprintf("functions > %d params", csMaxParams), healthColor(100-n*5), "params")
+	}
+	if r.PyFuncs > 0 {
+		pct := r.PyTyped * 100 / r.PyFuncs
+		writeCSMini(b, strconv.Itoa(pct)+"%", "typed functions", fmt.Sprintf("%d of %d annotated", r.PyTyped, r.PyFuncs), healthColor(pct), "typing")
+		if r.PyAny > 0 {
+			writeCSMini(b, strconv.Itoa(r.PyAny), "Any", "in annotations", healthColor(100-r.PyAny*2), "typing")
+		}
+	}
+	if r.TypeIgnores > 0 {
+		writeCSMini(b, strconv.Itoa(r.TypeIgnores), "type-check ignores", "type: ignore / @ts-ignore", healthColor(100-r.TypeIgnores*3), "")
+	}
+	if r.DocPublic > 0 {
+		pct := r.DocDocumented * 100 / r.DocPublic
+		writeCSMini(b, strconv.Itoa(pct)+"%", "documented API", fmt.Sprintf("%d of %d public", r.DocDocumented, r.DocPublic), healthColor(pct), docTarget(r))
 	}
 	if r.LooseTypeTotal > 0 {
 		writeCSMini(b, strconv.Itoa(r.LooseTypeTotal), "any / object types", fmt.Sprintf("in %d files", len(r.LooseTypeFiles)), healthColor(100-r.LooseTypeTotal*2), "loose")
@@ -665,10 +897,12 @@ func writeCSHeader(b *strings.Builder, r CodeStructureReport) {
 		issues           []CSIssue
 	}
 	sums := []sum{
+		{"markers", "🔀", "merge / diff markers", r.MarkerIssues},
 		{"bug", "🐛", "suspicious code", r.BugIssues},
 		{"dup", "👯", "duplicate code", r.DupIssues},
 		{"hooks", "⚛️", "React hooks & state", r.HookIssues},
 		{"react", "🧩", "React components", r.ReactIssues},
+		{"shape", "📐", "shape limits", r.ShapeIssues},
 	}
 	var minis strings.Builder
 	for _, sm := range sums {

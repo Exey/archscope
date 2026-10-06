@@ -138,7 +138,7 @@ func (Regex) Analyze(files []*parser.ParsedFile) any {
 		if stripped == nil || raw == nil {
 			continue
 		}
-		rep.Issues = append(rep.Issues, scanRegex(f.FilePath, lang, stripped, raw)...)
+		rep.Issues = append(rep.Issues, suppressIssues(security.NewSuppressor(raw), scanRegex(f.FilePath, lang, stripped, raw))...)
 	}
 	sortIssuesBySeverity(rep.Issues)
 	rep.High, rep.Medium, rep.Low = issueSevCounts(rep.Issues)

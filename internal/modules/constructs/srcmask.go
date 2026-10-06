@@ -35,7 +35,8 @@ func maskSource(raw []string, fileExt string) maskedFile {
 	rust := fileExt == ".rs"
 	backtick := fileExt == ".go" || fileExt == ".js" || fileExt == ".jsx" || fileExt == ".ts" || fileExt == ".tsx" || fileExt == ".mjs" || fileExt == ".cjs" || fileExt == ".mts" || fileExt == ".cts"
 	jsTemplate := fileExt != ".go" // ${…} interpolation exists in JS/TS templates, not Go raw strings
-	triple := fileExt == ".java" || fileExt == ".kt" || fileExt == ".kts" || fileExt == ".swift" || fileExt == ".cs"
+	python := fileExt == ".py" || fileExt == ".pyi"
+	triple := python || fileExt == ".java" || fileExt == ".kt" || fileExt == ".kts" || fileExt == ".swift" || fileExt == ".cs"
 	inBlock := false
 	ml := "" // closer of a """ string spanning lines
 	// tstack tracks JS/Go template literals, which nest: `a ${ cond ? `b` : `c` } d`.
@@ -137,15 +138,22 @@ func maskSource(raw []string, fileExt string) maskedFile {
 				continue
 			}
 			switch {
-			case ch == '/' && i+1 < len(line) && line[i+1] == '/':
+			case !python && ch == '/' && i+1 < len(line) && line[i+1] == '/':
 				blank(c, i, len(line))
 				blank(t, i, len(line))
 				i = len(line)
-			case ch == '/' && i+1 < len(line) && line[i+1] == '*':
+			case !python && ch == '/' && i+1 < len(line) && line[i+1] == '*':
 				inBlock = true
 				blank(c, i, i+2)
 				blank(t, i, i+2)
 				i += 2
+			case python && ch == '#':
+				blank(c, i, len(line))
+				blank(t, i, len(line))
+				i = len(line)
+			case python && (ch == '"' || ch == '\'') && strings.HasPrefix(line[i:], strings.Repeat(string(ch), 3)):
+				ml = strings.Repeat(string(ch), 3)
+				i += 3
 			case triple && ch == '"' && strings.HasPrefix(line[i:], `"""`):
 				ml = `"""`
 				i += 3

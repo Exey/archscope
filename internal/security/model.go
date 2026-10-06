@@ -134,6 +134,7 @@ type RuleResult struct {
 	Rule       Rule
 	Findings   []Finding
 	TotalCount int // uncapped, used for density scoring
+	Suppressed int // findings silenced by `# noqa` / `# nosec` / `//nolint` / `eslint-disable` … comments
 }
 
 // Passed reports whether the rule produced no findings.

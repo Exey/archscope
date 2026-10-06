@@ -138,7 +138,9 @@ type cultureRow struct {
 	algoScore                int
 	csScore, csWeight        int
 	csHasData                bool
-	reviewIssues             int // string + suspicious-code + duplicate-code findings
+	reviewIssues             int // suspicious-code + duplicate-code + React + shape + marker findings
+	hasDocs, hasTyping       bool
+	docPercent, typedPercent int // documented public API %, fully annotated Python functions %
 
 	// Security: findings-based score (HIGH/MEDIUM out of every rule ArchScope
 	// checked) + 🩺 Traffic Health, weighted 30% when traffic data exists.
@@ -623,6 +625,12 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 			r.csHasData = v.HasData()
 			r.csScore = codeStructureScore(v, r.loc)
 			r.reviewIssues = v.ReviewIssueCount()
+			if v.DocPublic > 0 {
+				r.hasDocs, r.docPercent = true, v.DocDocumented*100/v.DocPublic
+			}
+			if v.PyFuncs > 0 {
+				r.hasTyping, r.typedPercent = true, v.PyTyped*100/v.PyFuncs
+			}
 		case constructs.ComplexityReport:
 			r.perf = v.TimeHealth
 			for _, viol := range v.TimeViolations {

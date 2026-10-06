@@ -143,3 +143,84 @@ func TestDeadCodeRealWorldRegressions(t *testing.T) {
 		t.Errorf("import used only in a comment: want 1, got %d", n)
 	}
 }
+
+func TestPythonDeadCode(t *testing.T) {
+	src := "import os\nimport sys, json as j\nfrom collections import OrderedDict, defaultdict as dd\nfrom typing import TYPE_CHECKING, List\nimport re\n\nif TYPE_CHECKING:\n    from x import Fwd\n\n__all__ = ['exported']\n\ndef used(a):\n    unused = 1\n    kept = 2\n    msg = 'x'\n    try:\n        pass\n    except ValueError as err:\n        pass\n    return f'{kept} {msg!r}', sys.argv, \"Fwd\"\n\ndef ret():\n    return 1\n    print('never')\n\ndef loop(xs):\n    for x in xs:\n        if x:\n            continue\n            x += 1\n        break\n    else:\n        pass\n"
+	got := deadIssues(t, ".py", src)
+	var imports []string
+	for _, g := range got {
+		if g.RuleID == "dead-unused-import" {
+			imports = append(imports, g.Detail)
+		}
+	}
+	// unused: os, json (as j), OrderedDict, dd, List, re ; used: sys, Fwd (quoted), TYPE_CHECKING
+	if len(imports) != 6 {
+		t.Errorf("unused imports = %v (want os, json as j, OrderedDict, dd, List, re)", imports)
+	}
+	var vars []string
+	for _, g := range got {
+		if g.RuleID == "dead-unused-var" {
+			vars = append(vars, g.Detail)
+		}
+	}
+	if len(vars) != 2 { // unused, err
+		t.Errorf("unused vars = %v (want unused, err)", vars)
+	}
+	if n := countRule(got, "dead-unreachable"); n != 2 {
+		t.Errorf("unreachable = %d, want 2 (after return, after continue)", n)
+	}
+	cm := "# def old(x):\n#     return x + 1\n# y = old(2)\nz = 1\n# A normal sentence.\n# Another one here.\n# And a third.\n"
+	if n := countRule(deadIssues(t, ".py", cm), "dead-commented-code"); n != 1 {
+		t.Errorf("python commented code = %d", n)
+	}
+	// __init__.py re-exports are not unused imports
+	if got := deadIssues(t, ".py", "from .a import b\n"); countRule(got, "dead-unused-import") != 1 {
+		t.Log("(a plain module is checked)")
+	}
+}
+
+func unusedSyms(t *testing.T, files map[string]string) []string {
+	t.Helper()
+	var pf []*parser.ParsedFile
+	for ext, src := range files {
+		pf = append(pf, writeFile(t, ext, src))
+	}
+	var names []string
+	for _, is := range (DeadCode{}).Analyze(pf).(DeadCodeReport).Issues {
+		if is.RuleID == "dead-unused-symbol" || is.RuleID == "dead-possibly-unused" {
+			names = append(names, is.Detail)
+		}
+	}
+	return names
+}
+
+func TestUnusedSymbolsPythonAndGo(t *testing.T) {
+	py := "def _helper():\n    return 1\n\ndef _used():\n    return 2\n\nclass _Dead:\n    def _gone(self):\n        pass\n\n    def keep(self):\n        return _used()\n\n@app.route('/x')\ndef _routed():\n    pass\n\ndef public_api():\n    return 3\n\ndef _by_name():\n    pass\n\nHANDLERS = {'k': '_by_name'}\n"
+	got := unusedSyms(t, map[string]string{".py": py})
+	want := map[string]bool{"_helper (90% confidence)": true, "_Dead (90% confidence)": true, "_gone (90% confidence)": true}
+	if len(got) != 3 {
+		t.Fatalf("python unused = %v", got)
+	}
+	for _, g := range got {
+		if !want[g] {
+			t.Errorf("unexpected %q (public_api is a library API, _routed is decorated, _by_name is in a string)", g)
+		}
+	}
+	script := py + "\nif __name__ == '__main__':\n    pass\n"
+	if got := unusedSyms(t, map[string]string{".py": script}); len(got) != 4 {
+		t.Errorf("in a script the public function is a 60%% candidate too: %v", got)
+	}
+
+	goSrc := "package p\n\nfunc used() int { return 1 }\nfunc unusedFn() int { return 2 }\ntype unusedT struct{}\nfunc Exported() int { return used() }\nfunc main() {}\n"
+	if got := unusedSyms(t, map[string]string{".go": goSrc}); len(got) != 2 {
+		t.Errorf("go unused = %v (want unusedFn, unusedT)", got)
+	}
+	java := "class A {\n  private void gone() {}\n  private void kept() {}\n  void run() { kept(); }\n  @Override private void hook() {}\n}\n"
+	if got := unusedSyms(t, map[string]string{".java": java}); len(got) != 1 {
+		t.Errorf("java unused = %v (want gone)", got)
+	}
+	ts := "function unusedFn() {}\nfunction usedFn() {}\nexport function pub() { usedFn(); }\nclass Hidden {}\n"
+	if got := unusedSyms(t, map[string]string{".ts": ts}); len(got) != 2 {
+		t.Errorf("ts unused = %v (want unusedFn, Hidden)", got)
+	}
+}

@@ -91,7 +91,13 @@ func cultureMetrics(r cultureRow) []evolution.Metric {
 	add(dimQuality, "Algorithms detected", r.algoCount, "", true)
 	if r.csHasData {
 		add(dimQuality, "Code-structure score", r.csScore, "%", true)
-		add(dimQuality, "Bug / duplicate / React issues", r.reviewIssues, "", false)
+		add(dimQuality, "Review issues (bug / duplicate / shape / React)", r.reviewIssues, "", false)
+		if r.hasDocs {
+			add(dimQuality, "Documented public API", r.docPercent, "%", true)
+		}
+		if r.hasTyping {
+			add(dimQuality, "Fully typed Python functions", r.typedPercent, "%", true)
+		}
 	}
 	if r.hasDead {
 		add(dimQuality, "Dead-code issues", r.deadTotal, "", false)
@@ -223,6 +229,19 @@ func cultureItems(res *result.AnalysisResult, r cultureRow, pmap map[string]lang
 			}
 			addIssues("Suspicious code", v.BugIssues)
 			addIssues("Duplicate code", v.DupIssues)
+			addIssues("Shape limit", v.ShapeIssues)
+			addIssues("Merge / diff marker", v.MarkerIssues)
+			for _, o := range v.HighComplexity {
+				w := 1
+				if o.Value > 50 {
+					w = 5
+				} else if o.Value > 20 {
+					w = 2
+				}
+				add(evolution.Item{Dim: dimQuality, Kind: "High complexity", Name: o.Symbol,
+					Note: fmt.Sprintf("cyclomatic %d", o.Value), Path: o.FilePath, Line: o.Line, Size: o.Value, Weight: w},
+					key("cc", relPath(root, o.FilePath), o.Symbol))
+			}
 			addIssues("React hooks & state", v.HookIssues)
 			addIssues("React component", v.ReactIssues)
 		case constructs.ComplexityReport:

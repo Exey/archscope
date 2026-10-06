@@ -4,8 +4,9 @@
 // but never read. A lexical port of the dead-code rules of ~/react-code-audit,
 // over the length-preserving masked source (srcmask.go).
 //
-// It runs on JS/TS today (the "ts" language id); the rule bodies are keyed on a
-// per-language scanner so other languages can be added next to scanDeadCodeJS.
+// It runs on JS/TS (the "ts" language id, scanDeadCodeJS) and Python
+// (deadcode_py.go); the rule bodies are keyed on a per-language scanner so other
+// languages can be added next to them.
 // It feeds 🧹 Code Quality in Programming Culture.
 package constructs
 
@@ -25,9 +26,11 @@ func init() { modules.Default.Register(DeadCode{}) }
 // DeadCode is the dead-code detector.
 type DeadCode struct{}
 
-func (DeadCode) ID() string                       { return "deadcode" }
-func (DeadCode) Title() string                    { return "Dead Code" }
-func (DeadCode) AppliesTo(languageID string) bool { return languageID == "ts" }
+func (DeadCode) ID() string    { return "deadcode" }
+func (DeadCode) Title() string { return "Dead Code" }
+func (DeadCode) AppliesTo(languageID string) bool {
+	return languageID == "ts" || languageID == "python"
+}
 
 // DeadCodeReport is the module output.
 type DeadCodeReport struct {
@@ -64,15 +67,23 @@ func (DeadCode) Analyze(files []*parser.ParsedFile) any {
 	var rep DeadCodeReport
 	for _, f := range files {
 		fe := ext(f.FilePath)
-		if !isJSFamily(fe) || security.IsTestOrBenchPath(f.FilePath) || strings.HasSuffix(strings.ToLower(f.FilePath), ".d.ts") {
+		isPy := fe == ".py" || fe == ".pyi"
+		if !(isJSFamily(fe) || isPy) || security.IsTestOrBenchPath(f.FilePath) || strings.HasSuffix(strings.ToLower(f.FilePath), ".d.ts") {
 			continue
 		}
 		raw := cache.rawLines(f.FilePath)
 		if raw == nil {
 			continue
 		}
-		rep.Issues = append(rep.Issues, scanDeadCodeJS(f.FilePath, maskSource(raw, fe))...)
+		var found []CSIssue
+		if isPy {
+			found = scanDeadCodePy(f.FilePath, maskSource(raw, fe))
+		} else {
+			found = scanDeadCodeJS(f.FilePath, maskSource(raw, fe))
+		}
+		rep.Issues = append(rep.Issues, suppressIssues(security.NewSuppressor(raw), found)...)
 	}
+	rep.Issues = append(rep.Issues, scanUnusedSymbols(files, cache)...)
 	sortIssuesBySeverity(rep.Issues)
 	rep.High, rep.Medium, rep.Low = issueSevCounts(rep.Issues)
 	return rep

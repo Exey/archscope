@@ -103,13 +103,21 @@ func (e *Engine) Run(files []SourceFile, loader LineLoader, repoPath string, onC
 	rules := e.activeRules()
 
 	// ── Phase 1: load lines for each file once, grouped by language ──
+	type supCell struct {
+		once sync.Once
+		s    *Suppressor
+	}
 	type loaded struct {
 		path       string
 		relPath    string // repo-root-relative (for SARIF uri); "" if unreachable
 		languageID string
 		lines      []string
+		sup        *supCell // lazily-built suppression comments of this file
 	}
 	all := make([]loaded, len(files))
+	for i := range all {
+		all[i].sup = &supCell{}
+	}
 	// Pre-compute relative paths (cheap string ops, no I/O) before the goroutines.
 	for i := range files {
 		rel, err := filepath.Rel(repoPath, files[i].Path)
@@ -158,11 +166,29 @@ func (e *Engine) Run(files []SourceFile, loader LineLoader, repoPath string, onC
 			rule := rules[ri]
 			rr := RuleResult{Rule: rule}
 			if !rule.ProjectOnly && rule.Detect != nil {
-				for _, f := range all {
+				for fi := range all {
+					f := &all[fi]
 					if len(f.lines) == 0 || !rule.AppliesToLanguage(f.languageID) {
 						continue
 					}
 					vs := rule.Detect(displayPath(f.path), f.lines)
+					if len(vs) > 0 {
+						// Honour `# noqa` / `# nosec` / `//nolint` / `eslint-disable` … the
+						// author already put on the line.
+						f.sup.once.Do(func() { f.sup.s = NewSuppressor(f.lines) })
+						if f.sup.s != nil {
+							fam := SecurityFamilies(f.languageID)
+							kept := vs[:0:0]
+							for _, v := range vs {
+								if f.sup.s.Suppressed(v.Line, rule.ID, fam...) {
+									rr.Suppressed++
+									continue
+								}
+								kept = append(kept, v)
+							}
+							vs = kept
+						}
+					}
 					for k := range vs {
 						vs[k].FullPath = f.path
 						vs[k].RelPath = f.relPath
