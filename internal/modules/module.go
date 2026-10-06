@@ -67,7 +67,8 @@ var MetaByID = map[string]ModuleMeta{
 	"codestructure":    {Icon: "💻", Order: 11},
 	"memoryleaks":      {Icon: "💧", Order: 12},
 	"regex":            {Icon: "🔎", Order: 13},
-	"concurrency":      {Icon: "🧵", Order: 14},
+	"deadcode":         {Icon: "🪦", Order: 14},
+	"concurrency":      {Icon: "🧵", Order: 15},
 }
 
 // MetaFor returns the ModuleMeta for id, falling back to a generic entry.

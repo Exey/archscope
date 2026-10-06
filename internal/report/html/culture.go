@@ -167,6 +167,12 @@ type cultureRow struct {
 	concHigh, concMed, concTotal       int
 	concScore                          int
 	perfWCx, perfWMl, perfWRx, perfWCc int
+
+	// 🪦 Dead Code (JS/TS): severity-weighted per KLOC, subtracted from Code Quality.
+	hasDead              bool
+	deadTotal            int
+	deadHigh, deadMed    int
+	deadLow, deadPenalty int
 }
 
 // ⚡ Performance is split between 🅾️ Big-O complexity, 💧 Memory Leaks,
@@ -196,6 +202,9 @@ func perfWeights(hasRegex, hasConc bool) (cx, ml, rx, cc int) {
 	}
 	return
 }
+
+// deadCodeMaxPenalty caps how many Code Quality points 🪦 Dead Code can cost.
+const deadCodeMaxPenalty = 10
 
 // curveScoreFloor and curveScoreDecay shape the shared asymptotic scoring
 // curve used by both 🛡️ Dangers and ⚡ Performance: score = floor +
@@ -631,6 +640,9 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 		case constructs.RegexReport:
 			r.hasRegex = true
 			r.regexHigh, r.regexMed, r.regexTotal = v.High, v.Medium, v.Total()
+		case constructs.DeadCodeReport:
+			r.hasDead = true
+			r.deadTotal, r.deadHigh, r.deadMed, r.deadLow = v.Total(), v.High, v.Medium, v.Low
 		case constructs.ConcurrencyReport:
 			r.hasConc = true
 			r.concHigh, r.concMed, r.concTotal = v.High, v.Medium, v.Total()
@@ -809,6 +821,14 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 	r.quality = clampInt(
 		(r.lfScore*r.lfWeight+r.ltScore*r.ltWeight+r.dsScore*dsWeightPct+r.algoScore*algoWeightPct+r.csScore*r.csWeight+50)/100,
 		5, 100)
+	// 🪦 Dead Code: up to deadCodeMaxPenalty points off Code Quality, scaled by
+	// severity-weighted findings per KLOC.
+	if r.hasDead {
+		kloc := math.Max(float64(r.loc)/1000, 0.1)
+		pts := float64(r.deadHigh)*5 + float64(r.deadMed)*2 + float64(r.deadLow)*0.5
+		r.deadPenalty = int(math.Min(deadCodeMaxPenalty, pts/kloc) + 0.5)
+		r.quality = clampInt(r.quality-r.deadPenalty, 5, 100)
+	}
 
 	// Security (0–100): findings-based score (absolute HIGH findings
 	// dominate — a single HIGH is a flag) + 🩺 Traffic Health, weighted 30%
@@ -876,7 +896,7 @@ func codeStructureScore(v constructs.CodeStructureReport, loc int) int {
 		pen += float64(v.WorstNest.Value-constructs.MaxNestDepth) * 4
 	}
 	pen += float64(len(v.HighParamFuncs)) / kloc * 5
-	// 🔤 Strings, 🐛 Suspicious code and 👯 Duplicate code, severity-weighted per KLOC.
+	// 🐛 Suspicious code, 👯 Duplicate code and ⚛️ React findings, severity-weighted per KLOC.
 	pen += math.Min(15, v.IssuePoints()/kloc)
 	if v.HasFolderSmells() {
 		pen += 8
@@ -986,7 +1006,10 @@ func qualityTip(r cultureRow) string {
 		return "<div>DevOps: static-analysis pass rate across Dockerfile/Compose/Helm.</div>"
 	}
 	var b strings.Builder
-	b.WriteString(dimLine(modPanelID(r.key, "codestructure"), fmt.Sprintf("💻 %d%% Code Structure incl. %d string / bug / duplicate-code issues (%d%% W)", r.csScore, r.reviewIssues, r.csWeight)))
+	b.WriteString(dimLine(modPanelID(r.key, "codestructure"), fmt.Sprintf("💻 %d%% Code Structure incl. %d bug / duplicate / React issues (%d%% W)", r.csScore, r.reviewIssues, r.csWeight)))
+	if r.hasDead {
+		b.WriteString(dimLine(modPanelID(r.key, "deadcode"), fmt.Sprintf("🪦 %d Dead code (−%d pts)", r.deadTotal, r.deadPenalty)))
+	}
 	b.WriteString(dimLine(modPanelID(r.key, "datastructures"), fmt.Sprintf("🌳 %d%% Data Structures (%d%% W)", r.dsScore, dsWeightPct)))
 	b.WriteString(dimLine(modPanelID(r.key, "algorithms"), fmt.Sprintf("🔀 %d%% Algorithms (%d%% W)", r.algoScore, algoWeightPct)))
 	b.WriteString(dimLine(cultAnchorID("biggesttypes", r.key), fmt.Sprintf("📐 %d%% Big Types (%d%% W)", r.ltScore, r.ltWeight)))
@@ -1014,7 +1037,7 @@ func perfTip(r cultureRow) string {
 	b.WriteString(dimLine(modPanelID(r.key, "complexity"), fmt.Sprintf("🅾️ %d 𝒪(n³)+ / %d 𝒪(n²) — %d%% (%d%% W)", r.n3, r.n2, r.complexityScore, r.perfWCx)))
 	b.WriteString(dimLine(modPanelID(r.key, "memoryleaks"), fmt.Sprintf("💧 %d Memory Leaks %d%% (%d%% W)", r.memLeaks, r.memLeaksScore, r.perfWMl)))
 	if r.hasRegex {
-		b.WriteString(dimLine(modPanelID(r.key, "regex"), fmt.Sprintf("🔎 %d Regex %d%% (%d%% W)", r.regexTotal, r.regexScore, r.perfWRx)))
+		b.WriteString(dimLine(modPanelID(r.key, "regex"), fmt.Sprintf("🔤🔎 %d Strings & Regex %d%% (%d%% W)", r.regexTotal, r.regexScore, r.perfWRx)))
 	}
 	if r.hasConc {
 		b.WriteString(dimLine(modPanelID(r.key, "concurrency"), fmt.Sprintf("🧵 %d Concurrency %d%% (%d%% W)", r.concTotal, r.concScore, r.perfWCc)))

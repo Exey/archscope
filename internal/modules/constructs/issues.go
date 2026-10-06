@@ -24,6 +24,15 @@ type CSIssue struct {
 	FilePath string
 	Line     int
 	Snippet  string // trimmed source line (also the evolution key, so it carries no line number)
+	Detail   string // what this particular hit is about (an identifier, a count); shown beside its location
+}
+
+// Label is the rule name plus this hit's detail, for lists that show one issue at a time.
+func (c CSIssue) Label() string {
+	if c.Detail == "" {
+		return c.Rule
+	}
+	return c.Rule + " — " + c.Detail
 }
 
 // issueGroup is every issue of one rule collapsed into a row.
@@ -101,7 +110,11 @@ func writeIssueTable(b *strings.Builder, issues []CSIssue, withSev bool, maxLoc 
 				links = append(links, fmt.Sprintf(`<span class="as-cx__more">+%d more</span>`, len(g.Items)-maxLoc))
 				break
 			}
-			links = append(links, occurrenceLink(fmt.Sprintf("%s:%d", baseName(is.FilePath), is.Line), is.FilePath, is.Line))
+			link := occurrenceLink(fmt.Sprintf("%s:%d", baseName(is.FilePath), is.Line), is.FilePath, is.Line)
+			if is.Detail != "" {
+				link += ` <span class="as-cs__detail">` + html.EscapeString(is.Detail) + `</span>`
+			}
+			links = append(links, link)
 		}
 		b.WriteString(`<tr>`)
 		if withSev {
@@ -137,18 +150,32 @@ func sevLabel(s security.Severity) string {
 	return strings.ToUpper(string(s))
 }
 
-// writeIssueSubcard renders one titled subcard inside the Code Structure panel.
-func writeIssueSubcard(b *strings.Builder, icon, title, hint string, issues []CSIssue, withSev bool) {
-	if len(issues) == 0 {
-		return
+// writeSubOpen opens one titled subcard inside the Code Structure panel; key
+// is what a header minicard's data-target points at. titleHTML must already be
+// escaped. Close it with writeSubClose.
+func writeSubOpen(b *strings.Builder, key, icon, titleHTML string, count int, hint string) {
+	attr := ""
+	if key != "" {
+		attr = ` data-sub="` + html.EscapeString(key) + `"`
 	}
-	fmt.Fprintf(b, `<div class="as-cs__sub"><div class="as-cs__sub-head"><span class="ico">%s</span><span class="as-cs__sub-title">%s</span> <span class="as-count">(%d)</span></div>`,
-		icon, html.EscapeString(title), len(issues))
+	fmt.Fprintf(b, `<div class="as-cs__sub"%s><div class="as-cs__sub-head"><span class="ico">%s</span><span class="as-cs__sub-title">%s</span> <span class="as-count">(%d)</span></div>`,
+		attr, icon, titleHTML, count)
 	if hint != "" {
 		fmt.Fprintf(b, `<div class="as-cs__sub-hint">%s</div>`, html.EscapeString(hint))
 	}
-	writeIssueTable(b, issues, withSev, maxIssueExamples)
-	b.WriteString(`</div>`)
+}
+
+func writeSubClose(b *strings.Builder) { b.WriteString(`</div>`) }
+
+// writeIssueSubcard renders one titled subcard of issues inside the Code
+// Structure panel (or a dedicated card).
+func writeIssueSubcard(b *strings.Builder, key, icon, title, hint string, issues []CSIssue, withSev bool, maxLoc int) {
+	if len(issues) == 0 {
+		return
+	}
+	writeSubOpen(b, key, icon, html.EscapeString(title), len(issues), hint)
+	writeIssueTable(b, issues, withSev, maxLoc)
+	writeSubClose(b)
 }
 
 // issuesMarkdown renders issues grouped by rule as a markdown table.
@@ -173,7 +200,11 @@ func issuesMarkdown(b *strings.Builder, title string, issues []CSIssue, withSev 
 				ex = append(ex, fmt.Sprintf("+%d more", len(g.Items)-limit))
 				break
 			}
-			ex = append(ex, fmt.Sprintf("%s:%d", baseName(is.FilePath), is.Line))
+			loc := fmt.Sprintf("%s:%d", baseName(is.FilePath), is.Line)
+			if is.Detail != "" {
+				loc += " (" + is.Detail + ")"
+			}
+			ex = append(ex, loc)
 		}
 		if withSev {
 			fmt.Fprintf(b, "| %s | %s | %d | %s |\n", sevLabel(g.Severity), g.Rule, len(g.Items), strings.Join(ex, ", "))
@@ -198,10 +229,12 @@ func writeIssueCard(b *strings.Builder, icon, noun string, issues []CSIssue) {
 	fmt.Fprintf(b, `<div class="as-ml__summary">%s <b>%d</b> %s issue%s <span class="as-count">(%dH / %dM / %dL)</span></div>`,
 		icon, len(issues), noun, plural(len(issues), "", "s"), h, m, l)
 	for _, grp := range issueGroupsByName(issues) {
-		if grp.name != "" {
-			fmt.Fprintf(b, `<div class="as-cs__viol-title">%s <span class="as-count">(%d)</span></div>`, html.EscapeString(grp.name), len(grp.items))
+		if grp.name == "" {
+			writeIssueTable(b, grp.items, true, maxIssueLocations)
+			continue
 		}
-		writeIssueTable(b, grp.items, true, maxIssueLocations)
+		info := groupInfo[grp.name]
+		writeIssueSubcard(b, "", info.icon, grp.name, info.hint, grp.items, true, maxIssueLocations)
 	}
 	b.WriteString(`</div>`)
 }
@@ -211,7 +244,18 @@ type namedIssues struct {
 	items []CSIssue
 }
 
-// issueGroupsByName splits issues by their Group, keeping first-seen order.
+// groupInfo gives each named group of a dedicated card its subcard icon and hint;
+// groupOrder fixes their order (Strings first).
+var groupInfo = map[string]struct{ icon, hint string }{
+	stringsGroup: {"🔤", "String building and comparison idioms — concatenation in loops, go-critic's string checks, interpolation over `+` chains."},
+	regexGroup:   {"🔎", "Regular expressions that are compiled in loops, can't compile, backtrack catastrophically or can be simplified."},
+	perfGroup:    {"⚡", "go-critic's allocation and copying idioms: appendCombine, rangeAppendAll, sliceClear, indexAlloc, preferWriteByte, preferStringWriter."},
+}
+
+var groupOrder = []string{stringsGroup, regexGroup, perfGroup}
+
+// issueGroupsByName splits issues by their Group: the known groups in groupOrder,
+// then any others in first-seen order.
 func issueGroupsByName(issues []CSIssue) []namedIssues {
 	idx := map[string]int{}
 	var out []namedIssues
@@ -224,6 +268,15 @@ func issueGroupsByName(issues []CSIssue) []namedIssues {
 		}
 		out[i].items = append(out[i].items, is)
 	}
+	rank := func(name string) int {
+		for i, g := range groupOrder {
+			if g == name {
+				return i
+			}
+		}
+		return len(groupOrder)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return rank(out[i].name) < rank(out[j].name) })
 	return out
 }
 

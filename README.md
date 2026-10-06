@@ -75,7 +75,7 @@ If you are checked out *on* the default branch with a bare `--review`, there is 
 
 **What the card shows**
 
-- **Changes: 29 files +1860 −1072** and the **file list**, files with issues first: every file is **✓ OK** (green) or **⚠ N issues** (red, expanded with the issues and their `MR ↗ L<line>` buttons) — an issue is anything the change *introduced or grew*: a new finding, an O(N²) function, a 300-line function, deeper nesting.
+- **Changes: 29 files +1860 −1072** and the **file list**, files with issues first: every file is **✓ OK** (green) or **⚠ N issues** (red, expanded with the issues and their `MR ↗ L<line>` buttons) — an issue is anything the change *introduced or grew*: a new finding, an O(N²) function, a 300-line function, deeper nesting, or a new string / suspicious-code / duplicate-code / React / regex / concurrency / dead-code issue (up to 30 listed per dimension).
 - The usual Evolution comparison (score table, dumbbells, what got worse / better) for the reviewed branch vs its base.
 - Inputs for the 🦊 **GitLab project path**, the **host** to its right and the **MR number**, at the top of the card.
 
@@ -146,7 +146,26 @@ How it works: each baseline commit is extracted with `git archive` into a temp d
 
    - **🅾️ Complexity** *(all brace languages)* — heuristic Big-O "health" read from iteration nesting: a function whose deepest simultaneous loop nesting is *N* levels (nested `for`/`while`, nested higher-order closures like `.map`/`.filter`, or a linear collection op such as `.sorted()`/`.contains(where:)` used inside a loop) is charged O(Nⁿ), and anything O(N²) or worse is surfaced as a time hotspot; collections allocated inside a loop are flagged as space hotspots. Shows time/space health scores (share of loop-bearing functions that stay O(N) or better), a collection-usage summary, and each violation's Big-O badge, symbol, reason, and VS Code link. Indentation-only sources (Python) have no braces, so they contribute nothing rather than a false reading. Ported from ArchSwiftScope's ComplexityDetector.
 
-   - **💧 Memory Leaks** *(Go · Python · Java · TypeScript/JavaScript · Rust · Swift/Objective-C · C/C++)* — resource-lifecycle health read by pairing each language's acquire call (file/socket/DB handle, timer, thread, heap allocation, event listener, …) against its matching release call, flagging every acquire site once a file's acquire count outpaces its release count. A few shapes with no natural pairing — Rust's `mem::forget`, Swift's retain-cycle-prone closures — flag every risky occurrence directly instead. Each finding carries a severity, plain-language advice, and a VS Code link; feeds 10% of 🔰 Programming Culture's Performance dimension.
+   - **💻 Code Structure** *(all languages; some subcards are language-specific)* — low-level code-shape health in one card. The header is a row of **minicards** — comment density, worst nesting, deeply nested and many-parameter functions, loose `any`/`object` types, preprocessor directives — and a second row with one summary minicard per findings subcard (count + HIGH · MEDIUM · LOW split). **Click a minicard to scroll to its subcard.** Every part below is a subcard:
+     - **🔢 Many parameters** and **🪆 Deeply nested functions** — functions over 5 parameters / 4 nesting levels (brace languages; Python has no braces to walk).
+     - **🕳️ Loose `any` / `object` types** *(TypeScript/JavaScript)* — per-file counts of type annotations that switch off static typing.
+     - **🐛 Suspicious code** *(Go)* — bug-class checkers ported from [go-critic](https://github.com/go-critic/go-critic), run lexically without a type checker: identical operands (`a == a`), impossible conditions, `x[len(x)]` and unchecked `Index()` slicing, a missing `return` after `http.Error`, bad lock/unlock pairs, `os.Exit`/`log.Fatal` in a function that defers, an inline error checked under another name, reassigned package errors, case-order mistakes in type switches.
+     - **👯 Duplicate code** *(brace languages)* — neighbouring `if`/`else if`/`else` branches with the same body (compared on the real text, so branches that differ only in a string literal are not duplicates) and the same `case` label listed twice.
+     - **⚛️ React hooks & state** *(TypeScript/JavaScript)* — ported from the react-code-audit rule set: missing hook dependencies (honours `eslint-disable … exhaustive-deps`), `setState` in an effect with no deps (render loop), in-place state mutation, state derived from props or other state through an effect, effects used as event handlers, `ref.current` rendered in JSX, array-index keys.
+     - **🧩 React components** — components over 250 lines or 7 props, JSX nested deeper than 6 levels, props passed straight through to children.
+     - **🗑️ Folder structure smells** — overcrowded folders, container-only folders, one-file folders.
+
+     Findings feed 🧹 Code Quality in 🔰 Programming Culture (severity-weighted per KLOC, capped).
+
+   - **💧 Memory Leaks** *(Go · Python · Java · TypeScript/JavaScript · Rust · Swift/Objective-C · C/C++)* — resource-lifecycle health read by pairing each language's acquire call (file/socket/DB handle, timer, thread, heap allocation, event listener, …) against its matching release call, flagging every acquire site once a file's acquire count outpaces its release count. A few shapes with no natural pairing — Rust's `mem::forget`, Swift's retain-cycle-prone closures — flag every risky occurrence directly instead. Each finding carries a severity, plain-language advice, and a VS Code link; feeds 10% of 🔰 Programming Culture's Performance dimension (🅾️ Complexity 70% · 💧 Memory Leaks 10% · 🔤🔎 Strings & Regex 5% · 🧵 Concurrency 15%; a card that doesn't apply to a platform gives its share back to Complexity).
+
+   - **🔤🔎 Strings & Regex** *(Go · Python · Java · Kotlin · Swift/Objective-C · TypeScript/JavaScript · Rust · C#/C/C++)* — one card, three subcards. **🔤 Strings**: `+=` string building inside loops (quadratic copying), `"a" + x + "b"` chains where the language has interpolation, case-insensitive comparison by lower-casing both sides, `length == 0` instead of `isEmpty`, and go-critic's Go string checks (`strings.Compare`, `Sprintf("%s", x)`, `Errorf(nonConstant)`, `Sprintf` fed to a writer, `string([]byte(s))`, …). **🔎 Regex**: a regex compiled inside a loop, patterns RE2 can't compile (found with Go's own `regexp.Compile`; `MustCompile` of one is HIGH), catastrophic-backtracking shapes like `(a+)+` in non-RE2 engines, simplifiable and suspicious patterns. **⚡ Go performance idioms**: `appendCombine`, `rangeAppendAll`, `sliceClear`, `indexAlloc`, `preferWriteByte`, `preferStringWriter`. Feeds 5% of 🔰 Programming Culture's Performance dimension.
+
+   - **🪦 Dead Code** *(TypeScript/JavaScript for now — the card is built to take more languages)* — unused imports, unused variables, unreachable code after `return`/`throw`/`break`/`continue`, and blocks of commented-out code. Costs up to 10 points of Code Quality.
+
+   - **🧵 Concurrency & API Misuse** *(Go)* — go-critic's `syncMapLoadAndDelete`, `exposedSyncMutex`, `badSyncOnceFunc`, `httpNoBody`, `timeExprSimplify` and `wg.Add(-1)`. Feeds 15% of ⚡ Performance.
+
+   Every finding in these cards is a **review issue**: in `--review` mode each one introduced by the branch appears in the changed-file list and under *What got worse, and where* — string issues, suspicious code, duplicate code, React and dead-code findings included, up to 30 per dimension.
 
    - **🪄 Magic Constants** *(all languages)* — well-known algorithms identified by the fixed literal values baked into their implementation: hash primes/offsets (FNV-1/1a), checksum polynomials (CRC-16/32/32C/64), cryptographic initialization vectors (MD5/SHA-1/SHA-256, ChaCha/Salsa `"expand 32-byte k"`), PRNG coefficients (Mersenne Twister, xorshift, SplitMix64), and non-cryptographic hashes (MurmurHash2/3, Fibonacci hashing). Grouped by family, each with a count and VS Code links to the enclosing function. Matched by numeric **value**, so `0x01000193`, `0x1000193`, and `16_777_619` all resolve to the same FNV prime; low-entropy values (`0x1021`, `0x8005`) count only when written in hex, so an ordinary decimal port or id is never misread. Ported from ArchSwiftScope's MagicConstantDetector.
 
@@ -181,6 +200,7 @@ A single pass surfaces whole-repo signals that a manual review or an LLM skimmin
 - **Complexity** — Big-O health from actual iteration-nesting depth, surfacing O(N²)/O(N³) hotspots across a whole function, not one diff hunk
 - **Traffic Analysis** — every inbound/outbound HTTP/gRPC/WebSocket connection extracted straight from source, scored by a 🩺 Traffic Health read (RESTfulness, versioning, protocol modernity, dependency health, …)
 - **Nesting & Signatures** — worst nesting depth and high-parameter-count functions flagged repo-wide via 💻 Code Structure
+- **Bug-class review checks** — go-critic's suspicious-code, duplicate-code, string, regex and concurrency checkers (Go), react-code-audit's hook/state/component rules and dead-code detection (TypeScript/JavaScript), plus cross-language string-building and regex-in-loop checks — all surfaced as review issues in `--review`
 - **Tech Radar** — every detected technology, framework, and design pattern plotted on an Adopt → Trial → Assess → Hold radar
 - **Memory Leaks** — unclosed handles, unstopped timers, un-freed allocations, and retain cycles caught by pairing each language's acquire/release calls
 - **VS Code integration** — every finding, hotspot, and function is a `vscode://` deep link straight to the exact line
@@ -424,7 +444,7 @@ internal/
   fetch/       remote git-URL resolution (clone + cleanup)
   modules/     pluggable report modules
     arch/          architecture: client pattern detection + backend layered view
-    constructs/    code-construct detectors — data structures, algorithms, complexity, magic constants, design patterns, memory leaks, code structure, language richness, coupling & cohesion (ported from ArchSwiftScope)
+    constructs/    code-construct detectors — data structures, algorithms, complexity, magic constants, design patterns, memory leaks, language richness, coupling & cohesion (ported from ArchSwiftScope) and the review checks: code structure (+ bug-class, duplicate-code and React subcards), strings & regex, dead code, concurrency & API misuse (go-critic / react-code-audit ports; `srcmask.go` is the shared length-preserving source masker)
     dddmodel/      DDD vs. Anemic Domain Model analyzer (Go · Python · Kotlin · Java)
     oopvspop/      Swift-only OOP↔POP analyzer
     speccoverage/  API spec coverage: OpenAPI · gRPC · GraphQL vs. code routes (Go · Python · Java · Kotlin · TypeScript)

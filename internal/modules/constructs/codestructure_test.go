@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -258,8 +259,10 @@ func strIssues(t *testing.T, ext, src string) []string {
 	t.Helper()
 	f := writeFile(t, ext, src)
 	var ids []string
-	for _, is := range csAnalyze([]*parser.ParsedFile{f}).StringIssues {
-		ids = append(ids, is.RuleID)
+	for _, is := range (Regex{}).Analyze([]*parser.ParsedFile{f}).(RegexReport).Issues {
+		if is.Group == stringsGroup {
+			ids = append(ids, is.RuleID)
+		}
 	}
 	return ids
 }
@@ -573,12 +576,12 @@ func TestConcurrencyChecks(t *testing.T) {
 
 func TestIssueCardRendersCleanAndDirty(t *testing.T) {
 	clean := (Regex{}).RenderHTML(RegexReport{})
-	if !strings.Contains(clean, "No regex issues") {
+	if !strings.Contains(clean, "No string & regex issues") {
 		t.Errorf("clean Regex card should confirm, got %q", clean)
 	}
 	rep := (Regex{}).Analyze([]*parser.ParsedFile{writeFile(t, ".go", "package p\nimport \"regexp\"\nfunc F(xs []string) {\n\tfor range xs {\n\t\t_ = regexp.MustCompile(`a+`)\n\t}\n}\n")}).(RegexReport)
 	out := (Regex{}).RenderHTML(rep)
-	for _, want := range []string{"Regex compiled inside a loop", "as-sev", "vscode://"} {
+	for _, want := range []string{"Regex compiled inside a loop", "as-sev", "vscode://", "as-cs__sub", "Strings & Regex"[:0] + "Regex"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Regex card missing %q", want)
 		}
@@ -616,5 +619,25 @@ func TestConcatWithConditionalSeedStillFlagged(t *testing.T) {
 	src := "package p\nfunc F(segs []seg) string {\n\tname := \"\"\n\tfor _, seg := range segs {\n\t\tif name == \"\" {\n\t\t\tname = seg.tag\n\t\t} else {\n\t\t\tname = name + \"/\" + seg.tag + \"/\" + seg.id\n\t\t}\n\t}\n\treturn name\n}\n"
 	if ids := strIssues(t, ".go", src); !hasRule(ids, "concat-in-loop") {
 		t.Errorf("conditional seed hid the concat: %v", ids)
+	}
+}
+
+// Every header minicard that links somewhere must point at a subcard that exists.
+func TestCodeStructureMinicardsTargetExistingSubcards(t *testing.T) {
+	var src strings.Builder
+	src.WriteString("package p\nfunc Many(a, b, c, d, e, f, g int) int {\n\tif a == a {\n\t\tfor {\n\t\t\tfor {\n\t\t\t\tfor {\n\t\t\t\t\tif b > 0 {\n\t\t\t\t\t\treturn 1\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n\treturn 0\n}\n")
+	rep := csAnalyze([]*parser.ParsedFile{writeFile(t, ".go", src.String())})
+	out := (CodeStructure{}).RenderHTML(rep)
+	targets := regexp.MustCompile(`data-target="([a-z]+)"`).FindAllStringSubmatch(out, -1)
+	if len(targets) == 0 {
+		t.Fatal("expected linked minicards")
+	}
+	for _, m := range targets {
+		if !strings.Contains(out, `data-sub="`+m[1]+`"`) {
+			t.Errorf("minicard targets %q but no such subcard", m[1])
+		}
+	}
+	if strings.Contains(out, "as-cs__viol-title") {
+		t.Error("offender tables should be subcards, not bare viol-title blocks")
 	}
 }

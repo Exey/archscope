@@ -1,4 +1,4 @@
-// stringsmells.go is Code Structure's string-handling check. It ports the
+// stringsmells.go is the 🔤 Strings subcard of the Strings & Regex card (regex.go). It ports the
 // string-related checkers of go-critic (stringConcatSimplify, stringsCompare,
 // equalFold, preferFprint, dynamicFmtString, sprintfQuotedString, stringXbytes,
 // wrapperFunc's strings.Index idiom) and adds the cross-platform one go-critic

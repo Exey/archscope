@@ -111,9 +111,10 @@ type CodeStructureReport struct {
 	LooseTypeTotal int          // total `any` + `object` type annotations (TS/JS only)
 	LooseTypeFiles []CSAnyUsage // per-file loose-type counts, sorted worst-first
 
-	StringIssues []CSIssue // 🔤 Strings: concat in loops, go-critic string checks…
-	BugIssues    []CSIssue // 🐛 Suspicious code: Go bug-class checks (dupSubExpr, badLock, offBy1…)
-	DupIssues    []CSIssue // 👯 Duplicate code: identical branch bodies, duplicate case labels
+	BugIssues   []CSIssue // 🐛 Suspicious code: Go bug-class checks (dupSubExpr, badLock, offBy1…)
+	DupIssues   []CSIssue // 👯 Duplicate code: identical branch bodies, duplicate case labels
+	HookIssues  []CSIssue // ⚛️ React hooks & state (TS/JS): missing deps, effect loops, direct mutation…
+	ReactIssues []CSIssue // 🧩 React components (TS/JS): size, props, JSX depth, prop drilling
 
 	OvercrowdedFolders []CSFolderStat // folders with > csOvercrowdedFolder files
 	EmptyFolders       []string       // container-only folders (no files of their own)
@@ -125,17 +126,17 @@ type CodeStructureReport struct {
 // HasData reports whether any file was successfully read for this platform.
 func (r CodeStructureReport) HasData() bool { return r.scanned }
 
-// ReviewIssueCount is the number of string, suspicious-code and duplicate-code
-// findings — everything that surfaces as a review item.
+// ReviewIssueCount is the number of suspicious-code, duplicate-code and React
+// findings — everything this card surfaces as a review item.
 func (r CodeStructureReport) ReviewIssueCount() int {
-	return len(r.StringIssues) + len(r.BugIssues) + len(r.DupIssues)
+	return len(r.BugIssues) + len(r.DupIssues) + len(r.HookIssues) + len(r.ReactIssues)
 }
 
 // IssuePoints weighs those findings for the Code Quality score: HIGH 5, MEDIUM
 // 2, LOW 0.5 (unscored advice such as "use isEmpty" must not drown real bugs).
 func (r CodeStructureReport) IssuePoints() float64 {
 	var pts float64
-	for _, set := range [][]CSIssue{r.StringIssues, r.BugIssues, r.DupIssues} {
+	for _, set := range [][]CSIssue{r.BugIssues, r.DupIssues, r.HookIssues, r.ReactIssues} {
 		h, m, l := issueSevCounts(set)
 		pts += float64(h)*5 + float64(m)*2 + float64(l)*0.5
 	}
@@ -346,11 +347,13 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 			}
 		}
 
-		rep.StringIssues = append(rep.StringIssues, scanStringSmells(f.FilePath, stripped, raw)...)
 		if fe := ext(f.FilePath); csStringLang(fe) != csStrNone && csStringLang(fe) != csStrPython {
 			masked := maskSource(raw, fe)
 			rep.BugIssues = append(rep.BugIssues, scanBugSmells(f.FilePath, masked)...)
 			rep.DupIssues = append(rep.DupIssues, scanDuplicateCode(f.FilePath, masked)...)
+			h, c := scanReact(f.FilePath, masked)
+			rep.HookIssues = append(rep.HookIssues, h...)
+			rep.ReactIssues = append(rep.ReactIssues, c...)
 		}
 
 		for _, fr := range csFuncRanges(stripped) {
@@ -376,9 +379,10 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 	sort.SliceStable(rep.DeepNestFuncs, func(i, j int) bool { return rep.DeepNestFuncs[i].Value > rep.DeepNestFuncs[j].Value })
 	sort.SliceStable(rep.LooseTypeFiles, func(i, j int) bool { return rep.LooseTypeFiles[i].Total() > rep.LooseTypeFiles[j].Total() })
 
-	sortIssues(rep.StringIssues)
 	sortIssues(rep.BugIssues)
 	sortIssues(rep.DupIssues)
+	sortIssues(rep.HookIssues)
+	sortIssues(rep.ReactIssues)
 	analyzeFolderLayout(files, &rep)
 	return rep
 }
@@ -505,9 +509,10 @@ func (CodeStructure) RenderMarkdown(res any) string {
 		b.WriteString("\n")
 	}
 
-	issuesMarkdown(&b, "🔤 Strings", r.StringIssues, false)
 	issuesMarkdown(&b, "🐛 Suspicious code (Go)", r.BugIssues, true)
 	issuesMarkdown(&b, "👯 Duplicate code", r.DupIssues, true)
+	issuesMarkdown(&b, "⚛️ React hooks & state", r.HookIssues, true)
+	issuesMarkdown(&b, "🧩 React components", r.ReactIssues, true)
 
 	if r.HasFolderSmells() {
 		b.WriteString("Folder-structure smells:\n\n")
@@ -538,32 +543,26 @@ func (CodeStructure) RenderHTML(res any) string {
 	var b strings.Builder
 	b.WriteString(`<div class="as-cs">`)
 
-	// Headline stats.
-	b.WriteString(`<div class="as-cs__stats">`)
-	writeCSStat(&b, strconv.Itoa(r.CommentPercent)+"%", "comments", healthColor(r.CommentPercent))
-	if r.WorstNest.Value > 0 {
-		writeCSStat(&b, strconv.Itoa(r.WorstNest.Value), "worst nesting", healthColor(100-r.WorstNest.Value*15))
-	}
-	if r.PreprocDirectives > 0 {
-		writeCSStat(&b, strconv.Itoa(r.PreprocDirectives), "preprocessor directives", "var(--text-dim)")
-	}
-	if r.LooseTypeTotal > 0 {
-		writeCSStat(&b, strconv.Itoa(r.LooseTypeTotal), "any / object types", healthColor(100-r.LooseTypeTotal*2))
-	}
-	if n := r.ReviewIssueCount(); n > 0 {
-		writeCSStat(&b, strconv.Itoa(n), "review issues", healthColor(100-n*2))
-	}
-	b.WriteString(`</div>`)
+	writeCSHeader(&b, r)
 
-	writeCSOffenders(&b, fmt.Sprintf("Functions with too many parameters (&gt; %d)", csMaxParams), "PARAMS", r.HighParamFuncs)
-	writeCSOffenders(&b, fmt.Sprintf("Deeply nested functions (&gt; %d levels)", csMaxNestDepth), "DEPTH", r.DeepNestFuncs)
+	writeCSOffenders(&b, "params", "🔢", fmt.Sprintf("Functions with too many parameters (&gt; %d)", csMaxParams), "PARAMS", r.HighParamFuncs)
+	writeCSOffenders(&b, "nest", "🪆", fmt.Sprintf("Deeply nested functions (&gt; %d levels)", csMaxNestDepth), "DEPTH", r.DeepNestFuncs)
 	writeCSLooseTypes(&b, r.LooseTypeFiles, r.LooseTypeTotal)
-	writeIssueSubcard(&b, "🔤", "Strings", "String building and comparison idioms — concatenation in loops, go-critic's string checks, interpolation over `+` chains.", r.StringIssues, false)
-	writeIssueSubcard(&b, "🐛", "Suspicious code (Go)", "Bug-class patterns from go-critic: identical operands, impossible conditions, off-by-one, missing return after http.Error, bad locks…", r.BugIssues, true)
-	writeIssueSubcard(&b, "👯", "Duplicate code", "Neighbouring if/else branches with the same body and repeated case labels.", r.DupIssues, true)
+	writeIssueSubcard(&b, "bug", "🐛", "Suspicious code (Go)", "Bug-class patterns from go-critic: identical operands, impossible conditions, off-by-one, missing return after http.Error, bad locks…", r.BugIssues, true, maxIssueExamples)
+	writeIssueSubcard(&b, "dup", "👯", "Duplicate code", "Neighbouring if/else branches with the same body and repeated case labels.", r.DupIssues, true, maxIssueExamples)
+	writeIssueSubcard(&b, "hooks", "⚛️", "React hooks & state", "Hook and state mistakes (ported from react-code-audit): missing dependencies, setState loops, in-place state mutation, derived state, index keys…", r.HookIssues, true, maxIssueExamples)
+	writeIssueSubcard(&b, "react", "🧩", "React components", "Component size, prop count, JSX nesting depth and prop drilling.", r.ReactIssues, true, maxIssueExamples)
 
 	if r.HasFolderSmells() {
-		b.WriteString(`<div class="as-cs__viol-title">🗑️ Folder structure smells</div><ul class="as-cs__folders">`)
+		n := len(r.OvercrowdedFolders)
+		if len(r.EmptyFolders) > 0 {
+			n++
+		}
+		if len(r.SingleFileFolders) > 0 {
+			n++
+		}
+		writeSubOpen(&b, "folders", "🗑️", "Folder structure smells", n, "")
+		b.WriteString(`<ul class="as-cs__folders">`)
 		for _, fs := range r.OvercrowdedFolders {
 			fmt.Fprintf(&b, `<li>Overcrowded — <span class="mono">%s</span> (%d files)</li>`, html.EscapeString(fs.Path), fs.Count)
 		}
@@ -574,6 +573,7 @@ func (CodeStructure) RenderHTML(res any) string {
 			fmt.Fprintf(&b, `<li>%d container-only folder(s) hold no files of their own, just subfolders</li>`, n)
 		}
 		b.WriteString(`</ul>`)
+		writeSubClose(&b)
 	}
 
 	b.WriteString(`</div>`)
@@ -586,7 +586,7 @@ func writeCSLooseTypes(b *strings.Builder, files []CSAnyUsage, total int) {
 	if len(files) == 0 {
 		return
 	}
-	fmt.Fprintf(b, `<div class="as-cs__viol-title">Loose <span class="mono">any</span> / <span class="mono">object</span> types <span class="as-count">(%d in %d files)</span></div>`, total, len(files))
+	writeSubOpen(b, "loose", "🕳️", fmt.Sprintf(`Loose <span class="mono">any</span> / <span class="mono">object</span> types <span class="as-count">in %d files</span>`, len(files)), total, "")
 	b.WriteString(`<table class="as-table as-cs__table"><thead><tr><th>File</th><th>any</th><th>object</th><th>Location</th></tr></thead><tbody>`)
 	for i, u := range files {
 		if i == csMaxAnyListShown {
@@ -598,18 +598,108 @@ func writeCSLooseTypes(b *strings.Builder, files []CSAnyUsage, total int) {
 			html.EscapeString(baseName(u.FilePath)), u.AnyCount, u.ObjCount, loc)
 	}
 	b.WriteString(`</tbody></table>`)
+	writeSubClose(b)
 }
 
-func writeCSStat(b *strings.Builder, val, label, color string) {
-	fmt.Fprintf(b, `<div class="as-cs__stat"><span class="as-cs__stat-val" style="color:%s">%s</span><span class="as-cs__stat-label">%s</span></div>`,
-		color, html.EscapeString(val), html.EscapeString(label))
+// csTone colours a findings minicard by its worst severity.
+func csTone(h, m, l int) string {
+	switch {
+	case h > 0:
+		return "var(--crit)"
+	case m > 0:
+		return "var(--bad)"
+	case l > 0:
+		return "var(--warn)"
+	}
+	return "var(--good)"
 }
 
-func writeCSOffenders(b *strings.Builder, title, valLabel string, offenders []CSFuncOffender) {
+// nestTarget links the worst-nesting minicard to the nesting subcard when one exists.
+func nestTarget(r CodeStructureReport) string {
+	if len(r.DeepNestFuncs) > 0 {
+		return "nest"
+	}
+	return ""
+}
+
+// writeCSMini renders one header minicard: a big value, its label and an
+// optional muted sub-line, with a coloured accent edge.
+func writeCSMini(b *strings.Builder, val, label, sub, color, target string) {
+	cls, attr := "as-cs__mini", ""
+	if target != "" {
+		cls, attr = "as-cs__mini as-cs__mini--link", ` data-target="`+html.EscapeString(target)+`" title="Jump to the details"`
+	}
+	fmt.Fprintf(b, `<div class="%s"%s style="--mini:%s"><span class="as-cs__mini-val">%s</span><span class="as-cs__mini-label">%s</span>`,
+		cls, attr, color, html.EscapeString(val), html.EscapeString(label))
+	if sub != "" {
+		fmt.Fprintf(b, `<span class="as-cs__mini-sub">%s</span>`, html.EscapeString(sub))
+	}
+	b.WriteString(`</div>`)
+}
+
+// writeCSHeader renders the card's header as two rows of minicards: the code-shape
+// metrics, then one summary minicard per findings subcard below (with its
+// HIGH · MEDIUM · LOW split) so the whole card reads at a glance.
+func writeCSHeader(b *strings.Builder, r CodeStructureReport) {
+	b.WriteString(`<div class="as-cs__minis-title">Code shape</div><div class="as-cs__minis">`)
+	writeCSMini(b, strconv.Itoa(r.CommentPercent)+"%", "comments", "of all lines", healthColor(r.CommentPercent), "")
+	if r.WorstNest.Value > 0 {
+		writeCSMini(b, strconv.Itoa(r.WorstNest.Value), "worst nesting", r.WorstNest.Symbol, healthColor(100-r.WorstNest.Value*15), nestTarget(r))
+	}
+	if n := len(r.DeepNestFuncs); n > 0 {
+		writeCSMini(b, strconv.Itoa(n), "deeply nested", fmt.Sprintf("functions > %d levels", csMaxNestDepth), healthColor(100-n*5), "nest")
+	}
+	if n := len(r.HighParamFuncs); n > 0 {
+		writeCSMini(b, strconv.Itoa(n), "many parameters", fmt.Sprintf("functions > %d params", csMaxParams), healthColor(100-n*5), "params")
+	}
+	if r.LooseTypeTotal > 0 {
+		writeCSMini(b, strconv.Itoa(r.LooseTypeTotal), "any / object types", fmt.Sprintf("in %d files", len(r.LooseTypeFiles)), healthColor(100-r.LooseTypeTotal*2), "loose")
+	}
+	if r.PreprocDirectives > 0 {
+		writeCSMini(b, strconv.Itoa(r.PreprocDirectives), "preprocessor", "directives", "var(--text-dim)", "")
+	}
+	b.WriteString(`</div>`)
+
+	type sum struct {
+		key, icon, label string
+		issues           []CSIssue
+	}
+	sums := []sum{
+		{"bug", "🐛", "suspicious code", r.BugIssues},
+		{"dup", "👯", "duplicate code", r.DupIssues},
+		{"hooks", "⚛️", "React hooks & state", r.HookIssues},
+		{"react", "🧩", "React components", r.ReactIssues},
+	}
+	var minis strings.Builder
+	for _, sm := range sums {
+		if len(sm.issues) == 0 {
+			continue
+		}
+		h, m, l := issueSevCounts(sm.issues)
+		writeCSMini(&minis, strconv.Itoa(len(sm.issues)), sm.icon+" "+sm.label, fmt.Sprintf("%dH · %dM · %dL", h, m, l), csTone(h, m, l), sm.key)
+	}
+	if r.HasFolderSmells() {
+		n := len(r.OvercrowdedFolders)
+		if len(r.EmptyFolders) > 0 {
+			n++
+		}
+		if len(r.SingleFileFolders) > 0 {
+			n++
+		}
+		writeCSMini(&minis, strconv.Itoa(n), "🗑️ folder smells", "layout", "var(--warn)", "folders")
+	}
+	if minis.Len() > 0 {
+		b.WriteString(`<div class="as-cs__minis-title">Findings</div><div class="as-cs__minis">`)
+		b.WriteString(minis.String())
+		b.WriteString(`</div>`)
+	}
+}
+
+func writeCSOffenders(b *strings.Builder, key, icon, title, valLabel string, offenders []CSFuncOffender) {
 	if len(offenders) == 0 {
 		return
 	}
-	fmt.Fprintf(b, `<div class="as-cs__viol-title">%s <span class="as-count">(%d)</span></div>`, title, len(offenders))
+	writeSubOpen(b, key, icon, title, len(offenders), "")
 	fmt.Fprintf(b, `<table class="as-table as-cs__table"><thead><tr><th>Function</th><th>%s</th><th>Location</th></tr></thead><tbody>`, valLabel)
 	for i, o := range offenders {
 		if i == csMaxOffendersShown {
@@ -621,4 +711,5 @@ func writeCSOffenders(b *strings.Builder, title, valLabel string, offenders []CS
 			html.EscapeString(o.Symbol), o.Value, loc)
 	}
 	b.WriteString(`</tbody></table>`)
+	writeSubClose(b)
 }

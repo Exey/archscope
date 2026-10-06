@@ -1,4 +1,4 @@
-// regex.go is the 🔎 Regex card: regular-expression misuse across languages
+// regex.go is the 🔤🔎 Strings & Regex card (Strings come from stringsmells.go): regular-expression misuse across languages
 // (compiling in a loop, patterns that can never compile, catastrophic-
 // backtracking shapes, simplifiable or suspicious patterns — go-critic's
 // regexpMust / regexpSimplify / badRegexp ported and extended to Java, Kotlin,
@@ -27,10 +27,10 @@ func init() { modules.Default.Register(Regex{}) }
 type Regex struct{}
 
 func (Regex) ID() string    { return "regex" }
-func (Regex) Title() string { return "Regex" }
+func (Regex) Title() string { return "Strings & Regex" }
 func (Regex) AppliesTo(languageID string) bool {
 	switch languageID {
-	case "go", "java", "kotlin", "swift", "python", "ts", "js", "typescript", "javascript", "rust", "csharp", "cpp":
+	case "go", "java", "kotlin", "swift", "python", "ts", "js", "typescript", "javascript", "rust", "csharp", "c", "cpp", "objc":
 		return true
 	}
 	return false
@@ -46,8 +46,9 @@ func (r RegexReport) HasData() bool { return len(r.Issues) > 0 }
 func (r RegexReport) Total() int    { return len(r.Issues) }
 
 const (
-	regexGroup = "Regex"
-	perfGroup  = "Go performance idioms"
+	stringsGroup = "Strings"
+	regexGroup   = "Regex"
+	perfGroup    = "Go performance idioms"
 )
 
 var (
@@ -153,6 +154,11 @@ func scanRegex(filePath string, lang csStrLang, stripped, raw []string) []CSIssu
 		}
 		out = append(out, CSIssue{RuleID: id, Rule: rule, Message: msg, Group: group, Severity: sev, FilePath: filePath, Line: i + 1, Snippet: snip})
 	}
+	for _, is := range scanStringSmells(filePath, stripped, raw) {
+		is.Group = stringsGroup
+		out = append(out, is)
+	}
+
 	head := reRegexHead[lang]
 	loop := csLoopLines(stripped, lang == csStrPython)
 	var funcs []csFuncRange
@@ -325,7 +331,7 @@ func (Regex) SummaryCards(res any) []modules.SummaryCard {
 	if !ok || !r.HasData() {
 		return nil
 	}
-	return []modules.SummaryCard{{Num: strconv.Itoa(r.Total()), Label: "regex issues"}}
+	return []modules.SummaryCard{{Num: strconv.Itoa(r.Total()), Label: "string & regex issues"}}
 }
 
 func (Regex) RenderMarkdown(res any) string {
@@ -334,7 +340,7 @@ func (Regex) RenderMarkdown(res any) string {
 		return ""
 	}
 	var b strings.Builder
-	issueCardMarkdown(&b, "regex", r.Issues)
+	issueCardMarkdown(&b, "string & regex", r.Issues)
 	return b.String()
 }
 
@@ -344,6 +350,6 @@ func (Regex) RenderHTML(res any) string {
 		return ""
 	}
 	var b strings.Builder
-	writeIssueCard(&b, "🔎", "regex", r.Issues)
+	writeIssueCard(&b, "🔤🔎", "string & regex", r.Issues)
 	return b.String()
 }

@@ -3631,7 +3631,7 @@ func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) 
 		switch p.ModuleID {
 		case "architecture":
 			// rendered in the dedicated Architecture section above; skip
-		case "codestructure", "langrichness", "memoryleaks", "regex", "concurrency":
+		case "codestructure", "langrichness", "memoryleaks", "regex", "deadcode", "concurrency":
 			// rendered as their own subcards in 💡 Module Insights; skip
 		case "dddmodel", "oopvspop":
 			dddPanels = append(dddPanels, p)
@@ -3891,8 +3891,11 @@ func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup,
 	if ml := renderMemoryLeaksInsight(res, pg); ml != "" {
 		parts = append(parts, ml)
 	}
-	if rx := renderInsightCard(res, pg, "regex", "🔎", "Regex"); rx != "" {
+	if rx := renderInsightCard(res, pg, "regex", "🔤🔎", "Strings & Regex"); rx != "" {
 		parts = append(parts, rx)
+	}
+	if dc := renderInsightCard(res, pg, "deadcode", "🪦", "Dead Code"); dc != "" {
+		parts = append(parts, dc)
 	}
 	if cc := renderInsightCard(res, pg, "concurrency", "🧵", "Concurrency & API Misuse"); cc != "" {
 		parts = append(parts, cc)

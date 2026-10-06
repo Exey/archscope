@@ -455,9 +455,20 @@ code,.mono{font-family:var(--mono)}
 .as-cs__more{color:var(--text-faint); font-size:11px}
 .as-cs__folders{margin:0; padding-left:18px; font-size:12.5px; color:var(--text-dim)}
 .as-cs__folders li{margin:3px 0}
-.as-cs__sub{border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-elev-2); padding:10px 12px 8px; margin:12px 0}
+.as-cs__minis-title{font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-faint); margin:2px 0 6px}
+.as-cs__minis{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; margin-bottom:12px}
+.as-cs__mini{display:flex; flex-direction:column; gap:1px; padding:8px 10px 7px; border:1px solid var(--border); border-left:3px solid var(--mini,var(--border-strong)); border-radius:var(--radius-sm); background:var(--bg-elev-2); min-width:0}
+.as-cs__mini-val{font-size:20px; font-weight:700; font-family:var(--mono); line-height:1.15; color:var(--mini,var(--text))}
+.as-cs__mini-label{font-size:11.5px; font-weight:600; color:var(--text)}
+.as-cs__mini-sub{font-size:10.5px; color:var(--text-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.as-cs__mini--link{cursor:pointer; transition:background .12s, border-color .12s}
+.as-cs__mini--link:hover{background:var(--bg-inset); border-color:var(--border-strong); border-left-color:var(--mini,var(--border-strong))}
+.as-cs__sub--flash{animation:as-cs-flash 1.1s ease-out}
+@keyframes as-cs-flash{0%{box-shadow:0 0 0 2px var(--accent)}100%{box-shadow:0 0 0 2px transparent}}
+.as-cs__sub{scroll-margin-top:12px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-elev-2); padding:10px 12px 8px; margin:12px 0}
 .as-cs__sub-head{font-size:13px; font-weight:650; margin-bottom:4px; display:flex; align-items:baseline; gap:6px; flex-wrap:wrap}
 .as-cs__sub-hint{color:var(--text-dim); font-size:11.5px; line-height:1.4; margin-bottom:8px}
+.as-cs__detail{color:var(--text-faint); font-size:11px; font-family:var(--sans)}
 .as-cs__fix{color:var(--text-dim); font-size:11.5px; line-height:1.4}
 
 /* OOP vs POP module */
@@ -977,6 +988,18 @@ const JS = `
       if(other!==d)other.open=d.open;
     });
   },true);
+  // Code Structure minicard → scroll to its subcard inside the same card
+  document.addEventListener('click',function(e){
+    var mini=e.target.closest('.as-cs__mini[data-target]');
+    if(!mini)return;
+    var root=mini.closest('.as-cs');
+    var sub=root&&root.querySelector('.as-cs__sub[data-sub="'+mini.getAttribute('data-target')+'"]');
+    if(!sub)return;
+    sub.scrollIntoView({behavior:'smooth',block:'start'});
+    sub.classList.remove('as-cs__sub--flash');
+    void sub.offsetWidth;
+    sub.classList.add('as-cs__sub--flash');
+  });
   // Generic "open a specific Infrastructure/Platform card + scroll to it"
   // link, used by the DevOps Kubernetes summary tile and the Kubernetes
   // defect-density bar. Falls back to the link's plain href anchor scroll

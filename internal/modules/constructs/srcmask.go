@@ -20,6 +20,11 @@ type maskedFile struct {
 	raw, code, text []string
 }
 
+type tmplState struct {
+	expr  bool
+	brace int
+}
+
 var reRustChar = regexp.MustCompile(`^'(?:\\.[^']*|[^'\\])'`)
 
 // maskSource builds the three views. Handles // and /* */ comments, "…" '…'
@@ -29,9 +34,13 @@ func maskSource(raw []string, fileExt string) maskedFile {
 	m := maskedFile{raw: raw, code: make([]string, len(raw)), text: make([]string, len(raw))}
 	rust := fileExt == ".rs"
 	backtick := fileExt == ".go" || fileExt == ".js" || fileExt == ".jsx" || fileExt == ".ts" || fileExt == ".tsx" || fileExt == ".mjs" || fileExt == ".cjs" || fileExt == ".mts" || fileExt == ".cts"
+	jsTemplate := fileExt != ".go" // ${…} interpolation exists in JS/TS templates, not Go raw strings
 	triple := fileExt == ".java" || fileExt == ".kt" || fileExt == ".kts" || fileExt == ".swift" || fileExt == ".cs"
 	inBlock := false
-	ml := "" // closer of a string spanning lines
+	ml := "" // closer of a """ string spanning lines
+	// tstack tracks JS/Go template literals, which nest: `a ${ cond ? `b` : `c` } d`.
+	// Each entry is either template text or a ${…} expression with its brace depth.
+	var tstack []tmplState
 	for li, line := range raw {
 		c, t := []byte(line), []byte(line)
 		blank := func(buf []byte, from, to int) {
@@ -71,6 +80,62 @@ func maskSource(raw []string, fileExt string) maskedFile {
 				continue
 			}
 			ch := line[i]
+			if n := len(tstack); n > 0 {
+				top := &tstack[n-1]
+				if !top.expr { // template text
+					switch {
+					case ch == '\\' && i+1 < len(line):
+						blank(c, i, i+2)
+						i += 2
+					case ch == '`':
+						if n > 1 { // a nested closer: hide it so only the outermost delimiters survive
+							blank(c, i, i+1)
+						}
+						tstack = tstack[:n-1]
+						i++
+					case jsTemplate && ch == '$' && i+1 < len(line) && line[i+1] == '{':
+						blank(c, i, i+2)
+						tstack = append(tstack, tmplState{expr: true, brace: 1})
+						i += 2
+					default:
+						blank(c, i, i+1)
+						i++
+					}
+					continue
+				}
+				// inside ${ … }: code, kept readable only in the text view
+				switch {
+				case ch == '`':
+					blank(c, i, i+1)
+					tstack = append(tstack, tmplState{})
+					i++
+				case ch == '"' || ch == '\'':
+					j := i + 1
+					for j < len(line) && line[j] != ch {
+						if line[j] == '\\' {
+							j++
+						}
+						j++
+					}
+					blank(c, i, j+1)
+					i = j + 1
+				case ch == '{':
+					top.brace++
+					blank(c, i, i+1)
+					i++
+				case ch == '}':
+					top.brace--
+					blank(c, i, i+1)
+					if top.brace == 0 {
+						tstack = tstack[:n-1]
+					}
+					i++
+				default:
+					blank(c, i, i+1)
+					i++
+				}
+				continue
+			}
 			switch {
 			case ch == '/' && i+1 < len(line) && line[i+1] == '/':
 				blank(c, i, len(line))
@@ -85,7 +150,7 @@ func maskSource(raw []string, fileExt string) maskedFile {
 				ml = `"""`
 				i += 3
 			case backtick && ch == '`':
-				ml = "`"
+				tstack = append(tstack, tmplState{})
 				i++
 			case ch == '"' || ch == '\'':
 				if ch == '\'' && rust && !reRustChar.MatchString(line[i:]) {
@@ -115,10 +180,11 @@ func maskSource(raw []string, fileExt string) maskedFile {
 type flatSrc struct {
 	code, text string
 	starts     []int
+	raw        []string // original lines, for checks that need the comments
 }
 
 func (m maskedFile) flat() flatSrc {
-	f := flatSrc{code: strings.Join(m.code, "\n"), text: strings.Join(m.text, "\n")}
+	f := flatSrc{code: strings.Join(m.code, "\n"), text: strings.Join(m.text, "\n"), raw: m.raw}
 	f.starts = make([]int, len(m.code))
 	off := 0
 	for i, l := range m.code {
@@ -229,4 +295,18 @@ func bareConditions(fileExt string) bool {
 // squash removes all whitespace so two bodies compare equal regardless of layout.
 func squash(s string) string {
 	return strings.Join(strings.Fields(s), "")
+}
+
+// rawContains reports whether any original line in [from,to] (0-based, clamped)
+// contains substr — used to honour `eslint-disable` style comments.
+func (f flatSrc) rawContains(from, to int, substr string) bool {
+	if from < 0 {
+		from = 0
+	}
+	for i := from; i <= to && i < len(f.raw); i++ {
+		if strings.Contains(f.raw[i], substr) {
+			return true
+		}
+	}
+	return false
 }
