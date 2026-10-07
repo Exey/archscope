@@ -1,6 +1,6 @@
 # 🏛️🔭 ArchScope
 
-**Universal CLI for multi-language codebase intelligence** — analyze architecture, security, dependencies and git history across Go, Python, Rust, Java, Kotlin, Swift/Objective-C, TypeScript/JavaScript, C and C++, and produce one interactive HTML report, a Markdown document (LLM-ready), or a SARIF log.
+**Universal CLI for multi-language codebase intelligence** — one pass over Go, Python, Rust, Java, Kotlin, Swift/Objective-C, TypeScript/JavaScript, C and C++ covering architecture, security, code quality, dead and duplicate code, dependencies and git history. Produces one interactive HTML report, an LLM-ready Markdown document or a SARIF log, and reviews GitLab/GitHub merge requests. **340+ built-in checks** (220+ security rules, 30 resource-leak rules, 90 code-quality and review checks).
 
 ---
 
@@ -49,9 +49,9 @@ go run ./cmd/archscope ~/code --evolution a1b2c3d,release/1.4,2026-09-01
 
 Give several baselines either comma-separated (`--evolution 2w,1m,last-tag`) or space-separated (`--evolution 1m 2w`). Space-separated values are only picked up when they are unmistakably specs — a duration, a date, `last-tag`, `auto` or a commit id (7+ hex chars) that is not also an existing path — so `--evolution 1m 2w ./repo` still finds its target. Branch names, tags and `HEAD~N` go in the comma form: `--evolution 1m,release/1.4`.
 
-### 🦊 Review mode — `--review [<branch|commit>]`
+### 🦊🐙 Review mode — `--review [<branch|commit>]` (GitLab and GitHub)
 
-Reviewing a merge request? `--review` turns the 📈 Evolution card into **📈 Evolution (Review mode)**: it compares a branch with where it left its base — the merge-base, exactly what an MR diffs — and adds GitLab links to every issue it finds.
+Reviewing a merge request? `--review` turns the 📈 Evolution card into **📈 Evolution (Review mode)**: it compares a branch with where it left its base — the merge-base, exactly what an MR diffs — and adds GitLab or GitHub links to every issue it finds (the provider is read from the `origin` remote).
 
 **Which side is which?** ArchScope works it out locally and the report always says (`Reviewing origin/feat/x against dev (merge-base 492506d)`). The ref you name is resolved in your local repository, **also as `origin/<name>`** — so a branch someone pushed that you never checked out works:
 
@@ -77,12 +77,20 @@ If you are checked out *on* the default branch with a bare `--review`, there is 
 
 - **Changes: 29 files +1860 −1072** and the **file list**, files with issues first: every file is **✓ OK** (green) or **⚠ N issues** (red, expanded with the issues and their `MR ↗ L<line>` buttons) — an issue is anything the change *introduced or grew*: a new finding, an O(N²) function, a 300-line function, deeper nesting, or a new string / suspicious-code / duplicate-code / React / regex / concurrency / dead-code issue (up to 30 listed per dimension).
 - The usual Evolution comparison (score table, dumbbells, what got worse / better) for the reviewed branch vs its base.
-- Inputs for the 🦊 **GitLab project path**, the **host** to its right and the **MR number**, at the top of the card.
+- Inputs for the 🦊 **GitLab** / 🐙 **GitHub** project path, the **host** to its right and the **MR / PR number**, at the top of the card.
+- Only the **platforms the change touches are analysed** — see below.
 
-The 🦊 **GitLab MR links** inputs hold the GitLab **project path** (`group/project`), the **host** on its right and the **MR number**. They are prefilled — project and host from `git remote get-url origin`, the MR number from `refs/merge-requests/<IID>/head` (local refs if you fetch them with `+refs/merge-requests/*:refs/remotes/origin/merge-requests/*`, otherwise `git ls-remote origin`; an MR whose head is `HEAD` wins) — editable, and remembered in your browser. Every issue under **What got worse, and where** gets an **MR ↗ L123** button that
+**Only the changed platforms are analysed.** Before scanning, `--review` resolves the ref and lists the files the MR changes; every platform tab (language, or folder in folder-as-tab mode) with no changed file is dropped *before* parsing, security rules, report modules and git attribution run, and the baseline is scored on the same platforms. A one-platform change in a polyglot monorepo therefore costs one platform's analysis, and the report shows only that platform (the review card says which ones were skipped). A changed file the checkout doesn't have yet is attributed to the nearest scanned file with the same extension; docs/config changes that match no platform are ignored; if the change touches everything (or matches nothing), nothing is dropped. Repo-wide sections — git history, DevOps/Kubernetes linting, the tech tag cloud — are not filtered.
+
+**Fails fast on a bad ref.** If the branch/commit (or `--against`) isn't in the repository — locally or on a remote — archscope prints that and exits with status 1 *before scanning anything*, instead of producing a report with a "review could not run" note. The same happens when the path isn't inside a git repository.
+
+The **link inputs** hold the **project path** (`group/project` on GitLab, `owner/repo` on GitHub), the **host** on its right and the **MR / PR number**. They are prefilled — project and host from `git remote get-url origin`, the number from the merge-request / pull-request refs (GitLab `refs/merge-requests/<IID>/head`; GitHub `refs/pull/<N>/head`, also the common `refs/remotes/origin/pull/<N>` and `refs/remotes/origin/pr/<N>` mappings — local refs if you fetched them, otherwise `git ls-remote origin`; one whose head is `HEAD` wins) — editable, and remembered in your browser. A `github.com` / `gitlab.*` host picks the provider; for a self-hosted host the pull-request refs the repository holds decide (GitLab is the default). Every issue under **What got worse, and where** gets an **MR ↗ L123** (GitLab) / **PR ↗ L123** (GitHub) button that
 
 1. copies `path/to/file#L123` to the clipboard, ready to paste into a comment, and
-2. opens `https://<host>/<project>/-/merge_requests/<IID>/diffs#<file-sha1>_<old>_<new>` — GitLab's own diff-line anchor, computed from `git diff` so it lands on the line. With no MR number it opens `…/-/blob/<branch>/path#L123` instead.
+2. opens the line in the request:
+   - **GitLab:** `https://<host>/<project>/-/merge_requests/<IID>/diffs#<file-sha1>_<old>_<new>` — GitLab's own diff-line anchor, computed from `git diff` so it lands on the line.
+   - **GitHub:** `https://<host>/<owner>/<repo>/pull/<N>/files#diff-<file-sha256>R<line>` — the "Files changed" anchor (`R` = the new side).
+   - With no number it opens `…/-/blob/<branch>/path#L123` (GitLab) or `…/blob/<branch>/path#L123` (GitHub) instead.
 
 Lines that are not part of the diff fall back to the file anchor. `--review` can be combined with `--evolution` (`--review main --evolution 2w`) and works with the same scanned-inside-a-git-repo requirement.
 
@@ -146,8 +154,8 @@ How it works: each baseline commit is extracted with `git archive` into a temp d
 
    - **🅾️ Complexity** *(all brace languages)* — heuristic Big-O "health" read from iteration nesting: a function whose deepest simultaneous loop nesting is *N* levels (nested `for`/`while`, nested higher-order closures like `.map`/`.filter`, or a linear collection op such as `.sorted()`/`.contains(where:)` used inside a loop) is charged O(Nⁿ), and anything O(N²) or worse is surfaced as a time hotspot; collections allocated inside a loop are flagged as space hotspots. Shows time/space health scores (share of loop-bearing functions that stay O(N) or better), a collection-usage summary, and each violation's Big-O badge, symbol, reason, and VS Code link. Indentation-only sources (Python) have no braces, so they contribute nothing rather than a false reading. Ported from ArchSwiftScope's ComplexityDetector.
 
-   - **💻 Code Structure** *(all languages; some subcards are language-specific)* — low-level code-shape health in one card. The header is a row of **minicards** — comment density, worst nesting and complexity, deeply nested and many-parameter functions, typed-function %, documented-API %, loose `any`/`object` types, preprocessor directives — and a second row with one summary minicard per findings subcard (count + HIGH · MEDIUM · LOW split). **Click a minicard to scroll to its subcard.** Every part below is a subcard:
-     - **🔢 Many parameters** and **🪆 Deeply nested functions** — functions over 5 parameters / 4 nesting levels. Go, Rust, Kotlin, Swift and JS/TS `function` declarations are read by brace; **Python is read by indentation** (a dedicated parser finds every `def`, method and class, multi-line signatures included — no Python libraries involved).
+   - **💻 Code Structure** *(all languages; some subcards are language-specific)* — low-level code-shape health in one card. The header is a row of **minicards** — comment density, worst nesting and complexity, deeply nested and many-parameter functions, typed-function %, documented-API %, loose `any`/`object` types, preprocessor directives — and a second row with one summary minicard per findings subcard (count + HIGH · MEDIUM · LOW split). **Click a minicard to scroll to its subcard.** Every subcard groups findings by rule and lists up to 50 locations per rule, one per line, each with what is specific to that hit (an identifier, a count, the twin location of a clone). Every part below is a subcard:
+     - **🔢 Many parameters** and **🪆 Deeply nested functions** — functions over 5 parameters or nested 6+ levels deep. Go, Rust, Kotlin, Swift and JS/TS `function` declarations are read by brace; **Python is read by indentation** (a dedicated parser finds every `def`, method and class, multi-line signatures included — no Python libraries involved).
      - **🌀 Cyclomatic complexity** *(Python · Go · Rust · Kotlin · Swift · JS/TS)* — McCabe's decision-point count per function (`if`/`elif`/`for`/`while`/`case`/`catch`/`except`/`&&`/`||`/`and`/`or`/`?:`); anything over 10 is listed, worst first (11–20 moderate, 21–50 high, 50+ untestable).
      - **📐 Shape limits** — pylint's defaults applied to every supported language where the function can be found: too many `return`s (> 6), branches (> 12) or locals (> 15); for Python classes too many instance attributes (> 7), public methods (> 20) or direct bases (> 4); and modules over 1000 lines (generated files excluded).
      - **🏷️ Typing** *(Python)* — share of functions with a full annotation (every parameter plus the return), `Any` uses, and `# type: ignore` counts (TS/JS `@ts-ignore`/`@ts-nocheck`/`@ts-expect-error` count into the same ignore total), by file.
@@ -298,7 +306,7 @@ go build -o archscope ./cmd/archscope
 | `--group-by` | how to group platform tabs: `language` \| `folder` \| `gitrepo` | auto-detected (see below) |
 | `--render-modules` | include the Modules & Microservices section (file inventory, declarations, its graph) per platform, plus the global Architecture Graph — omitted by default | off |
 | `--scan-all-files` | also scan git-submodule (third-party/vendored) directories | off — submodules are skipped by default |
-| `--review` | review mode: review a branch (works for remote-only `origin/<name>`) against the one you are on, or review your checkout against a target like `main`; changed-file list with ✓ OK / ⚠ issues and GitLab "MR with line" buttons; bare = against the local default branch; `last-commit` = `HEAD~1` — see [Review mode](#-review-mode---review-commitbranch) | off |
+| `--review` | review mode (GitLab or GitHub — only the platforms the change touches are analysed; an unknown ref stops before scanning): review a branch (works for remote-only `origin/<name>`) against the one you are on, or review your checkout against a target like `main`; changed-file list with ✓ OK / ⚠ issues and GitLab "MR with line" buttons; bare = against the local default branch; `last-commit` = `HEAD~1` — see [Review mode](#-review-mode---review-commitbranch) | off |
 | `--against` | with `--review <branch>`: compare that branch with `<ref>` instead of the branch you are on | current branch |
 | `--evolution` | compare 🔰 Programming Culture against git history: `2w`, `1m`, `last-tag`, a date, a commit/branch/tag (comma- or space-separated, e.g. `1m 2w`) or `auto` — see [Evolution](#-evolution--what-got-better-what-got-worse) | off |
 

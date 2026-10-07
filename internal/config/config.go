@@ -56,6 +56,13 @@ type Config struct {
 	Languages       Languages `json:"languages"`
 	Security        Security  `json:"security"`
 	Fetch           Fetch     `json:"fetch"`
+
+	// Review mode (set by the CLI, never read from a config file): the absolute
+	// paths changed by the merge request, from which the pipeline keeps only the
+	// platforms that contain a change; OnlyPlatforms is that decision replayed on
+	// the baseline trees so then-vs-now compares like with like.
+	ReviewChanged []string `json:"-"`
+	OnlyPlatforms []string `json:"-"`
 }
 
 // Default returns the repo-shipped defaults.

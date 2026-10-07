@@ -102,15 +102,24 @@ func itemHTML(it evolution.Item, override string, review bool) string {
 	if override != "" {
 		note = override
 	}
+	if it.AltPath != "" && it.AltLine > 0 {
+		// a duplicated block: link its twin location as well
+		altLoc := fmt.Sprintf("%s:%d", it.AltRel, it.AltLine)
+		alt := esc(altLoc)
+		if href := vscodeHref(it.AltPath, it.AltLine); href != "" {
+			alt = fmt.Sprintf(`<a class="as-vs" href="%s" title="Open the duplicate in VS Code">%s</a>`, esc(href), esc(altLoc))
+		}
+		locHTML += ` ⇄ ` + alt
+	}
 	out := fmt.Sprintf(`<span class="as-evo__kind as-evo__kind--w%d">%s</span> <span class="mono">%s</span> — <span class="mono">%s</span>`,
 		minInt(it.Weight, 7), esc(it.Kind), esc(it.Name), locHTML)
 	if note != "" {
 		out += fmt.Sprintf(` <em class="as-evo__note">%s</em>`, esc(note))
 	}
 	if review && it.RepoPath != "" && it.Line > 0 {
-		out += fmt.Sprintf(` <button type="button" class="as-evo__mr" data-path="%s" data-line="%d" data-old="%d" data-hash="%s" `+
-			`title="Copies %s#L%d and opens this line in the merge request">MR ↗ L%d</button>`,
-			esc(it.RepoPath), it.Line, it.OldPos, evolution.FileHash(it.RepoPath), esc(it.RepoPath), it.Line, it.Line)
+		out += fmt.Sprintf(` <button type="button" class="as-evo__mr" data-path="%s" data-line="%d" data-old="%d" data-hash="%s" data-hash256="%s" `+
+			`title="Copies %s#L%d and opens this line in the merge / pull request">MR ↗ L%d</button>`,
+			esc(it.RepoPath), it.Line, it.OldPos, evolution.FileHash(it.RepoPath), evolution.FileHash256(it.RepoPath), esc(it.RepoPath), it.Line, it.Line)
 	}
 	return out
 }

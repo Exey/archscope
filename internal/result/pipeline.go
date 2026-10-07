@@ -83,6 +83,33 @@ func RunWithProgress(rootPath string, cfg config.Config, progress func(string)) 
 	step(fmt.Sprintf("Found %d files across %d platform(s), %d module(s)",
 		len(scan.Files), len(scan.PlatformsOrdered()), len(scan.Modules)))
 
+	// Review mode: analyse only the platforms the merge request touches.
+	var reviewKept, reviewSkipped []string
+	if len(cfg.ReviewChanged) > 0 || len(cfg.OnlyPlatforms) > 0 {
+		keep := map[langspec.Platform]bool{}
+		if len(cfg.OnlyPlatforms) > 0 {
+			for _, k := range cfg.OnlyPlatforms {
+				if _, ok := scan.Platforms[langspec.Platform(k)]; ok {
+					keep[langspec.Platform(k)] = true
+				}
+			}
+		} else {
+			keep = scan.PlatformsWithPaths(cfg.ReviewChanged)
+		}
+		if len(keep) > 0 && len(keep) < len(scan.Platforms) {
+			for _, pg := range scan.PlatformsOrdered() {
+				if keep[pg.Platform] {
+					reviewKept = append(reviewKept, string(pg.Platform))
+				} else {
+					reviewSkipped = append(reviewSkipped, pg.TabLabel())
+				}
+			}
+			scan.KeepPlatforms(keep)
+			step(fmt.Sprintf("Review mode: analysing only the changed platform(s) — skipping %s", strings.Join(reviewSkipped, ", ")))
+			step(fmt.Sprintf("Kept %d files across %d platform(s)", len(scan.Files), len(scan.Platforms)))
+		}
+	}
+
 	// 2) Parse every owned file once (shared loader).
 	step(fmt.Sprintf("Parsing %d files…", len(scan.Files)))
 	p := &parser.Parser{Reg: reg, Loader: loader}
@@ -186,6 +213,9 @@ func RunWithProgress(rootPath string, cfg config.Config, progress func(string)) 
 		DevOpsTools:    scan.DevOpsTools,
 		DevOpsLint:     scan.DevOpsLint,
 		K8sLint:        scan.K8sLint,
+
+		ReviewPlatforms: reviewKept,
+		ReviewSkipped:   reviewSkipped,
 	}, nil
 }
 

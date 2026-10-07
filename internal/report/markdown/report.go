@@ -56,7 +56,11 @@ func Render(res *result.AnalysisResult) string {
 			fmt.Fprintf(&b, "### ⏱ Timeline: %s\n\n%s\n", tl.Heading(), evolution.RenderTimelineMarkdown(tl))
 		}
 		for _, c := range res.Evolution {
-			fmt.Fprintf(&b, "### %s\n\n%s\n", c.Ref.Title, evolution.RenderMarkdown(c))
+			changes := ""
+			if res.Review != nil && c.IsReview() {
+				changes = evolution.RenderReviewMarkdown(res.Review)
+			}
+			fmt.Fprintf(&b, "### %s\n\n%s%s\n", c.Ref.Title, changes, evolution.RenderMarkdown(c))
 		}
 		b.WriteString("---\n\n")
 	}

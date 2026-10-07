@@ -43,6 +43,11 @@ type AnalysisResult struct {
 	Review *evolution.Review
 	// ReviewNote explains why --review produced no comparison (unknown branch, …).
 	ReviewNote string
+	// ReviewPlatforms / ReviewSkipped: in review mode only the platforms that contain
+	// a change are analysed; these are the kept platform keys and the labels of the
+	// ones left out ("" when nothing was left out).
+	ReviewPlatforms []string
+	ReviewSkipped   []string
 
 	// ModulePanels are report-module outputs already rendered to HTML, grouped
 	// per platform tab. This is the pragmatic form of DESIGN's ModuleResults:

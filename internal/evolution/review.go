@@ -3,10 +3,13 @@ package evolution
 import (
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -30,9 +33,13 @@ type Review struct {
 	Host     string // https://gitlab.example.com ("" = unknown)
 	Project  string // group/subgroup/project
 	MRSource string // "local refs" | "ls-remote" | ""
+	Provider string // "gitlab" | "github": which host's links the report builds
 }
 
-var mrRefRe = regexp.MustCompile(`refs/(?:remotes/[^/]+/)?merge-requests/(\d+)/head$`)
+// mrRefRe matches GitLab's refs/merge-requests/N/head and GitHub's
+// refs/pull/N/head (also the common fetch mappings refs/remotes/origin/pull/N,
+// refs/remotes/origin/pr/N), local or remote-tracking.
+var mrRefRe = regexp.MustCompile(`refs/(?:remotes/[^/]+/)?(?:merge-requests|pull|pr)/(\d+)(?:/head)?$`)
 
 // mrHeads returns MR IID → head commit, from merge-request refs already in the
 // repository (fetched with +refs/merge-requests/*:refs/remotes/origin/merge-requests/*),
@@ -54,7 +61,7 @@ func mrHeads(repo string) (heads map[int]string, source string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", "-C", repo, "ls-remote", "origin", "refs/merge-requests/*/head").Output()
+	out, err := exec.CommandContext(ctx, "git", "-C", repo, "ls-remote", "origin", "refs/merge-requests/*/head", "refs/pull/*/head").Output()
 	if err != nil {
 		return heads, ""
 	}
@@ -147,6 +154,12 @@ func RemoteHostProject(repo string) (host, project string) {
 		}
 	}
 	return ParseRemote(url)
+}
+
+// FileHash256 is GitHub's diff anchor for a file ("diff-" + this): the SHA-256 of its path.
+func FileHash256(p string) string {
+	sum := sha256.Sum256([]byte(p))
+	return hex.EncodeToString(sum[:])
 }
 
 // FileHash is GitLab's diff anchor for a file: the SHA-1 of its path.
@@ -326,14 +339,254 @@ func ReviewInfo(repo, ref string, base Ref) Review {
 	}
 	r.Host, r.Project = RemoteHostProject(repo)
 	r.MRIID, r.MRSource = DetectMR(repo, base.SHA, r.HeadSHA)
+	r.Provider = DetectProvider(repo, r.Host)
 	return r
+}
+
+// DetectProvider says whether the remote is GitHub or GitLab. A github.com /
+// github.* host is GitHub, gitlab.* is GitLab; for a self-hosted host with
+// neither in its name the pull-request refs the repository already holds decide
+// (refs/pull or refs/pr → GitHub), and GitLab is the default.
+func DetectProvider(repo, host string) string {
+	h := strings.ToLower(host)
+	switch {
+	case strings.Contains(h, "github"):
+		return "github"
+	case strings.Contains(h, "gitlab"):
+		return "gitlab"
+	}
+	if out, err := git(repo, "for-each-ref", "--format=%(refname)"); err == nil {
+		for _, ref := range strings.Split(out, "\n") {
+			if strings.Contains(ref, "/pull/") || strings.Contains(ref, "/pr/") {
+				return "github"
+			}
+			if strings.Contains(ref, "/merge-requests/") {
+				return "gitlab"
+			}
+		}
+	}
+	return "gitlab"
 }
 
 // String is a one-line summary for progress output.
 func (r Review) String() string {
 	mr := "no merge request found"
-	if r.MRIID > 0 {
+	if r.Provider == "github" {
+		mr = "no pull request found"
+		if r.MRIID > 0 {
+			mr = fmt.Sprintf("PR #%d (%s)", r.MRIID, r.MRSource)
+		}
+	} else if r.MRIID > 0 {
 		mr = fmt.Sprintf("MR !%d (%s)", r.MRIID, r.MRSource)
 	}
 	return fmt.Sprintf("review vs %s — %s", r.Ref, mr)
+}
+
+// RenderReviewMarkdown is the "Changes" block of a review as Markdown, mirroring
+// the HTML card: totals, then every file — those with issues first, each issue
+// listed under it — and the clean ones marked ✓ OK.
+func RenderReviewMarkdown(rv *Review) string {
+	if rv == nil {
+		return ""
+	}
+	bad := 0
+	for _, f := range rv.Files {
+		if !f.OK() {
+			bad++
+		}
+	}
+	var b strings.Builder
+	noun := "files"
+	if len(rv.Files) == 1 {
+		noun = "file"
+	}
+	fmt.Fprintf(&b, "**Changes:** %d %s · +%s · −%s", len(rv.Files), noun, commaInt(rv.Adds), commaInt(rv.Dels))
+	if len(rv.Files) > 0 {
+		if bad == 0 {
+			b.WriteString(" · ✓ all files OK")
+		} else {
+			fmt.Fprintf(&b, " · ✓ %d OK · ⚠ %d with issues", len(rv.Files)-bad, bad)
+		}
+	}
+	b.WriteString("\n\n")
+	if len(rv.Files) == 0 {
+		b.WriteString("_No changed files between the merge-base and the reviewed branch._\n\n")
+		return b.String()
+	}
+	files := append([]ReviewFile(nil), rv.Files...)
+	sort.SliceStable(files, func(i, j int) bool { return len(files[i].Issues) > len(files[j].Issues) })
+	for _, f := range files {
+		stat := fmt.Sprintf("+%d −%d", f.Add, f.Del)
+		if f.Binary {
+			stat = "binary"
+		}
+		if f.OK() {
+			fmt.Fprintf(&b, "- ✓ OK `%s` (%s)\n", f.Path, stat)
+			continue
+		}
+		n := len(f.Issues)
+		word := "issues"
+		if n == 1 {
+			word = "issue"
+		}
+		fmt.Fprintf(&b, "- ⚠ %d %s `%s` (%s)\n", n, word, f.Path, stat)
+		shown := map[int]bool{} // one snippet per starting line, however many issues point at it
+		for _, it := range f.Issues {
+			fmt.Fprintf(&b, "  - %s\n", itemMD(it))
+			if shown[it.Line] {
+				continue
+			}
+			shown[it.Line] = true
+			if snip := codeSnippet(rv, it); snip != "" {
+				for _, l := range strings.Split(strings.TrimRight(snip, "\n"), "\n") {
+					b.WriteString("    " + l + "\n")
+				}
+			}
+		}
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// commaInt formats 2556 as "2,556".
+func commaInt(n int) string {
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
+}
+
+const (
+	snippetMaxFunc = 50 // longest function body quoted
+	snippetBefore  = 3  // context lines above a statement-level issue
+	snippetAfter   = 3  // …and below
+)
+
+var funcHeadRe = regexp.MustCompile(`^\s*(?:(?:export|public|private|protected|internal|static|async|suspend|override|open|final|pub)\s+)*(?:func|def|fn|fun|function|class|struct|interface|impl)\b|^\s*(?:public|private|protected|static|final|abstract|synchronized)\b.*\)\s*(?:throws[^{]*)?\{\s*$|^\s*(?:const|let|var)\s+\w+\s*(?::[^=]+)?=\s*(?:async\s*)?\(.*\)\s*(?::[^=]+)?=>`)
+
+// codeSnippet quotes the code around an issue, as a fenced block with line
+// numbers and a → marker on the flagged line: the whole function (up to
+// snippetMaxFunc lines) when the issue is on a declaration, otherwise the line
+// with a few lines of context on either side. The text comes from the reviewed
+// commit when the branch under review isn't checked out, else from disk.
+func codeSnippet(rv *Review, it Item) string {
+	if it.Line <= 0 || (it.RepoPath == "" && it.Path == "") {
+		return ""
+	}
+	lines := sourceLines(rv, it)
+	if it.Line > len(lines) {
+		return ""
+	}
+	start, end := it.Line-1, it.Line-1
+	isDecl := funcHeadRe.MatchString(lines[start])
+	if isDecl {
+		end = blockEnd(lines, start, it.Path)
+		if end-start+1 > snippetMaxFunc {
+			end = start + snippetMaxFunc - 1
+		}
+	} else {
+		start = max(0, start-snippetBefore)
+		end = min(len(lines)-1, end+snippetAfter)
+	}
+	var b strings.Builder
+	b.WriteString("```" + fenceLang(it.RepoPath) + "\n")
+	w := len(strconv.Itoa(end + 1))
+	for i := start; i <= end; i++ {
+		mark := " "
+		if i == it.Line-1 {
+			mark = "→"
+		}
+		fmt.Fprintf(&b, "%s %*d │ %s\n", mark, w, i+1, strings.TrimRight(lines[i], " \t\r"))
+	}
+	if cut := blockEnd(lines, it.Line-1, it.Path); isDecl && cut > end {
+		b.WriteString("  … (function continues)\n")
+	}
+	b.WriteString("```\n")
+	return b.String()
+}
+
+// sourceLines reads the issue's file at the reviewed side.
+func sourceLines(rv *Review, it Item) []string {
+	var data string
+	if rv != nil && rv.Subject != "" && rv.HeadSHA != "" && it.RepoPath != "" && it.Path != "" && strings.HasSuffix(filepath.ToSlash(it.Path), it.RepoPath) {
+		repo := strings.TrimSuffix(filepath.ToSlash(it.Path), it.RepoPath)
+		if out, err := git(filepath.FromSlash(strings.TrimSuffix(repo, "/")), "show", rv.HeadSHA+":"+it.RepoPath); err == nil {
+			data = out
+		}
+	}
+	if data == "" {
+		raw, err := os.ReadFile(it.Path)
+		if err != nil {
+			return nil
+		}
+		data = string(raw)
+	}
+	return strings.Split(data, "\n")
+}
+
+// blockEnd is the last line of the block starting at lines[start]: brace-matched,
+// or indentation-delimited for Python.
+func blockEnd(lines []string, start int, path string) int {
+	if strings.HasSuffix(path, ".py") || strings.HasSuffix(path, ".pyi") {
+		base := len(lines[start]) - len(strings.TrimLeft(lines[start], " \t"))
+		last := start
+		for j := start + 1; j < len(lines); j++ {
+			if strings.TrimSpace(lines[j]) == "" {
+				continue
+			}
+			if len(lines[j])-len(strings.TrimLeft(lines[j], " \t")) <= base {
+				break
+			}
+			last = j
+		}
+		return last
+	}
+	depth, started := 0, false
+	for j := start; j < len(lines) && j < start+400; j++ {
+		for _, c := range lines[j] {
+			switch c {
+			case '{':
+				depth++
+				started = true
+			case '}':
+				depth--
+			}
+		}
+		if started && depth <= 0 {
+			return j
+		}
+		if !started && j > start+25 { // a multi-line parameter list can push the body brace down
+			break // no body brace nearby: treat as a one-liner
+		}
+	}
+	return start
+}
+
+func fenceLang(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".go":
+		return "go"
+	case ".py", ".pyi":
+		return "python"
+	case ".ts", ".tsx":
+		return "ts"
+	case ".js", ".jsx", ".mjs", ".cjs":
+		return "js"
+	case ".java":
+		return "java"
+	case ".kt", ".kts":
+		return "kotlin"
+	case ".swift":
+		return "swift"
+	case ".rs":
+		return "rust"
+	case ".c", ".h":
+		return "c"
+	case ".cpp", ".cc", ".hpp":
+		return "cpp"
+	case ".cs":
+		return "csharp"
+	}
+	return ""
 }

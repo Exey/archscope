@@ -37,7 +37,7 @@ func init() { modules.Default.Register(CodeStructure{}) }
 // lint-style conventions (lizard/SourceMonitor defaults), not hard limits.
 const (
 	csMaxParams          = 5  // more parameters than this is a smell
-	csMaxNestDepth       = 4  // deeper block nesting than this is a smell
+	csMaxNestDepth       = 5  // deeper block nesting than this (6+ levels) is a smell
 	csOvercrowdedFolder  = 30 // more files than this in one folder is a smell
 	csManyEmptyFolders   = 3  // this many container-only folders is a smell
 	csManySingleFileDirs = 10 // this many one-file folders is a smell
@@ -632,7 +632,7 @@ func (CodeStructure) RenderMarkdown(res any) string {
 	writeOffenders("High-parameter functions", r.HighParamFuncs)
 	writeOffenders("Deeply nested functions", r.DeepNestFuncs)
 	writeOffenders("Cyclomatic complexity", r.HighComplexity)
-	issuesMarkdown(&b, "📐 Shape limits", r.ShapeIssues, true, 5*maxIssueExamples)
+	issuesMarkdown(&b, "📐 Shape limits", r.ShapeIssues, true, maxIssueExamples)
 
 	if len(r.LooseTypeFiles) > 0 {
 		fmt.Fprintf(&b, "`any` / `object` types by file (%d total)\n\n| File | any | object | Location |\n|------|----:|-------:|----------|\n", r.LooseTypeTotal)
@@ -646,11 +646,11 @@ func (CodeStructure) RenderMarkdown(res any) string {
 		b.WriteString("\n")
 	}
 
-	issuesMarkdown(&b, "🔀 Merge & diff markers", r.MarkerIssues, true, 5*maxIssueExamples)
-	issuesMarkdown(&b, "🐛 Suspicious code", r.BugIssues, true, 5*maxIssueExamples)
-	issuesMarkdown(&b, "👯 Duplicate code", r.DupIssues, true, 5*maxIssueExamples)
-	issuesMarkdown(&b, "⚛️ React hooks & state", r.HookIssues, true, 5*maxIssueExamples)
-	issuesMarkdown(&b, "🧩 React components", r.ReactIssues, true, 5*maxIssueExamples)
+	issuesMarkdown(&b, "🔀 Merge & diff markers", r.MarkerIssues, true, maxIssueExamples)
+	issuesMarkdown(&b, "🐛 Suspicious code", r.BugIssues, true, maxIssueExamples)
+	issuesMarkdown(&b, "👯 Duplicate code", r.DupIssues, true, maxIssueExamples)
+	issuesMarkdown(&b, "⚛️ React hooks & state", r.HookIssues, true, maxIssueExamples)
+	issuesMarkdown(&b, "🧩 React components", r.ReactIssues, true, maxIssueExamples)
 
 	if r.HasFolderSmells() {
 		b.WriteString("Folder-structure smells:\n\n")

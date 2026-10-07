@@ -54,6 +54,8 @@ type CSIssue struct {
 	FilePath string
 	Line     int
 	Snippet  string // trimmed source line (also the evolution key, so it carries no line number)
+	AltFile  string // the other location, for duplicated blocks
+	AltLine  int
 	Detail   string // what this particular hit is about (an identifier, a count); shown beside its location
 }
 
@@ -121,7 +123,7 @@ func sortIssues(v []CSIssue) {
 
 // maxIssueExamples caps the example links shown per rule row in Code Structure
 // subcards; the dedicated cards list every location (capped far higher).
-const maxIssueExamples = 5
+const maxIssueExamples = 50
 
 // maxIssueLocations caps the locations listed in one row of a dedicated card.
 const maxIssueLocations = 200
@@ -132,7 +134,7 @@ func writeIssueTable(b *strings.Builder, issues []CSIssue, withSev bool, maxLoc 
 	if withSev {
 		b.WriteString(`<th>Severity</th>`)
 	}
-	b.WriteString(`<th>Issue</th><th>Hits</th><th>Fix</th><th>Where</th></tr></thead><tbody>`)
+	b.WriteString(`<th>Issue</th><th>Hits</th><th class="as-cs__th-fix">Fix</th><th class="as-cs__th-where">Where</th></tr></thead><tbody>`)
 	for _, g := range groupIssues(issues) {
 		var links []string
 		for i, is := range g.Items {
@@ -151,7 +153,7 @@ func writeIssueTable(b *strings.Builder, issues []CSIssue, withSev bool, maxLoc 
 			fmt.Fprintf(b, `<td><span class="as-sev %s">%s</span></td>`, mlSevClass(g.Severity), sevLabel(g.Severity))
 		}
 		fmt.Fprintf(b, `<td>%s</td><td class="mono">%d</td><td class="as-cs__fix">%s</td><td class="mono">%s</td></tr>`,
-			html.EscapeString(g.Rule), len(g.Items), inlineCode(html.EscapeString(g.Message)), strings.Join(links, ", "))
+			html.EscapeString(g.Rule), len(g.Items), inlineCode(html.EscapeString(g.Message)), strings.Join(links, "<br>"))
 	}
 	b.WriteString(`</tbody></table>`)
 }
@@ -234,9 +236,9 @@ func issuesMarkdown(b *strings.Builder, title string, issues []CSIssue, withSev 
 			ex = append(ex, loc)
 		}
 		if withSev {
-			fmt.Fprintf(b, "| %s | %s | %d | %s |\n", sevLabel(g.Severity), g.Rule, len(g.Items), strings.Join(ex, ", "))
+			fmt.Fprintf(b, "| %s | %s | %d | %s |\n", sevLabel(g.Severity), g.Rule, len(g.Items), strings.Join(ex, "<br>"))
 		} else {
-			fmt.Fprintf(b, "| %s | %d | %s |\n", g.Rule, len(g.Items), strings.Join(ex, ", "))
+			fmt.Fprintf(b, "| %s | %d | %s |\n", g.Rule, len(g.Items), strings.Join(ex, "<br>"))
 		}
 	}
 	b.WriteString("\n")

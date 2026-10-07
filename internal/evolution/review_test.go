@@ -255,3 +255,88 @@ func TestNewToOldNewFileUsesZero(t *testing.T) {
 		t.Error("line 1 of the new file must be present (it is in the diff)")
 	}
 }
+
+func TestDetectMRFromGitHubPullRefsAndProvider(t *testing.T) {
+	repo, mainSHA, featSHA := reviewRepo(t)
+	for ref, sha := range map[string]string{"refs/remotes/origin/pull/12/head": featSHA, "refs/pull/5/head": mainSHA} {
+		if out, err := exec.Command("git", "-C", repo, "update-ref", ref, sha).CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+	}
+	if n, src := DetectMR(repo, mainSHA, featSHA); n != 12 || src != "local refs" {
+		t.Errorf("DetectMR = #%d via %q, want #12 via local refs", n, src)
+	}
+	// the common `+refs/pull/*/head:refs/remotes/origin/pr/*` mapping
+	exec.Command("git", "-C", repo, "update-ref", "-d", "refs/remotes/origin/pull/12/head").Run()
+	exec.Command("git", "-C", repo, "update-ref", "refs/remotes/origin/pr/9", featSHA).Run()
+	if n, _ := DetectMR(repo, mainSHA, featSHA); n != 9 {
+		t.Errorf("origin/pr/N mapping: got #%d, want #9", n)
+	}
+
+	for host, want := range map[string]string{"https://github.com": "github", "https://github.example.org": "github", "https://gitlab.com": "gitlab", "https://git.corp.example": "github"} {
+		if got := DetectProvider(repo, host); got != want {
+			t.Errorf("DetectProvider(%q) = %q, want %q (this repo holds pull refs)", host, got, want)
+		}
+	}
+	empty := t.TempDir()
+	exec.Command("git", "-C", empty, "init", "-q").Run()
+	if got := DetectProvider(empty, "https://git.corp.example"); got != "gitlab" {
+		t.Errorf("unknown host with no pull refs defaults to gitlab, got %q", got)
+	}
+	if len(FileHash256("a/b.go")) != 64 {
+		t.Error("GitHub anchors are 64-hex sha256")
+	}
+}
+
+func TestRenderReviewMarkdownMirrorsTheHTMLChangesBlock(t *testing.T) {
+	rv := &Review{Adds: 2556, Dels: 687, Files: []ReviewFile{
+		{Path: "ok.go", Add: 71},
+		{Path: "bad.go", Add: 33, Del: 81, Issues: []Item{{Kind: "Many parameters", Name: "New", Rel: "bad.go", Line: 48, Note: "11 params"}}},
+		{Path: "img.png", Binary: true},
+	}}
+	md := RenderReviewMarkdown(rv)
+	for _, want := range []string{"**Changes:** 3 files · +2,556 · −687 · ✓ 2 OK · ⚠ 1 with issues", "- ⚠ 1 issue `bad.go` (+33 −81)", "Many parameters `New` — `bad.go:48` · 11 params", "- ✓ OK `ok.go` (+71 −0)", "(binary)"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("missing %q in:\n%s", want, md)
+		}
+	}
+	if strings.Index(md, "bad.go") > strings.Index(md, "ok.go") {
+		t.Error("files with issues must come first")
+	}
+	if RenderReviewMarkdown(nil) != "" {
+		t.Error("nil review renders nothing")
+	}
+}
+
+func TestReviewMarkdownQuotesCode(t *testing.T) {
+	dir := t.TempDir()
+	var fn strings.Builder
+	fn.WriteString("package p\n\nfunc Short(a int) int {\n\treturn a\n}\n\nfunc Long(a int) int {\n")
+	for i := 0; i < 70; i++ {
+		fn.WriteString("\ta++\n")
+	}
+	fn.WriteString("\treturn a\n}\n\nfunc Other() {\n\tx := 1\n\ty := 2\n\tz := bad(x, y)\n\tw := 4\n\tv := 5\n\tu := 6\n\tt := 7\n\t_ = z + w + v + u + t\n}\n")
+	path := filepath.Join(dir, "a.go")
+	os.WriteFile(path, []byte(fn.String()), 0o644)
+
+	rv := &Review{Files: []ReviewFile{{Path: "a.go", Add: 1, Issues: []Item{
+		{Kind: "Shape limit", Name: "Short", Rel: "a.go", RepoPath: "a.go", Path: path, Line: 3},
+		{Kind: "Shape limit", Name: "Long", Rel: "a.go", RepoPath: "a.go", Path: path, Line: 7},
+		{Kind: "Suspicious code", Name: "call", Rel: "a.go", RepoPath: "a.go", Path: path, Line: 84},
+	}}}}
+	md := RenderReviewMarkdown(rv)
+	if !strings.Contains(md, "```go") || !strings.Contains(md, "→ 3 │ func Short(a int) int {") || !strings.Contains(md, "return a\n") {
+		t.Errorf("a function-level issue must quote the whole function:\n%s", md)
+	}
+	if short := md[strings.Index(md, "→ 3 │"):strings.Index(md, "Long")]; strings.Contains(short, "func Long") {
+		t.Error("the short function's snippet must stop at its closing brace")
+	}
+	// the long function is cut at 50 lines and says so
+	if !strings.Contains(md, "(function continues)") || strings.Count(md, "a++") > 50 {
+		t.Errorf("a long function is capped at 50 lines:\n%s", md)
+	}
+	// a statement-level issue gets a few lines either side, not the whole function
+	if !strings.Contains(md, "→ 84 │ \tz := bad(x, y)") || !strings.Contains(md, "│ \tx := 1") || !strings.Contains(md, "│ \tu := 6") || strings.Contains(md, "│ \tt := 7") {
+		t.Errorf("statement context:\n%s", md)
+	}
+}

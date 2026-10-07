@@ -78,12 +78,12 @@ func TestPythonCodeStructureSubcards(t *testing.T) {
 	for i := 0; i < 9; i++ {
 		fmt.Fprintf(&b, "        self.a%d = %d\n", i, i)
 	}
-	b.WriteString("\n    def busy(self, a, b, c, d, e, f, g):\n        x1 = 1\n        if a:\n            for i in b:\n                while c:\n                    try:\n                        if d and e or f:\n                            return 1\n                    except E:\n                        return 2\n        elif b:\n            return 3\n        elif c:\n            return 4\n        elif d:\n            return 5\n        elif e:\n            return 6\n        elif f:\n            return 7\n        elif g:\n            return 8\n        return 9\n")
+	b.WriteString("\n    def busy(self, a, b, c, d, e, f, g):\n        x1 = 1\n        if a:\n            for i in b:\n                while c:\n                    try:\n                        if d and e or f:\n                            if g:\n                                return 1\n                    except E:\n                        return 2\n        elif b:\n            return 3\n        elif c:\n            return 4\n        elif d:\n            return 5\n        elif e:\n            return 6\n        elif f:\n            return 7\n        elif g:\n            return 8\n        return 9\n")
 	rep := pyReport(t, b.String())
 	if len(rep.HighParamFuncs) != 1 || rep.HighParamFuncs[0].Value != 7 || rep.HighParamFuncs[0].Symbol != "Svc.busy" {
 		t.Errorf("params: %+v", rep.HighParamFuncs)
 	}
-	if rep.WorstNest.Value != 5 || len(rep.DeepNestFuncs) != 1 {
+	if rep.WorstNest.Value != 6 || len(rep.DeepNestFuncs) != 1 {
 		t.Errorf("nesting: worst=%+v deep=%+v", rep.WorstNest, rep.DeepNestFuncs)
 	}
 	if len(rep.HighComplexity) != 1 || rep.HighComplexity[0].Value < 14 {

@@ -49,7 +49,7 @@ func TestLowParamCountNotFlagged(t *testing.T) {
 
 func TestDeepNestingFlagged(t *testing.T) {
 	src := "package p\nfunc Deep() {\n" +
-		"\tif true {\n\t\tif true {\n\t\t\tif true {\n\t\t\t\tif true {\n\t\t\t\t\tif true {\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n"
+		"\tif true {\n\t\tif true {\n\t\t\tif true {\n\t\t\t\tif true {\n\t\t\t\t\tif true {\n\t\t\t\t\t\tif true {\n\t\t\t\t\t\t}\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n"
 	f := writeFile(t, ".go", src)
 	r := csAnalyze([]*parser.ParsedFile{f})
 	if len(r.DeepNestFuncs) != 1 || r.DeepNestFuncs[0].Symbol != "Deep" {

@@ -166,6 +166,7 @@ func scanClones(files []*parser.ParsedFile, cache *sourceCache) []CSIssue {
 			snip = snip[:100] + "…"
 		}
 		is := CSIssue{RuleID: "dup-clone", Rule: "Duplicated block", Severity: sev, FilePath: fa.path, Line: line + 1, Snippet: snip,
+			AltFile: fb.path, AltLine: fb.lineNo[c.b.idx] + 1,
 			Detail:  fmt.Sprintf("%d lines, also in %s:%d", span, baseName(fb.path), fb.lineNo[c.b.idx]+1),
 			Message: "The same code appears in more than one place. Extract it into a shared function or module so a fix lands once — duplicated blocks drift apart and get fixed in only one copy."}
 		sup, ok := sups[fa.path]

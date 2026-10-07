@@ -386,3 +386,71 @@ func dedupeSorted(in []string) []string {
 	}
 	return out
 }
+
+// PlatformsWithPaths returns the platform keys that own at least one of the
+// given absolute paths. A path with no scanned file of its own (a file the merge
+// request adds that the working tree doesn't have) is attributed to the platform
+// of the nearest scanned file with the same extension in its directory or the
+// closest ancestor directory. Paths no platform can claim (docs, configs) are ignored.
+func (r *ScanResult) PlatformsWithPaths(paths []string) map[langspec.Platform]bool {
+	byPath := make(map[string]langspec.Platform, len(r.Files))
+	for _, f := range r.Files {
+		byPath[f.Path] = f.Platform
+	}
+	out := map[langspec.Platform]bool{}
+	for _, p := range paths {
+		if plat, ok := byPath[p]; ok {
+			out[plat] = true
+			continue
+		}
+		dir, ext := filepath.Dir(p), filepath.Ext(p)
+		if ext == "" {
+			continue
+		}
+		best, bestLen := langspec.Platform(""), -1
+		for _, f := range r.Files {
+			if filepath.Ext(f.Path) != ext {
+				continue
+			}
+			fd := filepath.Dir(f.Path)
+			if (fd == dir || strings.HasPrefix(dir, fd+string(filepath.Separator))) && len(fd) > bestLen {
+				best, bestLen = f.Platform, len(fd)
+			}
+		}
+		if bestLen >= 0 {
+			out[best] = true
+		}
+	}
+	return out
+}
+
+// KeepPlatforms drops every platform not in keep, together with its files and
+// modules, so everything downstream (parsing, security, report modules, git
+// attribution) sees only the kept platforms.
+func (r *ScanResult) KeepPlatforms(keep map[langspec.Platform]bool) {
+	files := r.Files[:0:0]
+	for _, f := range r.Files {
+		if keep[f.Platform] {
+			files = append(files, f)
+		}
+	}
+	r.Files = files
+	for k := range r.Platforms {
+		if !keep[k] {
+			delete(r.Platforms, k)
+		}
+	}
+	for name, fs := range r.Modules {
+		kept := fs[:0:0]
+		for _, f := range fs {
+			if keep[f.Platform] {
+				kept = append(kept, f)
+			}
+		}
+		if len(kept) == 0 {
+			delete(r.Modules, name)
+		} else {
+			r.Modules[name] = kept
+		}
+	}
+}

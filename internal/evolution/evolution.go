@@ -63,6 +63,11 @@ type Item struct {
 	Weight int // severity weight for ordering (HIGH 7, MEDIUM 2, …)
 	Key    string
 
+	// The other place of a duplicated block (clone issues only), so the report can link both.
+	AltPath string // absolute path
+	AltRel  string // path relative to the scan root
+	AltLine int
+
 	// Filled only in review mode, for the "MR with line" buttons.
 	RepoPath string // path relative to the git repository root
 	OldPos   int    // GitLab diff "old line" position of this new line (0 = new file); -1 = line not in the diff
@@ -606,6 +611,9 @@ func itemMD(it Item) string {
 		loc = fmt.Sprintf("%s:%d", it.Rel, it.Line)
 	}
 	s := fmt.Sprintf("%s `%s` — `%s`", it.Kind, strings.ReplaceAll(it.Name, "`", "'"), loc)
+	if it.AltRel != "" && it.AltLine > 0 {
+		s += fmt.Sprintf(" ⇄ `%s:%d`", it.AltRel, it.AltLine)
+	}
 	if it.Note != "" {
 		s += " · " + it.Note
 	}

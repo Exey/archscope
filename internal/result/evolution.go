@@ -111,6 +111,8 @@ func RunEvolution(res *AnalysisResult, cfg config.Config, specs []string, score 
 // --evolution specs. ref "" or "auto" picks the local default branch (see
 // evolution.DefaultBranch). The review comparison always comes first.
 func RunReview(res *AnalysisResult, cfg config.Config, ref, against string, extra []string, score ScoreFunc, progress func(string)) []evolution.Comparison {
+	// Score the baselines on the same platforms the review analysed.
+	cfg.OnlyPlatforms, cfg.ReviewChanged = res.ReviewPlatforms, nil
 	spec := evolution.ReviewPrefix + ref
 	if against != "" {
 		spec += "@@" + against

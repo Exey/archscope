@@ -469,6 +469,8 @@ code,.mono{font-family:var(--mono)}
 .as-cs__sub-head{font-size:13px; font-weight:650; margin-bottom:4px; display:flex; align-items:baseline; gap:6px; flex-wrap:wrap}
 .as-cs__sub-hint{color:var(--text-dim); font-size:11.5px; line-height:1.4; margin-bottom:8px}
 .as-cs__detail{color:var(--text-faint); font-size:11px; font-family:var(--sans)}
+.as-cs__table th.as-cs__th-fix{width:17%}
+.as-cs__table th.as-cs__th-where{width:58%}
 .as-cs__fix{color:var(--text-dim); font-size:11.5px; line-height:1.4}
 
 /* OOP vs POP module */
@@ -1184,6 +1186,10 @@ const JS = `
       });
     });
     function val(id){return (document.getElementById(id).value||'').trim();}
+    var github=card.getAttribute('data-provider')==='github';
+    if(github){
+      document.querySelectorAll('.as-evo__mr').forEach(function(b){b.textContent=b.textContent.replace('MR ↗','PR ↗');});
+    }
     function copy(text){
       try{
         if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text);return;}
@@ -1197,7 +1203,7 @@ const JS = `
       var btn=e.target.closest('.as-evo__mr');
       if(!btn)return;
       var path=btn.getAttribute('data-path'),line=btn.getAttribute('data-line');
-      var old=btn.getAttribute('data-old'),hash=btn.getAttribute('data-hash');
+      var old=btn.getAttribute('data-old'),hash=btn.getAttribute('data-hash'),hash256=btn.getAttribute('data-hash256');
       copy(path+'#L'+line);
       var host=val('as-gl-host').replace(/\/+$/,''),project=val('as-gl-project').replace(/^\/+|\/+$/g,''),mr=val('as-gl-mr').replace(/[^0-9]/g,'');
       var old0=btn.textContent;
@@ -1205,12 +1211,16 @@ const JS = `
       setTimeout(function(){btn.textContent=old0;},1400);
       if(!host||!project){card.scrollIntoView({behavior:'smooth',block:'center'});return;}
       if(!/^https?:\/\//.test(host))host='https://'+host;
-      var url;
-      if(mr){
+      var url,ref=encodeURIComponent(card.getAttribute('data-ref')||'HEAD').replace(/%2F/g,'/');
+      if(github){
+        // GitHub: the "Files changed" anchor is diff-<sha256(path)>, R<line> = new side
+        url=mr?host+'/'+project+'/pull/'+mr+'/files#diff-'+hash256+'R'+line
+              :host+'/'+project+'/blob/'+ref+'/'+path+'#L'+line;
+      }else if(mr){
         url=host+'/'+project+'/-/merge_requests/'+mr+'/diffs#'+hash;
         if(old!==''&&old!=='-1')url+='_'+old+'_'+line;
       }else{
-        url=host+'/'+project+'/-/blob/'+encodeURIComponent(card.getAttribute('data-ref')||'HEAD').replace(/%2F/g,'/')+'/'+path+'#L'+line;
+        url=host+'/'+project+'/-/blob/'+ref+'/'+path+'#L'+line;
       }
       window.open(url,'_blank','noopener');
     });

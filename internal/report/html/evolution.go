@@ -56,7 +56,7 @@ func renderEvolution(res *result.AnalysisResult) string {
 		panes = append(panes, evoPane{
 			label: c.Ref.Label, title: c.Ref.Title + " · " + c.Ref.Short(),
 			file: "evolution-" + slug(c.Ref.Label) + ".md",
-			md:   "# Programming Culture evolution — " + c.Ref.Title + "\n\n" + evolution.RenderMarkdown(c),
+			md:   "# Programming Culture evolution — " + c.Ref.Title + "\n\n" + evolution.RenderReviewMarkdown(reviewFor(res, c)) + evolution.RenderMarkdown(c),
 			body: func(b *strings.Builder) {
 				writeComparisonBody(b, c, reviewFor(res, c))
 			},

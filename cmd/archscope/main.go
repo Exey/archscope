@@ -248,6 +248,30 @@ func main() {
 	}
 }
 
+// preflightReview resolves the --review ref (and --against) against the repository
+// before the scan starts. It returns an error — printed by main, exit status 1 —
+// when the path is not inside a git repository or the ref is not a commit/branch
+// there (local or on a remote), so nothing is scanned for a review that can't run.
+func preflightReview(path, reviewRef, againstRef string) ([]string, error) {
+	repo, _, err := evolution.Toplevel(path)
+	if err != nil {
+		return nil, fmt.Errorf("archscope: review mode needs a git repository, but %s is not inside one: %v", path, err)
+	}
+	spec := evolution.ReviewPrefix + reviewRef
+	if againstRef != "" {
+		spec += "@@" + againstRef
+	}
+	ref, err := evolution.Resolve(repo, spec, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("archscope: cannot review %q — %v\n  Nothing was scanned. Check the branch/commit name (`git branch -a`), `git fetch` if it only exists on the remote, or pass the MR's source branch name", reviewRef, err)
+	}
+	var changed []string
+	for _, f := range evolution.ChangedFiles(repo, ref.SHA, ref.HeadSHA) {
+		changed = append(changed, filepath.Join(repo, filepath.FromSlash(f.Path)))
+	}
+	return changed, nil
+}
+
 // run executes the full analysis. Deferred cleanup (clone temp dir removal)
 // fires on every return path because os.Exit in main would bypass it.
 func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec, reviewRef, againstRef string, openFlag, renderModules, scanAllFiles bool) error {
@@ -278,6 +302,16 @@ func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, grou
 		return fmt.Errorf("archscope: %w", err)
 	}
 	defer resolved.Cleanup() //nolint:errcheck
+
+	// Review mode needs the ref to exist: check it before scanning anything, so a
+	// typo'd branch or MR name fails in seconds instead of after a full analysis.
+	if reviewRef != "" {
+		changed, err := preflightReview(resolved.Path, reviewRef, againstRef)
+		if err != nil {
+			return err
+		}
+		cfg.ReviewChanged = changed // keep only the platforms the change touches
+	}
 
 	// Decide how platform tabs are grouped. An explicit --group-by (or its
 	// --lang-platforms shorthand) always wins; otherwise the choice depends on

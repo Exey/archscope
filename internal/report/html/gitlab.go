@@ -10,34 +10,51 @@ import (
 )
 
 // renderGitLabCard is the review-mode settings block at the top of the 📈 Evolution
-// card: the GitLab project path, the GitLab host on its right and the merge
-// request number. They are prefilled from the git remote and refs/merge-requests,
-// edited in place, and remembered in the browser; every "MR with line" button
-// reads them.
+// card (GitLab or GitHub, per rv.Provider): the project path (group/project or
+// owner/repo), the host on its right and the merge/pull request number. They are
+// prefilled from the git remote and refs/merge-requests (GitLab) or refs/pull
+// (GitHub), edited in place, and remembered in the browser; every "MR with line"
+// button reads them.
 func renderGitLabCard(res *result.AnalysisResult) string {
 	rv := res.Review
 	if rv == nil {
 		return ""
 	}
-	mrNote := `<span class="as-gl__hint">No merge request found in refs/merge-requests — type its number, or buttons link to the file at the branch instead.</span>`
+	gh := rv.Provider == "github"
+	title, reqWord, short, projPh, hostPh, refs := "🦊 GitLab MR links", "merge request", "MR", "group/project", "https://gitlab.example.com", "refs/merge-requests"
+	if gh {
+		title, reqWord, short, projPh, hostPh, refs = "🐙 GitHub PR links", "pull request", "PR", "owner/repo", "https://github.com", "refs/pull"
+	}
+	provider := "gitlab"
+	if gh {
+		provider = "github"
+	}
+	mrNote := fmt.Sprintf(`<span class="as-gl__hint">No %s found in %s — type its number, or buttons link to the file at the branch instead.</span>`, reqWord, refs)
 	mr := ""
 	if rv.MRIID > 0 {
 		mr = fmt.Sprint(rv.MRIID)
-		mrNote = fmt.Sprintf(`<span class="as-gl__hint">Merge request detected from %s.</span>`, esc(rv.MRSource))
+		mrNote = fmt.Sprintf(`<span class="as-gl__hint">%s detected from %s.</span>`, strings.ToUpper(reqWord[:1])+reqWord[1:], esc(rv.MRSource))
 	}
 	ref := rv.Branch
 	if ref == "" {
 		ref = rv.HeadSHA
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, `<div class="as-gl" id="as-gl-card" data-store="archscope-gl:%s" data-ref="%s">`, esc(res.ProjectName), esc(ref))
-	b.WriteString(`<div class="as-gl__title">🦊 GitLab MR links</div>`)
-	fmt.Fprintf(&b, `<p class="as-evo__meta">Reviewing <code>%s</code> against <code>%s</code> (merge-base <code>%s</code>). Every issue below gets an <strong>MR ↗ L&lt;line&gt;</strong> button: it copies <code>path/to/file#L&lt;line&gt;</code> for your comment and opens that line in the merge request. Saved in this browser.</p>`,
-		esc(reviewSubject(rv)), esc(reviewAgainst(rv)), esc(shortSHA(rv.BaseSHA)))
+	fmt.Fprintf(&b, `<div class="as-gl" id="as-gl-card" data-store="archscope-gl:%s" data-ref="%s" data-provider="%s">`, esc(res.ProjectName), esc(ref), provider)
+	fmt.Fprintf(&b, `<div class="as-gl__title">%s</div>`, title)
+	fmt.Fprintf(&b, `<p class="as-evo__meta">Reviewing <code>%s</code> against <code>%s</code> (merge-base <code>%s</code>). Every issue below gets an <strong>%s ↗ L&lt;line&gt;</strong> button: it copies <code>path/to/file#L&lt;line&gt;</code> for your comment and opens that line in the %s. Saved in this browser.</p>`,
+		esc(reviewSubject(rv)), esc(reviewAgainst(rv)), esc(shortSHA(rv.BaseSHA)), short, reqWord)
+	if len(res.ReviewSkipped) > 0 {
+		fmt.Fprintf(&b, `<p class="as-evo__meta">🎯 Only the platforms this change touches were analysed; skipped: <strong>%s</strong>.</p>`, esc(strings.Join(res.ReviewSkipped, ", ")))
+	}
 	b.WriteString(`<div class="as-gl__row">`)
-	fmt.Fprintf(&b, `<input id="as-gl-project" class="as-gl__in as-gl__in--project" type="text" placeholder="group/project" value="%s" data-orig="%s" title="GitLab project path">`, esc(rv.Project), esc(rv.Project))
-	fmt.Fprintf(&b, `<input id="as-gl-host" class="as-gl__in as-gl__in--host" type="text" placeholder="https://gitlab.example.com" value="%s" data-orig="%s" title="GitLab host">`, esc(rv.Host), esc(rv.Host))
-	fmt.Fprintf(&b, `<label class="as-gl__mr">MR&nbsp;!<input id="as-gl-mr" class="as-gl__in as-gl__in--num" type="text" inputmode="numeric" placeholder="IID" value="%s" data-orig="%s" title="Merge request number (IID)"></label>`, esc(mr), esc(mr))
+	fmt.Fprintf(&b, `<input id="as-gl-project" class="as-gl__in as-gl__in--project" type="text" placeholder="%s" value="%s" data-orig="%s" title="Project path">`, projPh, esc(rv.Project), esc(rv.Project))
+	fmt.Fprintf(&b, `<input id="as-gl-host" class="as-gl__in as-gl__in--host" type="text" placeholder="%s" value="%s" data-orig="%s" title="Host">`, hostPh, esc(rv.Host), esc(rv.Host))
+	sign := "!"
+	if gh {
+		sign = "#"
+	}
+	fmt.Fprintf(&b, `<label class="as-gl__mr">%s&nbsp;%s<input id="as-gl-mr" class="as-gl__in as-gl__in--num" type="text" inputmode="numeric" placeholder="number" value="%s" data-orig="%s" title="%s number"></label>`, short, sign, esc(mr), esc(mr), strings.ToUpper(reqWord[:1])+reqWord[1:])
 	b.WriteString(`</div>`)
 	b.WriteString(mrNote)
 	b.WriteString(`</div>`)

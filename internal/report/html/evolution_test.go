@@ -2,6 +2,7 @@ package html
 
 import (
 	"fmt"
+	"github.com/exey/archscope/internal/report"
 	"strings"
 	"testing"
 	"time"
@@ -280,5 +281,53 @@ func TestMRButtonKeepsZeroOldPositionForNewFiles(t *testing.T) {
 	it.OldPos = -1
 	if out := itemHTML(it, "", true); !strings.Contains(out, `data-old="-1"`) {
 		t.Errorf("-1 marks a line outside the diff:\n%s", out)
+	}
+}
+
+func TestReviewModeGitHubCardAndButtons(t *testing.T) {
+	then, now := detailScores()
+	now.Items[1].RepoPath, now.Items[1].OldPos = "src/x.py", 118
+	c := evolution.Compare(evolution.Ref{Label: "review: main", Title: "merge-base with main", SHA: "abc1234", Spec: evolution.ReviewPrefix + "main"},
+		[]evolution.Score{now}, []evolution.Score{then})
+	res := minimalResult()
+	res.Evolution = []evolution.Comparison{c}
+	res.Review = &evolution.Review{Ref: "main", BaseSHA: "abc1234def", HeadSHA: "fff", Branch: "feature/x",
+		MRIID: 42, MRSource: "local refs", Host: "https://github.com", Project: "owner/repo", Provider: "github"}
+	res.Review.Files = []evolution.ReviewFile{{Path: "src/x.py", Add: 12, Del: 3, Issues: []evolution.Item{now.Items[1]}}}
+	card := renderGitLabCard(res)
+	for _, want := range []string{`data-provider="github"`, "🐙 GitHub PR links", `placeholder="owner/repo"`, `value="owner/repo"`, `value="https://github.com"`,
+		`value="42"`, "Pull request detected from local refs"} {
+		if !strings.Contains(card, want) {
+			t.Errorf("GitHub card missing %q", want)
+		}
+	}
+	if strings.Contains(card, "GitLab") || strings.Contains(card, "merge-requests") {
+		t.Error("GitHub card must not mention GitLab")
+	}
+	out := renderEvolution(res)
+	if !strings.Contains(out, `data-hash256="`+evolution.FileHash256("src/x.py")+`"`) {
+		t.Error("buttons must carry the sha256 anchor GitHub needs")
+	}
+	if !strings.Contains(report.JS, `github=card.getAttribute('data-provider')==='github'`) || !strings.Contains(report.JS, "/pull/'+mr+'/files#diff-'+hash256+'R'") {
+		t.Error("the page script must build GitHub pull-request URLs")
+	}
+	res.Review.MRIID = 0
+	if hint := renderGitLabCard(res); !strings.Contains(hint, "No pull request found in refs/pull") {
+		t.Error("missing-PR hint expected")
+	}
+}
+
+func TestDuplicatedBlockItemLinksBothLocations(t *testing.T) {
+	it := evolution.Item{Kind: "Duplicate code", Name: "Duplicated block", Rel: "a/x.go", Path: "/repo/a/x.go", Line: 48,
+		AltRel: "b/y.go", AltPath: "/repo/b/y.go", AltLine: 125}
+	out := itemHTML(it, "", false)
+	if strings.Count(out, `class="as-vs"`) < 1 || !strings.Contains(out, "⇄") || !strings.Contains(out, "b/y.go:125") {
+		t.Errorf("both locations expected:\n%s", out)
+	}
+	if !strings.Contains(out, "vscode://file/repo/b/y.go:125") && !strings.Contains(out, "b/y.go:125") {
+		t.Errorf("twin link missing:\n%s", out)
+	}
+	if md := evolution.RenderReviewMarkdown(&evolution.Review{Files: []evolution.ReviewFile{{Path: "a/x.go", Issues: []evolution.Item{it}}}}); !strings.Contains(md, "⇄ `b/y.go:125`") {
+		t.Errorf("markdown should name the twin: %s", md)
 	}
 }

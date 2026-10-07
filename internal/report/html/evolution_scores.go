@@ -223,7 +223,8 @@ func cultureItems(res *result.AnalysisResult, r cultureRow, pmap map[string]lang
 			addIssues := func(kind string, set []constructs.CSIssue) {
 				for _, o := range set {
 					add(evolution.Item{Dim: dimQuality, Kind: kind, Name: o.Label(),
-						Note: o.Snippet, Path: o.FilePath, Line: o.Line, Weight: issueWeight(o.Severity)},
+						Note: o.Snippet, Path: o.FilePath, Line: o.Line, Weight: issueWeight(o.Severity),
+						AltPath: o.AltFile, AltRel: relPath(root, o.AltFile), AltLine: o.AltLine},
 						key("cs", o.RuleID, relPath(root, o.FilePath), o.Snippet))
 				}
 			}
