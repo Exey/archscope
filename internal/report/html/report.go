@@ -108,6 +108,9 @@ func Render(res *result.AnalysisResult) string {
 	// DevOps: detected tools + Dockerfile/Helm/Compose static-analysis matrix
 	b.WriteString(renderDevOpsSection(res))
 
+	// OpenAPI / Swagger specifications (vacuum's rules, ported)
+	b.WriteString(renderOpenAPISection(res))
+
 	// VS Code path editor (global, shown once before the platform tabs)
 	b.WriteString(renderVSCodePathCard(res.RootPath))
 

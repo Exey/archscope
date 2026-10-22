@@ -232,6 +232,15 @@ func cultureItems(res *result.AnalysisResult, r cultureRow, pmap map[string]lang
 			addIssues("Duplicate code", v.DupIssues)
 			addIssues("Shape limit", v.ShapeIssues)
 			addIssues("Merge / diff marker", v.MarkerIssues)
+			addIssues("Mutability", func() []constructs.CSIssue {
+				var keep []constructs.CSIssue
+				for _, is := range v.MutIssues {
+					if !is.Advisory {
+						keep = append(keep, is)
+					}
+				}
+				return keep
+			}())
 			for _, o := range v.HighComplexity {
 				w := 1
 				if o.Value > 50 {

@@ -2,6 +2,8 @@ package result
 
 import (
 	"fmt"
+	"github.com/exey/archscope/internal/openapi"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -31,6 +33,7 @@ func RunEvolution(res *AnalysisResult, cfg config.Config, specs []string, score 
 	if len(specs) == 0 {
 		return nil
 	}
+	cfg.NoSpecScan = true // baselines are scored on code only
 	repo, sub, err := evolution.Toplevel(res.RootPath)
 	if err != nil {
 		say("Evolution skipped: %v", err)
@@ -112,7 +115,7 @@ func RunEvolution(res *AnalysisResult, cfg config.Config, specs []string, score 
 // evolution.DefaultBranch). The review comparison always comes first.
 func RunReview(res *AnalysisResult, cfg config.Config, ref, against string, extra []string, score ScoreFunc, progress func(string)) []evolution.Comparison {
 	// Score the baselines on the same platforms the review analysed.
-	cfg.OnlyPlatforms, cfg.ReviewChanged = res.ReviewPlatforms, nil
+	cfg.OnlyPlatforms, cfg.ReviewChanged, cfg.NoSpecScan = res.ReviewPlatforms, nil, true
 	spec := evolution.ReviewPrefix + ref
 	if against != "" {
 		spec += "@@" + against
@@ -152,6 +155,7 @@ func RunReview(res *AnalysisResult, cfg config.Config, ref, against string, extr
 	info := evolution.ReviewInfo(repo, target, base)
 	evolution.EnrichReview(repo, sub, info.BaseSHA, info.HeadSHA, &comps[idx])
 	info.AttachFiles(repo, comps[idx])
+	attachSpecFindings(res, repo, &info)
 	res.Review = &info
 	if progress != nil {
 		progress(info.String())
@@ -165,4 +169,98 @@ func shortSHA(s string) string {
 		return s[:7]
 	}
 	return s
+}
+
+// attachSpecFindings adds, to each changed OpenAPI file of the merge request, the
+// findings the change *introduced*: the spec is linted at the reviewed side and at
+// the merge-base, and only findings the base didn't already have are kept — so a
+// reviewer sees what this MR broke, not the spec's history. Advisory findings
+// stay out of the review list.
+func attachSpecFindings(res *AnalysisResult, repo string, rv *evolution.Review) {
+	for i := range rv.Files {
+		f := &rv.Files[i]
+		ext := strings.ToLower(filepath.Ext(f.Path))
+		if f.Binary || (ext != ".yaml" && ext != ".yml" && ext != ".json") {
+			continue
+		}
+		var now string
+		if rv.Subject != "" && rv.HeadSHA != "" {
+			now, _ = evolution.FileAt(repo, rv.HeadSHA, f.Path)
+		} else if b, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(f.Path))); err == nil {
+			now = string(b)
+		}
+		newFindings, ok := openapi.Lint(now)
+		if !ok {
+			continue
+		}
+		oldCount := map[string]int{}
+		var changes []openapi.Change
+		if old, err := evolution.FileAt(repo, rv.BaseSHA, f.Path); err == nil {
+			oldFindings, _ := openapi.Lint(old)
+			for _, of := range oldFindings {
+				oldCount[of.RuleID+"|"+of.Detail]++
+			}
+			changes, _ = openapi.Diff(old, now)
+		}
+		head := rv.HeadSHA
+		if rv.Subject == "" {
+			head = ""
+		}
+		oldPos := evolution.NewToOld(repo, rv.BaseSHA, head, f.Path)
+		abs := filepath.Join(repo, filepath.FromSlash(f.Path))
+		rel := f.Path
+		if r, err := filepath.Rel(res.RootPath, abs); err == nil && !strings.HasPrefix(r, "..") {
+			rel = filepath.ToSlash(r)
+		}
+		for _, c := range changes {
+			if c.Level == "info" {
+				continue
+			}
+			name, weight := "API change: "+c.Rule, 2
+			if c.Level == "breaking" {
+				name, weight = "Breaking API change: "+c.Rule, 7
+			}
+			line, pos := c.Line, -1
+			if line <= 0 {
+				line = 1
+			}
+			if p, ok := oldPos[line]; ok {
+				pos = p
+			}
+			f.Issues = append(f.Issues, evolution.Item{
+				Dim: 2, Kind: "OpenAPI", Name: name, Note: c.Detail, Rel: rel, Path: abs, Line: line,
+				Weight: weight, RepoPath: f.Path, OldPos: pos, Key: "oasdiff|" + c.Level + "|" + c.Rule + "|" + c.Detail,
+			})
+		}
+		for j := range res.OpenAPI {
+			if filepath.Clean(res.OpenAPI[j].Path) == filepath.Clean(abs) {
+				res.OpenAPI[j].Changes = changes
+			}
+		}
+		for _, nf := range newFindings {
+			k := nf.RuleID + "|" + nf.Detail
+			if nf.Advisory {
+				continue
+			}
+			if oldCount[k] > 0 {
+				oldCount[k]--
+				continue
+			}
+			weight := 1
+			switch nf.Severity {
+			case "HIGH":
+				weight = 7
+			case "MEDIUM":
+				weight = 2
+			}
+			pos := -1
+			if p, ok := oldPos[nf.Line]; ok {
+				pos = p
+			}
+			f.Issues = append(f.Issues, evolution.Item{
+				Dim: 2, Kind: "OpenAPI", Name: nf.Rule, Note: nf.Detail, Rel: rel, Path: abs, Line: nf.Line,
+				Weight: weight, RepoPath: f.Path, OldPos: pos, Key: "oas|" + k,
+			})
+		}
+	}
 }

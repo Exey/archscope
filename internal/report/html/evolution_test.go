@@ -2,6 +2,7 @@ package html
 
 import (
 	"fmt"
+	"github.com/exey/archscope/internal/openapi"
 	"github.com/exey/archscope/internal/report"
 	"strings"
 	"testing"
@@ -329,5 +330,22 @@ func TestDuplicatedBlockItemLinksBothLocations(t *testing.T) {
 	}
 	if md := evolution.RenderReviewMarkdown(&evolution.Review{Files: []evolution.ReviewFile{{Path: "a/x.go", Issues: []evolution.Item{it}}}}); !strings.Contains(md, "⇄ `b/y.go:125`") {
 		t.Errorf("markdown should name the twin: %s", md)
+	}
+}
+
+func TestOpenAPISectionRendersGroupedFindingsWithLinks(t *testing.T) {
+	res := minimalResult()
+	res.OpenAPI = []openapi.FileReport{{Path: res.RootPath + "/api/openapi.yaml", Version: "3.0.3", Operations: 2, Findings: []openapi.Finding{
+		{RuleID: "oas-unprotected-operation", Rule: "State-changing operation without security", Message: "m", Detail: "POST /a", Severity: "HIGH", Line: 8},
+		{RuleID: "oas-operation-tags", Rule: "Operation without tags", Message: "t", Detail: "GET /a", Severity: "LOW", Line: 3, Advisory: true},
+	}}}
+	out := renderOpenAPISection(res)
+	for _, want := range []string{"📜", "OpenAPI 3.0.3", "api/openapi.yaml", "State-changing operation without security", "POST /a", "(advisory)", "1H"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("section missing %q", want)
+		}
+	}
+	if renderOpenAPISection(minimalResult()) != "" {
+		t.Error("no specs → no section")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/exey/archscope/internal/graph"
 	"github.com/exey/archscope/internal/langspec"
 	"github.com/exey/archscope/internal/modules"
+	"github.com/exey/archscope/internal/openapi"
 	"github.com/exey/archscope/internal/parser"
 	"github.com/exey/archscope/internal/scanner"
 	"github.com/exey/archscope/internal/security"
@@ -46,6 +47,10 @@ type AnalysisResult struct {
 	// ReviewPlatforms / ReviewSkipped: in review mode only the platforms that contain
 	// a change are analysed; these are the kept platform keys and the labels of the
 	// ones left out ("" when nothing was left out).
+	// OpenAPI holds the lint result of every OpenAPI/Swagger document found (in review
+	// mode: only those the merge request changes).
+	OpenAPI []openapi.FileReport
+
 	ReviewPlatforms []string
 	ReviewSkipped   []string
 

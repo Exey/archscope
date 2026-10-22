@@ -473,3 +473,14 @@ func untar(r io.Reader, dst string) error {
 		}
 	}
 }
+
+// FileAt returns a file's content at a revision ("" rev = the working tree is not
+// consulted; use os.ReadFile for that).
+func FileAt(repo, rev, path string) (string, error) {
+	cmd := exec.Command("git", "-C", repo, "show", rev+":"+path)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}

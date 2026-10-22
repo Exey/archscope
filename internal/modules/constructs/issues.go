@@ -54,6 +54,7 @@ type CSIssue struct {
 	FilePath string
 	Line     int
 	Snippet  string // trimmed source line (also the evolution key, so it carries no line number)
+	Advisory bool   // shown in its card only: never a review item, never a score input
 	AltFile  string // the other location, for duplicated blocks
 	AltLine  int
 	Detail   string // what this particular hit is about (an identifier, a count); shown beside its location

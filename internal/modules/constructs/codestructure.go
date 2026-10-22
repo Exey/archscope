@@ -36,7 +36,7 @@ func init() { modules.Default.Register(CodeStructure{}) }
 // Thresholds above which a function/folder is flagged. Chosen to match common
 // lint-style conventions (lizard/SourceMonitor defaults), not hard limits.
 const (
-	csMaxParams          = 5  // more parameters than this is a smell
+	csMaxParams          = 9  // 10 or more parameters is a smell
 	csMaxNestDepth       = 5  // deeper block nesting than this (6+ levels) is a smell
 	csOvercrowdedFolder  = 30 // more files than this in one folder is a smell
 	csManyEmptyFolders   = 3  // this many container-only folders is a smell
@@ -120,6 +120,7 @@ type CodeStructureReport struct {
 	HookIssues   []CSIssue // ⚛️ React hooks & state (TS/JS): missing deps, effect loops, direct mutation…
 	ReactIssues  []CSIssue // 🧩 React components (TS/JS): size, props, JSX depth, prop drilling
 	MarkerIssues []CSIssue // 🔀 Merge conflict markers and pasted diff headers (all languages)
+	MutIssues    []CSIssue // 🧊 Mutability: +const fields/params, mutated globals, reassignments, let→const, Python shared state
 
 	PyFuncs, PyTyped int            // Python functions / fully annotated ones
 	PyAny            int            // `Any` uses in Python annotations
@@ -142,14 +143,14 @@ func (r CodeStructureReport) HasData() bool { return r.scanned }
 // ReviewIssueCount is the number of suspicious-code, duplicate-code and React
 // findings — everything this card surfaces as a review item.
 func (r CodeStructureReport) ReviewIssueCount() int {
-	return len(r.BugIssues) + len(r.DupIssues) + len(r.HookIssues) + len(r.ReactIssues) + len(r.ShapeIssues) + len(r.HighComplexity) + len(r.MarkerIssues)
+	return len(r.BugIssues) + len(r.DupIssues) + len(r.HookIssues) + len(r.ReactIssues) + len(r.ShapeIssues) + len(r.HighComplexity) + len(r.MarkerIssues) + len(reviewable(r.MutIssues))
 }
 
 // IssuePoints weighs those findings for the Code Quality score: HIGH 5, MEDIUM
 // 2, LOW 0.5 (unscored advice such as "use isEmpty" must not drown real bugs).
 func (r CodeStructureReport) IssuePoints() float64 {
 	var pts float64
-	for _, set := range [][]CSIssue{r.BugIssues, r.DupIssues, r.HookIssues, r.ReactIssues, r.ShapeIssues, r.MarkerIssues} {
+	for _, set := range [][]CSIssue{r.BugIssues, r.DupIssues, r.HookIssues, r.ReactIssues, r.ShapeIssues, r.MarkerIssues, reviewable(r.MutIssues)} {
 		h, m, l := issueSevCounts(set)
 		pts += float64(h)*5 + float64(m)*2 + float64(l)*0.5
 	}
@@ -164,6 +165,18 @@ func (r CodeStructureReport) IssuePoints() float64 {
 		}
 	}
 	return pts
+}
+
+// reviewable drops Advisory issues: they appear in their card but are neither
+// review items nor score inputs.
+func reviewable(in []CSIssue) []CSIssue {
+	out := in[:0:0]
+	for _, is := range in {
+		if !is.Advisory {
+			out = append(out, is)
+		}
+	}
+	return out
 }
 
 // HasFolderSmells reports whether any folder-layout issue was flagged.
@@ -348,6 +361,7 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 		nHP, nDN, nCC := len(rep.HighParamFuncs), len(rep.DeepNestFuncs), len(rep.HighComplexity)
 		nShape, nBug, nDup := len(rep.ShapeIssues), len(rep.BugIssues), len(rep.DupIssues)
 		nHook, nReact, nMark := len(rep.HookIssues), len(rep.ReactIssues), len(rep.MarkerIssues)
+		nMut := len(rep.MutIssues)
 		rep.MarkerIssues = append(rep.MarkerIssues, scanMarkers(f.FilePath, raw)...)
 
 		for i, s := range stripped {
@@ -403,6 +417,10 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 			}
 			rep.BugIssues = append(rep.BugIssues, scanBugSmells(f.FilePath, masked)...)
 			rep.DupIssues = append(rep.DupIssues, scanDuplicateCode(f.FilePath, masked)...)
+			if lang == csStrPython {
+				rep.MutIssues = append(rep.MutIssues, scanPyMutability(f.FilePath, masked)...)
+			}
+			rep.MutIssues = append(rep.MutIssues, scanTSMutability(f.FilePath, masked)...)
 			h, c := scanReact(f.FilePath, masked)
 			rep.HookIssues = append(rep.HookIssues, h...)
 			rep.ReactIssues = append(rep.ReactIssues, c...)
@@ -438,6 +456,7 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 			rep.HookIssues = append(rep.HookIssues[:nHook], suppressIssues(sup, rep.HookIssues[nHook:])...)
 			rep.ReactIssues = append(rep.ReactIssues[:nReact], suppressIssues(sup, rep.ReactIssues[nReact:])...)
 			rep.MarkerIssues = append(rep.MarkerIssues[:nMark], suppressIssues(sup, rep.MarkerIssues[nMark:])...)
+			rep.MutIssues = append(rep.MutIssues[:nMut], suppressIssues(sup, rep.MutIssues[nMut:])...)
 		}
 	}
 
@@ -451,6 +470,8 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 	sort.SliceStable(rep.LooseTypeFiles, func(i, j int) bool { return rep.LooseTypeFiles[i].Total() > rep.LooseTypeFiles[j].Total() })
 
 	rep.DupIssues = append(rep.DupIssues, scanClones(files, cache)...)
+	rep.MutIssues = append(rep.MutIssues, scanGoMutability(files, cache)...)
+	sortIssues(rep.MutIssues)
 	sortIssues(rep.BugIssues)
 	sortIssues(rep.DupIssues)
 	sortIssues(rep.HookIssues)
@@ -646,6 +667,7 @@ func (CodeStructure) RenderMarkdown(res any) string {
 		b.WriteString("\n")
 	}
 
+	issuesMarkdown(&b, "🧊 Mutability", r.MutIssues, true, maxIssueExamples)
 	issuesMarkdown(&b, "🔀 Merge & diff markers", r.MarkerIssues, true, maxIssueExamples)
 	issuesMarkdown(&b, "🐛 Suspicious code", r.BugIssues, true, maxIssueExamples)
 	issuesMarkdown(&b, "👯 Duplicate code", r.DupIssues, true, maxIssueExamples)
@@ -683,12 +705,13 @@ func (CodeStructure) RenderHTML(res any) string {
 
 	writeCSHeader(&b, r)
 
-	writeCSOffenders(&b, "params", "🔢", fmt.Sprintf("Functions with too many parameters (&gt; %d)", csMaxParams), "PARAMS", r.HighParamFuncs)
+	writeCSOffenders(&b, "params", "🔢", fmt.Sprintf("Functions with too many parameters (%d+)", csMaxParams+1), "PARAMS", r.HighParamFuncs)
 	writeCSOffenders(&b, "cyclo", "🌀", fmt.Sprintf("Cyclomatic complexity (&gt; %d)", csMaxCyclomatic), "CC", r.HighComplexity)
 	writeCSOffenders(&b, "nest", "🪆", fmt.Sprintf("Deeply nested functions (&gt; %d levels)", csMaxNestDepth), "DEPTH", r.DeepNestFuncs)
 	writeCSLooseTypes(&b, r.LooseTypeFiles, r.LooseTypeTotal)
 	writeCSTypingSubcard(&b, r.TypingFiles, r.PyFuncs, r.PyTyped)
 	writeCSDocSubcard(&b, r.DocFiles, r.DocPublic, r.DocDocumented)
+	writeIssueSubcard(&b, "mut", "🧊", "Mutability", "Shared and changing state, from constlint / go-immutable / funky: assignments to `// +const` fields and parameters, package-level variables mutated from functions, reassigned locals (advisory), `let` that should be `const`, Python `global` state and shared class attributes.", r.MutIssues, true, maxIssueExamples)
 	writeIssueSubcard(&b, "markers", "🔀", "Merge & diff markers", "Unresolved merge-conflict markers and pasted diff headers left in source (ported from dodgy).", r.MarkerIssues, true, maxIssueExamples)
 	writeIssueSubcard(&b, "bug", "🐛", "Suspicious code", "Bug-class patterns from go-critic (Go) and pylint/pyflakes (Python): identical operands, impossible conditions, off-by-one, mutable default arguments, bare/swallowed except, bad locks…", r.BugIssues, true, maxIssueExamples)
 	writeIssueSubcard(&b, "dup", "👯", "Duplicate code", "Code copied between places (blocks of 15+ identical lines across or within files), neighbouring if/else branches with the same body, and repeated case labels.", r.DupIssues, true, maxIssueExamples)
@@ -868,7 +891,7 @@ func writeCSHeader(b *strings.Builder, r CodeStructureReport) {
 		writeCSMini(b, strconv.Itoa(n), "deeply nested", fmt.Sprintf("functions > %d levels", csMaxNestDepth), healthColor(100-n*5), "nest")
 	}
 	if n := len(r.HighParamFuncs); n > 0 {
-		writeCSMini(b, strconv.Itoa(n), "many parameters", fmt.Sprintf("functions > %d params", csMaxParams), healthColor(100-n*5), "params")
+		writeCSMini(b, strconv.Itoa(n), "many parameters", fmt.Sprintf("functions with %d+ params", csMaxParams+1), healthColor(100-n*5), "params")
 	}
 	if r.PyFuncs > 0 {
 		pct := r.PyTyped * 100 / r.PyFuncs
@@ -897,6 +920,7 @@ func writeCSHeader(b *strings.Builder, r CodeStructureReport) {
 		issues           []CSIssue
 	}
 	sums := []sum{
+		{"mut", "🧊", "mutability", r.MutIssues},
 		{"markers", "🔀", "merge / diff markers", r.MarkerIssues},
 		{"bug", "🐛", "suspicious code", r.BugIssues},
 		{"dup", "👯", "duplicate code", r.DupIssues},
@@ -909,8 +933,13 @@ func writeCSHeader(b *strings.Builder, r CodeStructureReport) {
 		if len(sm.issues) == 0 {
 			continue
 		}
-		h, m, l := issueSevCounts(sm.issues)
-		writeCSMini(&minis, strconv.Itoa(len(sm.issues)), sm.icon+" "+sm.label, fmt.Sprintf("%dH · %dM · %dL", h, m, l), csTone(h, m, l), sm.key)
+		real := reviewable(sm.issues)
+		h, m, l := issueSevCounts(real)
+		sub := fmt.Sprintf("%dH · %dM · %dL", h, m, l)
+		if adv := len(sm.issues) - len(real); adv > 0 {
+			sub += fmt.Sprintf(" · +%d advisory", adv)
+		}
+		writeCSMini(&minis, strconv.Itoa(len(real)), sm.icon+" "+sm.label, sub, csTone(h, m, l), sm.key)
 	}
 	if r.HasFolderSmells() {
 		n := len(r.OvercrowdedFolders)

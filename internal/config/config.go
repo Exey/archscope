@@ -63,6 +63,7 @@ type Config struct {
 	// the baseline trees so then-vs-now compares like with like.
 	ReviewChanged []string `json:"-"`
 	OnlyPlatforms []string `json:"-"`
+	NoSpecScan    bool     `json:"-"` // baseline trees skip the OpenAPI scan
 }
 
 // Default returns the repo-shipped defaults.

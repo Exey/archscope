@@ -6,6 +6,7 @@ package markdown
 
 import (
 	"fmt"
+	"github.com/exey/archscope/internal/openapi"
 	"os"
 	"path/filepath"
 	"sort"
@@ -48,6 +49,12 @@ func Render(res *result.AnalysisResult) string {
 	}
 
 	b.WriteString("---\n\n")
+
+	// ── OpenAPI / Swagger specifications ──────────────────────────────────────
+	if md := openapi.RenderMarkdown(res.OpenAPI, func(p string) string { return relTo(res.RootPath, p) }); md != "" {
+		b.WriteString(md)
+		b.WriteString("---\n\n")
+	}
 
 	// ── Programming Culture evolution (only with --evolution) ─────────────────
 	if len(res.Evolution) > 0 {
@@ -1092,3 +1099,10 @@ const version = "1.0.0"
 
 // Ensure git import is used (referenced via result.GitBundle).
 var _ git.AuthorStats
+
+func relTo(root, p string) string {
+	if rel, err := filepath.Rel(root, p); err == nil && !strings.HasPrefix(rel, "..") {
+		return filepath.ToSlash(rel)
+	}
+	return filepath.ToSlash(p)
+}

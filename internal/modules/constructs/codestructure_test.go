@@ -16,21 +16,21 @@ func csAnalyze(files []*parser.ParsedFile) CodeStructureReport {
 }
 
 func TestHighParamCountFlagged(t *testing.T) {
-	src := "package p\nfunc Sum(a, b, c, d, e, f int) int {\n\treturn a + b + c + d + e + f\n}\n"
+	src := "package p\nfunc Sum(a, b, c, d, e, f, g, h, i, j int) int {\n\treturn a + b + c + d + e + f + g + h + i + j\n}\n"
 	f := writeFile(t, ".go", src)
 	r := csAnalyze([]*parser.ParsedFile{f})
 	if len(r.HighParamFuncs) != 1 || r.HighParamFuncs[0].Symbol != "Sum" {
 		t.Fatalf("expected Sum flagged for high param count, got %+v", r.HighParamFuncs)
 	}
-	if r.HighParamFuncs[0].Value != 6 {
-		t.Errorf("expected 6 params, got %d", r.HighParamFuncs[0].Value)
+	if r.HighParamFuncs[0].Value != 10 {
+		t.Errorf("expected 10 params, got %d", r.HighParamFuncs[0].Value)
 	}
 }
 
 func TestGoMethodWithReceiverIsDetected(t *testing.T) {
 	// The shared magicconstants reFuncDecl can't see receiver methods; this
 	// module's own reFuncSig must.
-	src := "package p\ntype T struct{}\nfunc (t *T) Do(a, b, c, d, e, f, g int) int {\n\treturn a\n}\n"
+	src := "package p\ntype T struct{}\nfunc (t *T) Do(a, b, c, d, e, f, g, h, i, j int) int {\n\treturn a\n}\n"
 	f := writeFile(t, ".go", src)
 	r := csAnalyze([]*parser.ParsedFile{f})
 	if len(r.HighParamFuncs) != 1 || r.HighParamFuncs[0].Symbol != "Do" {

@@ -16,6 +16,7 @@ import (
 	"github.com/exey/archscope/internal/graph"
 	"github.com/exey/archscope/internal/langspec"
 	"github.com/exey/archscope/internal/modules"
+	"github.com/exey/archscope/internal/openapi"
 	"github.com/exey/archscope/internal/parser"
 	"github.com/exey/archscope/internal/scanner"
 	"github.com/exey/archscope/internal/security"
@@ -172,6 +173,26 @@ func RunWithProgress(rootPath string, cfg config.Config, progress func(string)) 
 		}
 	}
 
+	// OpenAPI / Swagger specs: lint every document (in review mode: only the ones the
+	// merge request changes; baseline trees skip it).
+	var specs []openapi.FileReport
+	if !cfg.NoSpecScan && len(cfg.OnlyPlatforms) == 0 {
+		var only map[string]bool
+		if len(cfg.ReviewChanged) > 0 {
+			only = map[string]bool{}
+			for _, p := range cfg.ReviewChanged {
+				only[p] = true
+			}
+		}
+		if specs = openapi.Scan(rootPath, cfg.ExcludePaths, only); len(specs) > 0 {
+			n := 0
+			for _, s := range specs {
+				n += len(s.Findings)
+			}
+			step(fmt.Sprintf("OpenAPI: %d spec file(s), %d finding(s)", len(specs), n))
+		}
+	}
+
 	// 6) Report modules, run per platform tab.
 	step("Running report modules…")
 	panels := runModules(scan, files, step)
@@ -214,6 +235,7 @@ func RunWithProgress(rootPath string, cfg config.Config, progress func(string)) 
 		DevOpsLint:     scan.DevOpsLint,
 		K8sLint:        scan.K8sLint,
 
+		OpenAPI:         specs,
 		ReviewPlatforms: reviewKept,
 		ReviewSkipped:   reviewSkipped,
 	}, nil

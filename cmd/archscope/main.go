@@ -182,6 +182,7 @@ func main() {
 		failOn        string
 		groupBy       string
 		scanAllFiles  bool
+		noGitPull     bool
 		evolutionSpec string
 		reviewRef     string
 		againstRef    string
@@ -198,6 +199,7 @@ func main() {
 	fs.BoolVar(&renderModules, "render-modules", false, "include the Modules & Microservices section and its CDN-loaded graphs (omitted by default)")
 	fs.StringVar(&failOn, "fail-on", "", "exit 2 when findings exist at or above threshold: low | medium | high")
 	fs.StringVar(&groupBy, "group-by", "", "how to group platform tabs: language | folder | gitrepo (default: auto-detected from .git count, prompts interactively when 2+ repos are found)")
+	fs.BoolVar(&noGitPull, "no-git-pull", false, "review mode: don't fetch, switch to the reviewed branch or fast-forward branches — review the repository exactly as it is")
 	fs.BoolVar(&scanAllFiles, "scan-all-files", false, "also scan git-submodule (third-party/vendored) directories, skipped by default")
 
 	fs.StringVar(&evolutionSpec, "evolution", "", "compare Programming Culture now vs. git history, comma- or space-separated: 2w | 1m | 3m | last-tag | YYYY-MM-DD | <commit> | auto (= 2w,1m,last-tag)")
@@ -236,7 +238,7 @@ func main() {
 		groupBy = "language"
 	}
 
-	if err := run(target, ref, depth, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec, reviewRef, againstRef, openFlag, renderModules, scanAllFiles); err != nil {
+	if err := run(target, ref, depth, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec, reviewRef, againstRef, openFlag, renderModules, scanAllFiles, noGitPull); err != nil {
 		if ec, ok := err.(*exitCodeError); ok {
 			if ec.msg != "" {
 				fmt.Fprintln(os.Stderr, ec.msg)
@@ -274,7 +276,7 @@ func preflightReview(path, reviewRef, againstRef string) ([]string, error) {
 
 // run executes the full analysis. Deferred cleanup (clone temp dir removal)
 // fires on every return path because os.Exit in main would bypass it.
-func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec, reviewRef, againstRef string, openFlag, renderModules, scanAllFiles bool) error {
+func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec, reviewRef, againstRef string, openFlag, renderModules, scanAllFiles, noGitPull bool) error {
 	cfg := config.Load(cfgPath)
 	if outputDir == "" {
 		outputDir = cfg.Output.Dir
@@ -305,6 +307,15 @@ func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, grou
 
 	// Review mode needs the ref to exist: check it before scanning anything, so a
 	// typo'd branch or MR name fails in seconds instead of after a full analysis.
+	if reviewRef != "" && !noGitPull && !resolved.WasClone {
+		// Fetch, switch to the reviewed branch and bring it and its target branch up to
+		// date, so the diff is the merge request's own. --no-git-pull skips all of it.
+		if root, _, err := evolution.Toplevel(resolved.Path); err == nil {
+			if sr := evolution.SyncForReview(root, reviewRef, againstRef, func(m string) { fmt.Println(" → " + m) }); sr.Against != "" {
+				againstRef = sr.Against
+			}
+		}
+	}
 	if reviewRef != "" {
 		changed, err := preflightReview(resolved.Path, reviewRef, againstRef)
 		if err != nil {
@@ -504,6 +515,7 @@ Flags:
   --scan-all-files    also scan git-submodule (third-party/vendored) directories, skipped by default
   --review [<ref>]    review mode (bare = against the local default branch: origin/HEAD, main, master, develop): Evolution since a commit/branch (merge-base, like an MR diff) plus GitLab
                       "MR with line" buttons on every introduced issue; "last-commit" = HEAD~1
+  --no-git-pull       review mode: don't fetch, switch to the reviewed branch or fast-forward branches (default: do)
   --against <ref>     with --review <branch>: compare that branch with <ref> (default: the branch you are on)
   --evolution <list>  compare Programming Culture now vs. git history (adds a 📈 Evolution card + MD export).
                       Comma-separated: 2w | 14d | 1m | 3m | 1y | last-tag | YYYY-MM-DD | <commit/branch/tag>
