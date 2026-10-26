@@ -607,20 +607,28 @@ func (CodeStructure) SummaryCards(res any) []modules.SummaryCard {
 	return cards
 }
 
-// RenderMarkdown renders the headline stats, offender tables, and folder
-// smells as markdown.
+// RenderMarkdown is RenderHTML's twin: the headline stats, then the same
+// subcards in the same order — offender tables, loose types, typing and
+// documentation coverage, every findings subcard with its hint and fix advice,
+// and the folder smells.
 func (CodeStructure) RenderMarkdown(res any) string {
 	r, ok := res.(CodeStructureReport)
 	if !ok || !r.HasData() {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "**Comments:** %d%% · **Worst nesting:** %d", r.CommentPercent, r.WorstNest.Value)
+	fmt.Fprintf(&b, "**Comments:** %d%% of all lines", r.CommentPercent)
+	if r.WorstNest.Value > 0 {
+		fmt.Fprintf(&b, " · **Worst nesting:** %d (%s)", r.WorstNest.Value, r.WorstNest.Symbol)
+	}
+	if r.WorstCC.Value > 0 {
+		fmt.Fprintf(&b, " · **Worst complexity:** %d (%s)", r.WorstCC.Value, r.WorstCC.Symbol)
+	}
 	if r.PreprocDirectives > 0 {
 		fmt.Fprintf(&b, " · **Preprocessor directives:** %d", r.PreprocDirectives)
 	}
 	if r.LooseTypeTotal > 0 {
-		fmt.Fprintf(&b, " · **`any` / `object` types:** %d", r.LooseTypeTotal)
+		fmt.Fprintf(&b, " · **`any` / `object` types:** %d in %d files", r.LooseTypeTotal, len(r.LooseTypeFiles))
 	}
 	if r.PyFuncs > 0 {
 		fmt.Fprintf(&b, " · **Typed functions:** %d%% (%d/%d)", r.PyTyped*100/r.PyFuncs, r.PyTyped, r.PyFuncs)
@@ -636,58 +644,115 @@ func (CodeStructure) RenderMarkdown(res any) string {
 	}
 	b.WriteString("\n\n")
 
-	writeOffenders := func(title string, offenders []CSFuncOffender) {
+	writeOffenders := func(icon, title, valLabel string, offenders []CSFuncOffender) {
 		if len(offenders) == 0 {
 			return
 		}
-		fmt.Fprintf(&b, "%s\n\n| Function | Value | Location |\n|----------|------:|----------|\n", title)
+		mdSubOpen(&b, icon, title, len(offenders), "")
+		fmt.Fprintf(&b, "| Function | %s | Location |\n|----------|------:|----------|\n", valLabel)
 		for i, o := range offenders {
-			if i == 20 {
-				fmt.Fprintf(&b, "| | | +%d more |\n", len(offenders)-20)
+			if i == csMaxOffendersShown {
+				fmt.Fprintf(&b, "| | | … and %d more |\n", len(offenders)-csMaxOffendersShown)
 				break
 			}
-			fmt.Fprintf(&b, "| %s | %d | %s:%d |\n", o.Symbol, o.Value, baseName(o.FilePath), o.Line)
+			fmt.Fprintf(&b, "| %s | %d | %s:%d |\n", mdTableCell(o.Symbol), o.Value, baseName(o.FilePath), o.Line)
 		}
 		b.WriteString("\n")
 	}
-	writeOffenders("High-parameter functions", r.HighParamFuncs)
-	writeOffenders("Deeply nested functions", r.DeepNestFuncs)
-	writeOffenders("Cyclomatic complexity", r.HighComplexity)
-	issuesMarkdown(&b, "📐 Shape limits", r.ShapeIssues, true, maxIssueExamples)
+	writeOffenders("🔢", fmt.Sprintf("Functions with too many parameters (%d+)", csMaxParams+1), "Params", r.HighParamFuncs)
+	writeOffenders("🌀", fmt.Sprintf("Cyclomatic complexity (> %d)", csMaxCyclomatic), "CC", r.HighComplexity)
+	writeOffenders("🪆", fmt.Sprintf("Deeply nested functions (> %d levels)", csMaxNestDepth), "Depth", r.DeepNestFuncs)
 
 	if len(r.LooseTypeFiles) > 0 {
-		fmt.Fprintf(&b, "`any` / `object` types by file (%d total)\n\n| File | any | object | Location |\n|------|----:|-------:|----------|\n", r.LooseTypeTotal)
+		mdSubOpen(&b, "🕳️", fmt.Sprintf("Loose `any` / `object` types in %d files", len(r.LooseTypeFiles)), r.LooseTypeTotal, "")
+		b.WriteString("| File | any | object | Location |\n|------|----:|-------:|----------|\n")
 		for i, u := range r.LooseTypeFiles {
 			if i == csMaxAnyListShown {
-				fmt.Fprintf(&b, "| | | | +%d more |\n", len(r.LooseTypeFiles)-csMaxAnyListShown)
+				fmt.Fprintf(&b, "| | | | … and %d more |\n", len(r.LooseTypeFiles)-csMaxAnyListShown)
 				break
 			}
 			fmt.Fprintf(&b, "| %s | %d | %d | %s:%d |\n", baseName(u.FilePath), u.AnyCount, u.ObjCount, baseName(u.FilePath), u.FirstLine)
 		}
 		b.WriteString("\n")
 	}
-
-	issuesMarkdown(&b, "🧊 Mutability", r.MutIssues, true, maxIssueExamples)
-	issuesMarkdown(&b, "🔀 Merge & diff markers", r.MarkerIssues, true, maxIssueExamples)
-	issuesMarkdown(&b, "🐛 Suspicious code", r.BugIssues, true, maxIssueExamples)
-	issuesMarkdown(&b, "👯 Duplicate code", r.DupIssues, true, maxIssueExamples)
-	issuesMarkdown(&b, "⚛️ React hooks & state", r.HookIssues, true, maxIssueExamples)
-	issuesMarkdown(&b, "🧩 React components", r.ReactIssues, true, maxIssueExamples)
+	if len(r.TypingFiles) > 0 {
+		mdSubOpen(&b, "🏷️", fmt.Sprintf("Typing — %d of %d functions fully annotated", r.PyTyped, r.PyFuncs), len(r.TypingFiles), typingHint)
+		b.WriteString("| File | Functions | Typed | Any | Ignores | First untyped |\n|------|----------:|------:|----:|--------:|---------------|\n")
+		for i, f := range r.TypingFiles {
+			if i == csMaxAnyListShown {
+				fmt.Fprintf(&b, "| | | | | | … and %d more |\n", len(r.TypingFiles)-csMaxAnyListShown)
+				break
+			}
+			loc := ""
+			if f.FirstUntyped > 0 {
+				loc = fmt.Sprintf("%s:%d", baseName(f.FilePath), f.FirstUntyped)
+			}
+			fmt.Fprintf(&b, "| %s | %d | %d%% | %d | %d | %s |\n", baseName(f.FilePath), f.Funcs, f.Typed*100/max(f.Funcs, 1), f.AnyCount, f.Ignores, loc)
+		}
+		b.WriteString("\n")
+	}
+	if len(r.DocFiles) > 0 {
+		mdSubOpen(&b, "📝", fmt.Sprintf("Documentation — %d of %d public symbols documented", r.DocDocumented, r.DocPublic), len(r.DocFiles), docsHint)
+		b.WriteString("| File | Public | Documented | First missing |\n|------|-------:|-----------:|---------------|\n")
+		for i, f := range r.DocFiles {
+			if i == csMaxAnyListShown {
+				fmt.Fprintf(&b, "| | | | … and %d more |\n", len(r.DocFiles)-csMaxAnyListShown)
+				break
+			}
+			fmt.Fprintf(&b, "| %s | %d | %d%% | %s:%d |\n", baseName(f.FilePath), f.Public, f.Documented*100/max(f.Public, 1), baseName(f.FilePath), f.FirstMissing)
+		}
+		b.WriteString("\n")
+	}
+	for _, sc := range r.issueSubcards() {
+		issuesMarkdown(&b, sc.icon, sc.title, sc.hint, sc.issues, true, maxIssueExamples)
+	}
 
 	if r.HasFolderSmells() {
-		b.WriteString("Folder-structure smells:\n\n")
-		for _, fs := range r.OvercrowdedFolders {
-			fmt.Fprintf(&b, "- Overcrowded: `%s` (%d files)\n", fs.Path, fs.Count)
-		}
+		n := len(r.OvercrowdedFolders)
 		if len(r.EmptyFolders) > 0 {
-			fmt.Fprintf(&b, "- %d container-only folder(s) with no files of their own\n", len(r.EmptyFolders))
+			n++
 		}
 		if len(r.SingleFileFolders) > 0 {
-			fmt.Fprintf(&b, "- %d folders holding a single file each\n", len(r.SingleFileFolders))
+			n++
+		}
+		mdSubOpen(&b, "🗑️", "Folder structure smells", n, "")
+		for _, fs := range r.OvercrowdedFolders {
+			fmt.Fprintf(&b, "- Overcrowded — `%s` (%d files)\n", fs.Path, fs.Count)
+		}
+		if n := len(r.SingleFileFolders); n > 0 {
+			fmt.Fprintf(&b, "- %d folders hold a single file each — over-fragmented layout\n", n)
+		}
+		if n := len(r.EmptyFolders); n > 0 {
+			fmt.Fprintf(&b, "- %d container-only folder(s) hold no files of their own, just subfolders\n", n)
 		}
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+const (
+	typingHint = "Python functions need an annotation on every parameter and on the return value for mypy/pyright to check their callers."
+	docsHint   = "Public functions, classes and types without a doc comment (docstring, godoc, JSDoc, KDoc/Javadoc, ///), by file."
+)
+
+// issueSubcard is one findings subcard of the Code Structure panel — the same
+// list drives the HTML subcards and their Markdown twins.
+type issueSubcard struct {
+	key, icon, title, hint string
+	issues                 []CSIssue
+}
+
+// issueSubcards lists the findings subcards in display order.
+func (r CodeStructureReport) issueSubcards() []issueSubcard {
+	return []issueSubcard{
+		{"mut", "🧊", "Mutability", "Shared and changing state, from constlint / go-immutable / funky: assignments to `// +const` fields and parameters, package-level variables mutated from functions, reassigned locals (advisory), `let` that should be `const`, Python `global` state and shared class attributes.", r.MutIssues},
+		{"markers", "🔀", "Merge & diff markers", "Unresolved merge-conflict markers and pasted diff headers left in source (ported from dodgy).", r.MarkerIssues},
+		{"bug", "🐛", "Suspicious code", "Bug-class patterns from go-critic (Go) and pylint/pyflakes (Python): identical operands, impossible conditions, off-by-one, mutable default arguments, bare/swallowed except, bad locks…", r.BugIssues},
+		{"dup", "👯", "Duplicate code", "Code copied between places (blocks of 15+ identical lines across or within files), neighbouring if/else branches with the same body, and repeated case labels.", r.DupIssues},
+		{"hooks", "⚛️", "React hooks & state", "Hook and state mistakes (ported from react-code-audit): missing dependencies, setState loops, in-place state mutation, derived state, index keys…", r.HookIssues},
+		{"shape", "📐", "Shape limits", "pylint-style limits: too many returns (> 6), branches (> 12) or locals (> 15) in a function; too many attributes, public methods or bases in a Python class; modules over 1000 lines.", r.ShapeIssues},
+		{"react", "🧩", "React components", "Component size, prop count, JSX nesting depth and prop drilling.", r.ReactIssues},
+	}
 }
 
 // csMaxOffendersShown caps an offender table so a pathological codebase can't
@@ -711,13 +776,9 @@ func (CodeStructure) RenderHTML(res any) string {
 	writeCSLooseTypes(&b, r.LooseTypeFiles, r.LooseTypeTotal)
 	writeCSTypingSubcard(&b, r.TypingFiles, r.PyFuncs, r.PyTyped)
 	writeCSDocSubcard(&b, r.DocFiles, r.DocPublic, r.DocDocumented)
-	writeIssueSubcard(&b, "mut", "🧊", "Mutability", "Shared and changing state, from constlint / go-immutable / funky: assignments to `// +const` fields and parameters, package-level variables mutated from functions, reassigned locals (advisory), `let` that should be `const`, Python `global` state and shared class attributes.", r.MutIssues, true, maxIssueExamples)
-	writeIssueSubcard(&b, "markers", "🔀", "Merge & diff markers", "Unresolved merge-conflict markers and pasted diff headers left in source (ported from dodgy).", r.MarkerIssues, true, maxIssueExamples)
-	writeIssueSubcard(&b, "bug", "🐛", "Suspicious code", "Bug-class patterns from go-critic (Go) and pylint/pyflakes (Python): identical operands, impossible conditions, off-by-one, mutable default arguments, bare/swallowed except, bad locks…", r.BugIssues, true, maxIssueExamples)
-	writeIssueSubcard(&b, "dup", "👯", "Duplicate code", "Code copied between places (blocks of 15+ identical lines across or within files), neighbouring if/else branches with the same body, and repeated case labels.", r.DupIssues, true, maxIssueExamples)
-	writeIssueSubcard(&b, "hooks", "⚛️", "React hooks & state", "Hook and state mistakes (ported from react-code-audit): missing dependencies, setState loops, in-place state mutation, derived state, index keys…", r.HookIssues, true, maxIssueExamples)
-	writeIssueSubcard(&b, "shape", "📐", "Shape limits", "pylint-style limits: too many returns (> 6), branches (> 12) or locals (> 15) in a function; too many attributes, public methods or bases in a Python class; modules over 1000 lines.", r.ShapeIssues, true, maxIssueExamples)
-	writeIssueSubcard(&b, "react", "🧩", "React components", "Component size, prop count, JSX nesting depth and prop drilling.", r.ReactIssues, true, maxIssueExamples)
+	for _, sc := range r.issueSubcards() {
+		writeIssueSubcard(&b, sc.key, sc.icon, sc.title, sc.hint, sc.issues, true, maxIssueExamples)
+	}
 
 	if r.HasFolderSmells() {
 		n := len(r.OvercrowdedFolders)
@@ -812,8 +873,7 @@ func writeCSTypingSubcard(b *strings.Builder, files []CSTypingFile, funcs, typed
 	if len(files) == 0 {
 		return
 	}
-	writeSubOpen(b, "typing", "🏷️", fmt.Sprintf("Typing — %d of %d functions fully annotated", typed, funcs), len(files),
-		"Python functions need an annotation on every parameter and on the return value for mypy/pyright to check their callers.")
+	writeSubOpen(b, "typing", "🏷️", fmt.Sprintf("Typing — %d of %d functions fully annotated", typed, funcs), len(files), typingHint)
 	b.WriteString(`<table class="as-table as-cs__table"><thead><tr><th>File</th><th>Functions</th><th>Typed</th><th>Any</th><th>Ignores</th><th>First untyped</th></tr></thead><tbody>`)
 	for i, f := range files {
 		if i == csMaxAnyListShown {
@@ -836,8 +896,7 @@ func writeCSDocSubcard(b *strings.Builder, files []CSDocFile, public, documented
 	if len(files) == 0 {
 		return
 	}
-	writeSubOpen(b, "docs", "📝", fmt.Sprintf("Documentation — %d of %d public symbols documented", documented, public), len(files),
-		"Public functions, classes and types without a doc comment (docstring, godoc, JSDoc, KDoc/Javadoc, ///), by file.")
+	writeSubOpen(b, "docs", "📝", fmt.Sprintf("Documentation — %d of %d public symbols documented", documented, public), len(files), docsHint)
 	b.WriteString(`<table class="as-table as-cs__table"><thead><tr><th>File</th><th>Public</th><th>Documented</th><th>First missing</th></tr></thead><tbody>`)
 	for i, f := range files {
 		if i == csMaxAnyListShown {

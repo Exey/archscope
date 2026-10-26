@@ -7,7 +7,7 @@
 package report
 
 // Version is the tool version surfaced in the report header and SARIF driver.
-const Version = "26.7.12"
+const Version = "26.10.26"
 
 // CSS is the full stylesheet, including dark (default) and light themes and the
 // class vocabulary emitted by report modules (.as-arch__*, .as-dp__*, etc.).
@@ -60,6 +60,9 @@ code,.mono{font-family:var(--mono)}
 .as-theme-seg{display:flex;border:1px solid var(--border-strong);border-radius:999px;overflow:hidden}
 .as-seg-btn{background:var(--bg-elev);color:var(--text-faint);border:none;padding:6px 11px;cursor:pointer;font-size:13px;line-height:1;transition:background .15s,color .15s}
 .as-seg-btn--active{background:var(--accent-dim);color:var(--text)}
+.as-md-dl{margin:12px 0 4px 8px;font-size:12px;padding:5px 12px;vertical-align:top}
+#as-md-global{font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--text)}
+#as-md-global:hover{background:var(--accent-dim)}
 .as-toggle{
   border:1px solid var(--border-strong); background:var(--bg-elev); color:var(--text);
   border-radius:999px; padding:7px 12px; cursor:pointer; font-size:13px; line-height:1;
@@ -1242,7 +1245,7 @@ const JS = `
   // ── Per-platform HTML/MD view toggle ──────────────────────────────────────
   document.addEventListener('click',function(e){
     var btn=e.target.closest('.as-plat-view-toggle button');
-    if(!btn)return;
+    if(!btn||!btn.hasAttribute('data-view'))return;
     var body=btn.closest('.as-plat-card__body');
     if(!body)return;
     var view=btn.getAttribute('data-view');
@@ -1252,6 +1255,23 @@ const JS = `
     body.querySelectorAll(':scope > .as-plat-view').forEach(function(v){
       v.style.display=v.classList.contains('as-plat-view--'+view)?'':'none';
     });
+  });
+
+  // ── ⬇ MD buttons: download the Markdown held by the element a button names ─
+  // (data-md-src = id of a hidden <textarea> or a <pre>; data-md-file = file name).
+  // Used by the header's global export and by every platform card.
+  document.addEventListener('click',function(e){
+    var btn=e.target.closest('[data-md-src]');
+    if(!btn)return;
+    var src=document.getElementById(btn.getAttribute('data-md-src'));
+    if(!src)return;
+    var text=(src.tagName==='TEXTAREA')?src.value:src.textContent;
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([text],{type:'text/markdown;charset=utf-8'}));
+    a.download=btn.getAttribute('data-md-file')||'archscope.md';
+    a.style.display='none';
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(a.href);},1000);
   });
 
   // ── Unfold / Fold All platforms ──────────────────────────────────────────

@@ -426,11 +426,11 @@ func (DeadCode) SummaryCards(res any) []modules.SummaryCard {
 
 func (DeadCode) RenderMarkdown(res any) string {
 	r, ok := res.(DeadCodeReport)
-	if !ok || !r.HasData() {
+	if !ok {
 		return ""
 	}
 	var b strings.Builder
-	issueCardMarkdown(&b, "dead code", r.Issues)
+	issueCardMarkdown(&b, "🪦", "dead-code", r.Issues)
 	return b.String()
 }
 

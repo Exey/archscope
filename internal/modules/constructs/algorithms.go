@@ -604,22 +604,30 @@ func (Algorithms) SummaryCards(res any) []modules.SummaryCard {
 // RenderMarkdown renders detected algorithms as a markdown table.
 func (Algorithms) RenderMarkdown(res any) string {
 	r, ok := res.(AlgorithmsResult)
-	if !ok || !r.HasDetection() {
+	if !ok {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString("| Algorithm | Category | Count | Examples |\n")
-	b.WriteString("|-----------|----------|------:|---------|\n")
+	if !r.HasDetection() {
+		return "No well-known algorithms detected from naming conventions.\n\n"
+	}
+	byCat := map[algoCategory][]AlgoMatch{}
 	for _, m := range r.Matches {
-		var ex []string
-		for i, o := range m.Occurrences {
-			if i == 6 {
-				ex = append(ex, fmt.Sprintf("+%d more", len(m.Occurrences)-6))
-				break
+		byCat[m.Category] = append(byCat[m.Category], m)
+	}
+	var b strings.Builder
+	b.WriteString("| Category | Algorithm | Count | Examples |\n|----------|-----------|------:|----------|\n")
+	for _, cat := range algoCategoryOrder {
+		for _, m := range byCat[cat] {
+			var ex []string
+			for i, o := range m.Occurrences {
+				if i == maxLinksPerAlgo {
+					ex = append(ex, fmt.Sprintf("+%d more", len(m.Occurrences)-maxLinksPerAlgo))
+					break
+				}
+				ex = append(ex, fmt.Sprintf("%s (%s:%d)", o.Symbol, baseName(o.FilePath), o.Line))
 			}
-			ex = append(ex, fmt.Sprintf("%s (%s:%d)", o.Symbol, baseName(o.FilePath), o.Line))
+			fmt.Fprintf(&b, "| %s %s | %s | %d | %s |\n", algoCategoryIcon[cat], cat, mdTableCell(m.Name), m.Count, mdTableCell(strings.Join(ex, ", ")))
 		}
-		fmt.Fprintf(&b, "| %s | %s | %d | %s |\n", m.Name, string(m.Category), m.Count, strings.Join(ex, ", "))
 	}
 	b.WriteString("\n")
 	return b.String()

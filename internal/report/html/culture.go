@@ -35,7 +35,7 @@ import (
 // can swing every dimension wildly, so the read isn't meaningful. DevOps is
 // exempt (it has no LOC of its own; it's scored from the DevOps Health Score
 // instead).
-const minCultureLOC = 1000
+const minCultureLOC = result.MinPlatformLOC
 
 // devLevel is one rung on the seniority ladder: the inclusive lower bound of
 // the 0–100 overall culture score that lands on it, plus an optional minDim
@@ -309,12 +309,20 @@ func platformCultureLevels(res *result.AnalysisResult) map[langspec.Platform]dev
 	return cultureLevels(cultureRows(res))
 }
 
-// renderProgrammingCulture builds the whole card, or "" when there is nothing
-// to read (no language platforms).
-func renderProgrammingCulture(res *result.AnalysisResult) string {
+// cultureView is the Programming Culture table as shown: rows ordered by level
+// (the project's home language pinned first), each with its level, plus the
+// LOC-weighted level of the whole repository.
+type cultureView struct {
+	rows      []cultureRow
+	rowLevel  map[langspec.Platform]devLevel
+	repoLevel devLevel
+}
+
+// orderedCulture computes the view; ok is false when there is nothing to read.
+func orderedCulture(res *result.AnalysisResult) (cultureView, bool) {
 	rows := cultureRows(res)
 	if len(rows) == 0 {
-		return ""
+		return cultureView{}, false
 	}
 
 	// LOC-weighted overall repo level (language platforms only) — dimensions
@@ -384,6 +392,18 @@ func renderProgrammingCulture(res *result.AnalysisResult) string {
 		}
 	}
 
+	return cultureView{rows: rows, rowLevel: rowLevel, repoLevel: repoLevel}, true
+}
+
+// renderProgrammingCulture builds the whole card, or "" when there is nothing
+// to read (no language platforms).
+func renderProgrammingCulture(res *result.AnalysisResult) string {
+	view, ok := orderedCulture(res)
+	if !ok {
+		return ""
+	}
+	rows, rowLevel, repoLevel := view.rows, view.rowLevel, view.repoLevel
+
 	var b strings.Builder
 	b.WriteString(`<div class="as-section as-culture">`)
 	fmt.Fprintf(&b, `<div class="as-section__head"><span class="ico">🔰</span><h2>Programming Culture</h2>`+
@@ -425,16 +445,7 @@ func renderProgrammingCulture(res *result.AnalysisResult) string {
 	b.WriteString(renderEvolution(res))
 
 	// Priority issues from Programming Methods.
-	platforms := res.Scan.PlatformsOrdered()
-	pmap := make(map[string]langspec.Platform, len(res.Files))
-	for _, f := range res.Files {
-		pmap[f.FilePath] = langspec.Platform(f.Platform)
-	}
-	panelsByPlat := map[langspec.Platform][]result.ModulePanel{}
-	for _, p := range res.ModulePanels {
-		panelsByPlat[p.Platform] = append(panelsByPlat[p.Platform], p)
-	}
-	b.WriteString(renderCultureIssues(res, panelsByPlat, pmap, platforms))
+	b.WriteString(renderCultureIssues(res))
 
 	b.WriteString(`</div>`)
 	return b.String()
@@ -1090,7 +1101,19 @@ func dbSecurityRule(id string) bool {
 	return false
 }
 
-func renderCultureIssues(res *result.AnalysisResult, panelsByPlat map[langspec.Platform][]result.ModulePanel, pmap map[string]langspec.Platform, platforms []*scanner.PlatformGroup) string {
+// cultureIssueList gathers the priority issues — complexity hotspots, then
+// credential / database-auth security findings — worst first. Shared by the
+// HTML list and its Markdown twin.
+func cultureIssueList(res *result.AnalysisResult) []cultIssue {
+	platforms := res.Scan.PlatformsOrdered()
+	pmap := make(map[string]langspec.Platform, len(res.Files))
+	for _, f := range res.Files {
+		pmap[f.FilePath] = langspec.Platform(f.Platform)
+	}
+	panelsByPlat := map[langspec.Platform][]result.ModulePanel{}
+	for _, p := range res.ModulePanels {
+		panelsByPlat[p.Platform] = append(panelsByPlat[p.Platform], p)
+	}
 	// Platform key → display label + language class.
 	labelOf := map[langspec.Platform]string{}
 	langOf := map[langspec.Platform]langspec.Platform{}
@@ -1157,24 +1180,30 @@ func renderCultureIssues(res *result.AnalysisResult, panelsByPlat map[langspec.P
 		}
 	}
 
-	if len(issues) == 0 {
-		return `<div class="as-cult-issues"><div class="as-cult-issues__head">🔎 Priority Issues</div><p class="as-clean">✓ No O(N²)+ hotspots or credential/database security findings.</p></div>`
-	}
-
 	sort.SliceStable(issues, func(i, j int) bool {
 		if issues[i].rank != issues[j].rank {
 			return issues[i].rank < issues[j].rank
 		}
 		return issues[i].desc < issues[j].desc
 	})
+	return issues
+}
 
-	const maxIssues = 18
+// maxCultureIssues caps the priority-issue list.
+const maxCultureIssues = 18
+
+func renderCultureIssues(res *result.AnalysisResult) string {
+	issues := cultureIssueList(res)
+	if len(issues) == 0 {
+		return `<div class="as-cult-issues"><div class="as-cult-issues__head">🔎 Priority Issues</div><p class="as-clean">✓ No O(N²)+ hotspots or credential/database security findings.</p></div>`
+	}
+
 	var b strings.Builder
 	b.WriteString(`<div class="as-cult-issues"><div class="as-cult-issues__head">🔎 Priority Issues <span class="as-count">(from Programming Methods · worst first)</span></div>`)
 	b.WriteString(`<div class="as-cult-issuelist">`)
 	for i, is := range issues {
-		if i == maxIssues {
-			fmt.Fprintf(&b, `<div class="as-cult-more">… and %d more</div>`, len(issues)-maxIssues)
+		if i == maxCultureIssues {
+			fmt.Fprintf(&b, `<div class="as-cult-more">… and %d more</div>`, len(issues)-maxCultureIssues)
 			break
 		}
 		loc := fmt.Sprintf("%s:%d", baseFile(is.path), is.line)

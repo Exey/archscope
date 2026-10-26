@@ -44,9 +44,13 @@ func nextGraphID() string {
 
 // ── Global architecture graph ─────────────────────────────────────────────────
 
-func renderGlobalArchGraph(res *result.AnalysisResult) string {
+// buildArchGraph computes the Architecture Graph: the 30 biggest modules and the
+// detected technologies as nodes, module→module and module→technology links.
+// ok is false when it would have fewer than two nodes (or modules aren't rendered).
+// Shared by the interactive HTML graph and its Markdown twin.
+func buildArchGraph(res *result.AnalysisResult) (gData, bool) {
 	if !res.Scan.RenderModules {
-		return ""
+		return gData{}, false
 	}
 	type modInfo struct {
 		key         string
@@ -242,7 +246,7 @@ func renderGlobalArchGraph(res *result.AnalysisResult) string {
 	}
 
 	if len(nodes) < 2 {
-		return ""
+		return gData{}, false
 	}
 	if nodes == nil {
 		nodes = []gNode{}
@@ -250,8 +254,14 @@ func renderGlobalArchGraph(res *result.AnalysisResult) string {
 	if links == nil {
 		links = []gLink{}
 	}
+	return gData{Nodes: nodes, Links: links}, true
+}
 
-	d := gData{Nodes: nodes, Links: links}
+func renderGlobalArchGraph(res *result.AnalysisResult) string {
+	d, ok := buildArchGraph(res)
+	if !ok {
+		return ""
+	}
 	dj, _ := json.Marshal(d)
 	id := nextGraphID()
 
@@ -637,7 +647,16 @@ func classifyFile(f *parser.ParsedFile) string {
 	return layerOther
 }
 
-func renderArchLayers(files []*parser.ParsedFile) string {
+// archLayerRow is one architectural layer with its share of the code.
+type archLayerRow struct {
+	name       string
+	icon       string
+	files, loc int
+}
+
+// archLayerRows buckets the files into layers, in display order. Shared by the
+// HTML bars and the Markdown table so both list the same layers.
+func archLayerRows(files []*parser.ParsedFile) []archLayerRow {
 	type bucket struct{ files, lines int }
 	buckets := map[string]*bucket{}
 	for _, f := range files {
@@ -657,23 +676,39 @@ func renderArchLayers(files []*parser.ParsedFile) string {
 		}
 	}
 	if maxLines == 1 {
+		return nil
+	}
+	var rows []archLayerRow
+	for _, layer := range layerOrder {
+		if b := buckets[layer]; b != nil {
+			rows = append(rows, archLayerRow{name: layer, icon: layerIcons[layer], files: b.files, loc: b.lines})
+		}
+	}
+	return rows
+}
+
+func renderArchLayers(files []*parser.ParsedFile) string {
+	rows := archLayerRows(files)
+	if len(rows) == 0 {
 		return ""
+	}
+	maxLines := 1
+	for _, r := range rows {
+		if r.loc > maxLines {
+			maxLines = r.loc
+		}
 	}
 	var sb strings.Builder
 	sb.WriteString(`<div class="as-sub" style="margin-top:16px">🏗️ Architecture Layers</div><div class="arch-layers">`)
-	for _, layer := range layerOrder {
-		b := buckets[layer]
-		if b == nil {
-			continue
-		}
-		icon := layerIcons[layer]
-		pct := b.lines * 100 / maxLines
+	for _, r := range rows {
+		icon := r.icon
+		pct := r.loc * 100 / maxLines
 		if pct < 4 {
 			pct = 4
 		}
 		fmt.Fprintf(&sb,
 			`<div class="arch-layer"><div class="layer-bar-row"><span class="layer-icon">%s</span><span class="layer-name">%s</span><span class="layer-count">%d files · %s loc</span></div><div class="layer-bar-track"><div class="layer-bar-fill" style="width:%d%%"></div></div></div>`,
-			icon, esc(layer), b.files, fmtNum(b.lines), pct)
+			icon, esc(r.name), r.files, fmtNum(r.loc), pct)
 	}
 	sb.WriteString(`</div>`)
 	return sb.String()
@@ -886,30 +921,32 @@ func renderArchVersions(versions []scanner.Version) string {
 
 // ── Longest functions ─────────────────────────────────────────────────────────
 
-func renderLongestFunctions(files []*parser.ParsedFile, rootPath string, plat langspec.Platform) string {
-	type entry struct {
-		fn  *parser.FunctionInfo
-		mod string
-	}
-	var fns []entry
+// longestFuncs picks the platform's 20 longest non-test functions (one per
+// file — the file's longest). Shared by the HTML table and its Markdown twin.
+func longestFuncs(files []*parser.ParsedFile) []*parser.FunctionInfo {
+	var fns []*parser.FunctionInfo
 	for _, f := range files {
 		if f.LongestFunc != nil && !isTestFile(f.FilePath) {
-			fns = append(fns, entry{f.LongestFunc, f.ModuleName})
+			fns = append(fns, f.LongestFunc)
 		}
 	}
-	if len(fns) == 0 {
-		return ""
-	}
-	sort.Slice(fns, func(i, j int) bool { return fns[i].fn.LineCount > fns[j].fn.LineCount })
+	sort.Slice(fns, func(i, j int) bool { return fns[i].LineCount > fns[j].LineCount })
 	if len(fns) > 20 {
 		fns = fns[:20]
+	}
+	return fns
+}
+
+func renderLongestFunctions(files []*parser.ParsedFile, rootPath string, plat langspec.Platform) string {
+	fns := longestFuncs(files)
+	if len(fns) == 0 {
+		return ""
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, `<div class="as-section" id="%s"><div class="as-section__head"><span class="ico">📏</span><h3>Longest Functions</h3></div>`,
 		esc(cultAnchorID("longestfunc", plat)))
 	b.WriteString(`<table class="as-table"><thead><tr><th>Function</th><th>Lines</th><th>File</th></tr></thead><tbody>`)
-	for _, e := range fns {
-		fn := e.fn
+	for _, fn := range fns {
 		_, base := splitRel(fn.FilePath, rootPath)
 
 		// Function column: VS Code link on the function name at its start line
@@ -933,23 +970,31 @@ func renderLongestFunctions(files []*parser.ParsedFile, rootPath string, plat la
 
 // ── Biggest types ─────────────────────────────────────────────────────────────
 
-func renderBiggestTypes(files []*parser.ParsedFile, rootPath string, plat langspec.Platform) string {
-	type entry struct {
-		ty  *parser.TypeInfo
-		mod string
-	}
-	var types []entry
+// bigType is one row of the 📐 Biggest Types table.
+type bigType struct {
+	ty  *parser.TypeInfo
+	mod string
+}
+
+// biggestTypes picks the platform's 20 largest non-test types (one per file).
+func biggestTypes(files []*parser.ParsedFile) []bigType {
+	var types []bigType
 	for _, f := range files {
 		if f.LongestType != nil && !isTestFile(f.FilePath) {
-			types = append(types, entry{f.LongestType, f.ModuleName})
+			types = append(types, bigType{f.LongestType, f.ModuleName})
 		}
-	}
-	if len(types) == 0 {
-		return ""
 	}
 	sort.Slice(types, func(i, j int) bool { return types[i].ty.LineCount > types[j].ty.LineCount })
 	if len(types) > 20 {
 		types = types[:20]
+	}
+	return types
+}
+
+func renderBiggestTypes(files []*parser.ParsedFile, rootPath string, plat langspec.Platform) string {
+	types := biggestTypes(files)
+	if len(types) == 0 {
+		return ""
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, `<div class="as-section" id="%s"><div class="as-section__head"><span class="ico">📐</span><h3>Biggest Types</h3></div>`,
@@ -1058,16 +1103,15 @@ func renderPenetrationMatrix(files []*parser.ParsedFile) string {
 
 // ── TODO / FIXME per module ───────────────────────────────────────────────────
 
-func renderTodosFixmes(files []*parser.ParsedFile) string {
-	const limit = 50
+// todoLimit caps how many TODO/FIXME lines a card lists.
+const todoLimit = 50
+
+// todoItems lists every TODO/FIXME of the files, FIXMEs first, then by place.
+func todoItems(files []*parser.ParsedFile) []parser.TodoItem {
 	var items []parser.TodoItem
 	for _, f := range files {
 		items = append(items, f.Todos...)
 	}
-	if len(items) == 0 {
-		return ""
-	}
-	// Sort: FIXME before TODO, then by file path + line.
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].Kind != items[j].Kind {
 			return items[i].Kind == "FIXME"
@@ -1077,6 +1121,15 @@ func renderTodosFixmes(files []*parser.ParsedFile) string {
 		}
 		return items[i].Line < items[j].Line
 	})
+	return items
+}
+
+func renderTodosFixmes(files []*parser.ParsedFile) string {
+	const limit = todoLimit
+	items := todoItems(files)
+	if len(items) == 0 {
+		return ""
+	}
 	total := len(items)
 	truncated := 0
 	if total > limit {

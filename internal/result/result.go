@@ -67,6 +67,7 @@ type ModulePanel struct {
 	ModuleID  string
 	Title     string
 	HTML      string
+	MD        string // the module's Markdown twin of HTML
 	Cards     []modules.SummaryCard
 	RawResult any // opaque module result; used by the HTML renderer for cross-module joins
 }

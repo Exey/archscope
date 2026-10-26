@@ -336,11 +336,11 @@ func (Regex) SummaryCards(res any) []modules.SummaryCard {
 
 func (Regex) RenderMarkdown(res any) string {
 	r, ok := res.(RegexReport)
-	if !ok || !r.HasData() {
+	if !ok {
 		return ""
 	}
 	var b strings.Builder
-	issueCardMarkdown(&b, "string & regex", r.Issues)
+	issueCardMarkdown(&b, "🔤🔎", "string & regex", r.Issues)
 	return b.String()
 }
 

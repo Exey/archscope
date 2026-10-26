@@ -631,21 +631,29 @@ func (DesignPatterns) SummaryCards(res any) []modules.SummaryCard {
 	}
 }
 
-// RenderMarkdown renders detected patterns as a markdown table.
+// RenderMarkdown is RenderHTML's twin: the patterns grouped by GoF category.
 func (DesignPatterns) RenderMarkdown(res any) string {
 	r, ok := res.(DesignPatternResult)
-	if !ok || !r.HasDetection() {
+	if !ok {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString("| Pattern | Count | Examples |\n")
-	b.WriteString("|---------|------:|---------|\n")
+	if !r.HasDetection() {
+		return "No Gang-of-Four patterns detected from naming conventions.\n\n"
+	}
+	byCat := map[patternCategory][]PatternMatch{}
 	for _, m := range r.Matches {
-		ex := strings.Join(m.Examples, ", ")
-		if len(ex) > 80 {
-			ex = ex[:77] + "…"
+		byCat[m.Category] = append(byCat[m.Category], m)
+	}
+	var b strings.Builder
+	b.WriteString("| Category | Pattern | Count | Examples |\n|----------|---------|------:|----------|\n")
+	for _, cat := range patternCategoryOrder {
+		for _, m := range byCat[cat] {
+			name := m.Pattern
+			if m.IsIdiom {
+				name += " _(language idiom — built into the language, not counted as a deliberate pattern choice)_"
+			}
+			fmt.Fprintf(&b, "| %s %s | %s | %d | %s |\n", patternCategoryIcon[cat], cat, mdTableCell(name), m.Count, mdTableCell(strings.Join(m.Examples, ", ")))
 		}
-		fmt.Fprintf(&b, "| %s | %d | %s |\n", m.Pattern, m.Count, ex)
 	}
 	b.WriteString("\n")
 	return b.String()

@@ -218,12 +218,37 @@ var langLabels = map[string]string{
 	"c":    "C", "cpp": "C++",
 }
 
-// renderContributionsCard renders a GitHub-style contribution calendar.
-// Shows ~15 months of history (65 past weeks) plus enough future weeks to complete
-// the next calendar month. One row per git repo, sorted most-active first.
-func renderContributionsCard(res *result.AnalysisResult) string {
+// contribRow is one repository's weekly commit history.
+type contribRow struct {
+	name    string
+	abbrs   string
+	weekly  [git.NCalWeeks]int
+	anomaly [git.NCalWeeks]bool
+	total   int
+}
+
+// contribMonth is a run of weeks that fall in one calendar month.
+type contribMonth struct {
+	label string
+	weeks int
+}
+
+// contribData is the Contribution Calendar's data: one row per repo (most
+// active first) over nWeeks weeks, with the month spans and a week → date map.
+type contribData struct {
+	rows     []contribRow
+	months   []contribMonth
+	nWeeks   int
+	weekDate func(i int) time.Time
+	level    func(v int, isAnomaly bool) int
+}
+
+// buildContributions computes the Contribution Calendar's data: weekly commit
+// counts per repository (anomalous weeks flagged with Tukey's extreme fence).
+// Shared by the HTML calendar and its Markdown twin.
+func buildContributions(res *result.AnalysisResult) (*contribData, bool) {
 	if !res.Git.Available || len(res.Git.Repos) == 0 {
-		return ""
+		return nil, false
 	}
 
 	extAbbr := map[string]string{
@@ -245,9 +270,6 @@ func renderContributionsCard(res *result.AnalysisResult) string {
 	abbrOrder := []string{"Sw", "Kt", "Py", "TS", "Go", "Ja", "Rs", "Rb", "PHP", "C#", "C++", "C", "Dt", "Ex", "Sc"}
 
 	const pastWeeks = 61 // ~14 months of history fetched from git
-	const cellPx = 11
-	const gapPx = 2
-	const padPx = 186 // abbr(80)+gap(8)+name(90)+gap(8)
 
 	now := time.Now()
 
@@ -282,33 +304,16 @@ func renderContributionsCard(res *result.AnalysisResult) string {
 	}
 
 	// Build month spans; monthOf[i] tells which month slot week i belongs to.
-	type monthSpan struct {
-		label string
-		weeks int
-	}
-	var months []monthSpan
+	var months []contribMonth
 	monthOf := make([]int, git.NCalWeeks)
 	for i := 0; i < nWeeks; i++ {
 		label := weekDate(i).Format("Jan'06")
 		if len(months) == 0 || months[len(months)-1].label != label {
-			months = append(months, monthSpan{label: label, weeks: 1})
+			months = append(months, contribMonth{label: label, weeks: 1})
 		} else {
 			months[len(months)-1].weeks++
 		}
 		monthOf[i] = len(months) - 1
-	}
-
-	// Month label row: gap:2px between labels, each label width = N*13-2 px.
-	monthRowHTML := func() string {
-		var mb strings.Builder
-		mb.WriteString(`<div class="as-contributions__month-row">`)
-		mb.WriteString(`<span class="as-contributions__mon-pad"></span>`)
-		for _, ms := range months {
-			w := ms.weeks*(cellPx+gapPx) - gapPx
-			fmt.Fprintf(&mb, `<span class="as-contributions__mon" style="width:%dpx">%s</span>`, w, ms.label)
-		}
-		mb.WriteString(`</div>`)
-		return mb.String()
 	}
 
 	weeklyByRepo := res.Git.WeeklyByRepo
@@ -316,15 +321,7 @@ func renderContributionsCard(res *result.AnalysisResult) string {
 		weeklyByRepo = map[string]map[string][git.NCalWeeks]int{}
 	}
 
-	type repoRow struct {
-		name    string
-		abbrs   string
-		weekly  [git.NCalWeeks]int
-		anomaly [git.NCalWeeks]bool
-		total   int
-	}
-
-	var rows []repoRow
+	var rows []contribRow
 	for _, repoRoot := range res.Git.Repos {
 		extMap := weeklyByRepo[repoRoot]
 		var weekly [git.NCalWeeks]int
@@ -394,7 +391,7 @@ func renderContributionsCard(res *result.AnalysisResult) string {
 			name = string(runes[:17]) + "…"
 		}
 
-		rows = append(rows, repoRow{
+		rows = append(rows, contribRow{
 			name:    name,
 			abbrs:   abbrStr,
 			weekly:  weekly,
@@ -403,7 +400,7 @@ func renderContributionsCard(res *result.AnalysisResult) string {
 		})
 	}
 	if len(rows) == 0 {
-		return ""
+		return nil, false
 	}
 
 	sort.Slice(rows, func(i, j int) bool { return rows[i].total > rows[j].total })
@@ -434,6 +431,35 @@ func renderContributionsCard(res *result.AnalysisResult) string {
 		default:
 			return 4
 		}
+	}
+
+	return &contribData{rows: rows, months: months, nWeeks: nWeeks, weekDate: weekDate, level: level}, true
+}
+
+// renderContributionsCard renders a GitHub-style contribution calendar.
+// Shows ~15 months of history (65 past weeks) plus enough future weeks to complete
+// the next calendar month. One row per git repo, sorted most-active first.
+func renderContributionsCard(res *result.AnalysisResult) string {
+	d, ok := buildContributions(res)
+	if !ok {
+		return ""
+	}
+	rows, months, nWeeks, weekDate, level := d.rows, d.months, d.nWeeks, d.weekDate, d.level
+	const cellPx = 11
+	const gapPx = 2
+	const padPx = 186 // abbr(80)+gap(8)+name(90)+gap(8)
+
+	// Month label row: gap:2px between labels, each label width = N*13-2 px.
+	monthRowHTML := func() string {
+		var mb strings.Builder
+		mb.WriteString(`<div class="as-contributions__month-row">`)
+		mb.WriteString(`<span class="as-contributions__mon-pad"></span>`)
+		for _, ms := range months {
+			w := ms.weeks*(cellPx+gapPx) - gapPx
+			fmt.Fprintf(&mb, `<span class="as-contributions__mon" style="width:%dpx">%s</span>`, w, ms.label)
+		}
+		mb.WriteString(`</div>`)
+		return mb.String()
 	}
 
 	var b strings.Builder
@@ -486,6 +512,44 @@ func renderContributionsCard(res *result.AnalysisResult) string {
 	b.WriteString(`</div>`) // end wrap
 	b.WriteString(`</div>`) // end card
 	return b.String()
+}
+
+// modAgg is one (module, platform) pair with its lines of code.
+type modAgg struct {
+	name string
+	plat langspec.Platform
+	loc  int
+}
+
+// packageAggs lists the repo's packages & modules, biggest first. Keyed by
+// (moduleName, platform) so same-named modules in different languages are not
+// merged. Shared by the HTML grid and its Markdown twin.
+func packageAggs(res *result.AnalysisResult) []*modAgg {
+	aggKey := func(name string, p langspec.Platform) string { return name + "\x00" + string(p) }
+	aggs := map[string]*modAgg{}
+	for _, f := range res.Files {
+		k := aggKey(f.ModuleName, langspec.Platform(f.Platform))
+		a := aggs[k]
+		if a == nil {
+			a = &modAgg{name: f.ModuleName, plat: langspec.Platform(f.Platform)}
+			aggs[k] = a
+		}
+		a.loc += f.LineCount
+	}
+	var list []*modAgg
+	for _, a := range aggs {
+		list = append(list, a)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].loc != list[j].loc {
+			return list[i].loc > list[j].loc
+		}
+		if list[i].name != list[j].name {
+			return list[i].name < list[j].name
+		}
+		return string(list[i].plat) < string(list[j].plat)
+	})
+	return list
 }
 
 func renderStackAndModules(res *result.AnalysisResult) string {
@@ -555,37 +619,7 @@ func renderStackAndModules(res *result.AnalysisResult) string {
 	}
 
 	// Packages & modules grid, sized by LOC.
-	// Key by (moduleName, platform) so same-named modules in different languages
-	// are not merged.
-	type modAgg struct {
-		name string
-		plat langspec.Platform
-		loc  int
-	}
-	aggKey := func(name string, p langspec.Platform) string { return name + "\x00" + string(p) }
-	aggs := map[string]*modAgg{}
-	for _, f := range res.Files {
-		k := aggKey(f.ModuleName, langspec.Platform(f.Platform))
-		a := aggs[k]
-		if a == nil {
-			a = &modAgg{name: f.ModuleName, plat: langspec.Platform(f.Platform)}
-			aggs[k] = a
-		}
-		a.loc += f.LineCount
-	}
-	var list []*modAgg
-	for _, a := range aggs {
-		list = append(list, a)
-	}
-	sort.Slice(list, func(i, j int) bool {
-		if list[i].loc != list[j].loc {
-			return list[i].loc > list[j].loc
-		}
-		if list[i].name != list[j].name {
-			return list[i].name < list[j].name
-		}
-		return string(list[i].plat) < string(list[j].plat)
-	})
+	list := packageAggs(res)
 	fmt.Fprintf(&b, `<div class="as-sub" style="margin-top:16px">📦 Packages &amp; modules <span style="color:var(--text-faint);font-weight:400;text-transform:none;letter-spacing:0">(%d)</span></div>`, len(list))
 	if len(list) == 0 {
 		b.WriteString(`<p class="as-empty">No modules detected.</p>`)
@@ -1038,11 +1072,10 @@ func k8sCFSevRank(s string) int {
 // namespace it fires in) into deduplicated cards shown in a two-column grid.
 // Each card carries a mitre.org CWE link and per-case VSCode deep links when
 // the source YAML path is known.
-func renderK8sClusterFindings(findings []scanner.K8sClusterFinding) string {
-	if len(findings) == 0 {
-		return ""
-	}
-
+// groupK8sFindings merges identical cluster findings (same rule and title,
+// across every namespace they fire in) into one group each, in first-seen order.
+// Shared by the HTML cards and their Markdown twin.
+func groupK8sFindings(findings []scanner.K8sClusterFinding) []*k8sCFGroup {
 	// Group by (RuleID, Title) — same rule *and* same specific title (some
 	// rules like k8s.secret_in_configmap embed the offending key name in the
 	// title, so those stay distinct) firing across many namespaces is shown
@@ -1078,13 +1111,22 @@ func renderK8sClusterFindings(findings []scanner.K8sClusterFinding) string {
 			Detail: f.Detail, File: f.File, Line: f.Line,
 		})
 	}
+	out := make([]*k8sCFGroup, 0, len(order))
+	for _, k := range order {
+		out = append(out, groups[k])
+	}
+	return out
+}
 
+func renderK8sClusterFindings(findings []scanner.K8sClusterFinding) string {
+	if len(findings) == 0 {
+		return ""
+	}
 	var b strings.Builder
 	b.WriteString(`<div class="as-k8s-kind-sub" id="as-k8s-cf">⚠️ Weaknesses</div>`)
 	b.WriteString(`<div class="as-k8s-cf-grid">`)
 
-	for _, k := range order {
-		g := groups[k]
+	for _, g := range groupK8sFindings(findings) {
 		sevClass := "as-k8s-cf--" + g.Severity
 		sevLabel := strings.ToUpper(g.Severity[:1]) + g.Severity[1:]
 
@@ -2296,6 +2338,17 @@ func renderDefectDensityBars(lint *scanner.DevOpsLint, order []string, counts ma
 
 // renderHealthGauge draws a static semicircle gauge (0-100) for the
 // severity-weighted DevOps health score.
+// healthBand names a DevOps health score and picks its colour class.
+func healthBand(score int) (band, cls string) {
+	switch {
+	case score >= 80:
+		return "Strong", "good"
+	case score >= 50:
+		return "Needs Attention", "warn"
+	}
+	return "At Risk", "crit"
+}
+
 func renderHealthGauge(score int) string {
 	const w, h = 200, 116
 	const r, cx, cy = 80.0, 100.0, 100.0
@@ -2305,13 +2358,7 @@ func renderHealthGauge(score int) string {
 	ey := cy - r*math.Sin(ang)
 	col := gradeColor(score)
 
-	band, cls := "At Risk", "crit"
-	switch {
-	case score >= 80:
-		band, cls = "Strong", "good"
-	case score >= 50:
-		band, cls = "Needs Attention", "warn"
-	}
+	band, cls := healthBand(score)
 
 	var b strings.Builder
 	b.WriteString(`<div class="as-dvo-gauge-wrap">`)
@@ -2456,14 +2503,19 @@ func techPatternMatches(res *result.AnalysisResult) []radarChip {
 	return chips
 }
 
-// renderTechRadarSection renders a static, full-content-width SVG adoption
-// radar in the aoe_technology_radar house style: cross-divided quadrants
-// (Tools / Languages & Frameworks / Platforms & Operations / Methods &
-// Patterns) with a corner accent glow, concentric Adopt→Hold rings, and every
-// detected chip plotted as a small blip inside its quadrant at its ring's
-// radius. The same chips are listed as text underneath, grouped by quadrant
-// then category, for full legibility.
-func renderTechRadarSection(res *result.AnalysisResult) string {
+// radarModel is the Technical Radar's content: every detected chip, by category
+// and by quadrant. Shared by the HTML radar and its Markdown twin.
+type radarModel struct {
+	dispCats     []radarCategory
+	catChips     map[string][]radarChip
+	patternChips []radarChip
+	quadCats     [4][]radarCategory
+}
+
+var radarRingNames = [4]string{"Adopt", "Trial", "Assess", "Hold"}
+
+// buildRadar collects the radar's chips; ok is false when nothing was detected.
+func buildRadar(res *result.AnalysisResult) (radarModel, bool) {
 	catSets := techCategorySets(res)
 
 	// Collect languages from parsed files.
@@ -2491,7 +2543,6 @@ func renderTechRadarSection(res *result.AnalysisResult) string {
 			catChips[cat] = append(catChips[cat], radarChip{tech, radarRingFor(tech)})
 		}
 	}
-	ringNames := [4]string{"Adopt", "Trial", "Assess", "Hold"}
 	for cat := range catChips {
 		sort.Slice(catChips[cat], func(i, j int) bool {
 			if catChips[cat][i].ring != catChips[cat][j].ring {
@@ -2510,7 +2561,7 @@ func renderTechRadarSection(res *result.AnalysisResult) string {
 		}
 	}
 	if !hasAnyChip {
-		return ""
+		return radarModel{}, false
 	}
 
 	// Quadrant groups, each holding its category sub-rows — the same
@@ -2520,6 +2571,23 @@ func renderTechRadarSection(res *result.AnalysisResult) string {
 		q := dispCatQuadrant[dc.key]
 		quadCats[q] = append(quadCats[q], dc)
 	}
+	return radarModel{dispCats: dispCats, catChips: catChips, patternChips: patternChips, quadCats: quadCats}, true
+}
+
+// renderTechRadarSection renders a static, full-content-width SVG adoption
+// radar in the aoe_technology_radar house style: cross-divided quadrants
+// (Tools / Languages & Frameworks / Platforms & Operations / Methods &
+// Patterns) with a corner accent glow, concentric Adopt→Hold rings, and every
+// detected chip plotted as a small blip inside its quadrant at its ring's
+// radius. The same chips are listed as text underneath, grouped by quadrant
+// then category, for full legibility.
+func renderTechRadarSection(res *result.AnalysisResult) string {
+	model, ok := buildRadar(res)
+	if !ok {
+		return ""
+	}
+	dispCats, catChips, patternChips, quadCats := model.dispCats, model.catChips, model.patternChips, model.quadCats
+	ringNames := radarRingNames
 
 	renderQuadGroup := func(qi int) string {
 		quad := radarQuadrants[qi]
@@ -3344,6 +3412,58 @@ func platAbbr(p langspec.Platform) string {
 	}
 }
 
+// platHeaderStat is what a platform card's header shows beyond its size.
+type platHeaderStat struct {
+	apiTotal     int    // -1 = no traffic data
+	dddLabel     string // e.g. "78% DDD"
+	patternLabel string // e.g. "90% VIPER" — a detected client arch pattern
+}
+
+// archLabel is the single architecture chip: a detected client pattern when
+// there is one, else the DDD score.
+func (h platHeaderStat) archLabel() string {
+	if h.patternLabel != "" {
+		return h.patternLabel
+	}
+	return h.dddLabel
+}
+
+// platformHeaderStats pre-computes the per-platform header stats: API count and
+// the dominant architecture signal. A detected client pattern (MVVM, MVI,
+// VIPER, …) is the most specific signal a platform can show, so it wins over
+// DDD% whenever both exist — e.g. Kotlin/Android has dddmodel data (Domain
+// Model covers Go/Python/Kotlin/Java) but its MVVM/MVI pattern is the more
+// informative headline, same as iOS/Swift (which has no dddmodel at all)
+// showing its client pattern today. Shared by the HTML header and the
+// Markdown overview.
+func platformHeaderStats(res *result.AnalysisResult) map[langspec.Platform]platHeaderStat {
+	headerStats := map[langspec.Platform]platHeaderStat{}
+	for _, panel := range res.ModulePanels {
+		hs := headerStats[panel.Platform]
+		switch panel.ModuleID {
+		case "traffic":
+			if tr, ok := panel.RawResult.(traffic.Result); ok {
+				n := len(tr.Inbound) + len(tr.Outbound)
+				if n > hs.apiTotal {
+					hs.apiTotal = n
+				}
+			}
+		case "dddmodel":
+			if r, ok := panel.RawResult.(dddmodel.Result); ok && r.HasData() && hs.dddLabel == "" {
+				hs.dddLabel = fmt.Sprintf("%d%% DDD", r.DDDScore)
+			}
+		case "architecture":
+			if r, ok := panel.RawResult.(arch.Result); ok && r.HasDetection() && hs.patternLabel == "" {
+				if r.Mode == "client" && len(r.Patterns) > 0 {
+					hs.patternLabel = fmt.Sprintf("%d%% %s", int(r.Patterns[0].Confidence*100+0.5), r.Patterns[0].Name)
+				}
+			}
+		}
+		headerStats[panel.Platform] = hs
+	}
+	return headerStats
+}
+
 // renderTabs renders platforms as a vertical accordion of switchable cards.
 // Each card header shows language, name, LOC, file count, and module summary
 // stats. Clicking a header expands that card and collapses others.
@@ -3354,52 +3474,7 @@ func platAbbr(p langspec.Platform) string {
 // renders them. Exposed so other sections (Programming Culture) can link a
 // platform to its tab index consistently.
 func orderedPlatformTabs(res *result.AnalysisResult) []*scanner.PlatformGroup {
-	all := res.Scan.PlatformsOrdered()
-	if len(all) == 0 {
-		return nil
-	}
-
-	loc := map[langspec.Platform]int{}
-	for _, f := range res.Files {
-		loc[langspec.Platform(f.Platform)] += f.LineCount
-	}
-
-	platforms := make([]*scanner.PlatformGroup, 0, len(all))
-	for _, pg := range all {
-		if loc[pg.Platform] >= minCultureLOC {
-			platforms = append(platforms, pg)
-		}
-	}
-	if len(platforms) == 0 {
-		return nil
-	}
-
-	if res.Scan.FolderAsTab {
-		folderLOC := map[string]int{}
-		for _, pg := range platforms {
-			folderLOC[tabFolder(pg.Platform)] += loc[pg.Platform]
-		}
-		sort.SliceStable(platforms, func(i, j int) bool {
-			fi, fj := tabFolder(platforms[i].Platform), tabFolder(platforms[j].Platform)
-			if fi != fj {
-				li, lj := folderLOC[fi], folderLOC[fj]
-				if li != lj {
-					return li > lj
-				}
-				return fi < fj
-			}
-			return platforms[i].TabLabel() < platforms[j].TabLabel()
-		})
-	} else {
-		sort.SliceStable(platforms, func(i, j int) bool {
-			li, lj := loc[platforms[i].Platform], loc[platforms[j].Platform]
-			if li != lj {
-				return li > lj
-			}
-			return platforms[i].FileCount > platforms[j].FileCount
-		})
-	}
-	return platforms
+	return res.PlatformTabs()
 }
 
 // platformCardIndex maps each platform tab's key to its data-platcard index,
@@ -3466,42 +3541,9 @@ func renderTabs(res *result.AnalysisResult) string {
 		platCards[panel.Platform] = append(platCards[panel.Platform], panel.Cards...)
 	}
 
-	// Pre-compute per-platform stats shown in card headers: API count and
-	// the dominant architecture signal. A detected client pattern (MVVM, MVI,
-	// VIPER, …) is the most specific signal a platform can show, so it wins
-	// over DDD% whenever both exist — e.g. Kotlin/Android has dddmodel data
-	// (Domain Model covers Go/Python/Kotlin/Java) but its MVVM/MVI pattern is
-	// the more informative headline, same as iOS/Swift (which has no
-	// dddmodel at all) showing its client pattern today.
-	type platHeaderStat struct {
-		apiTotal     int    // -1 = no traffic data
-		dddLabel     string // e.g. "78% DDD"
-		patternLabel string // e.g. "90% VIPER" — a detected client arch pattern
-	}
-	headerStats := map[langspec.Platform]platHeaderStat{}
-	for _, panel := range res.ModulePanels {
-		hs := headerStats[panel.Platform]
-		switch panel.ModuleID {
-		case "traffic":
-			if tr, ok := panel.RawResult.(traffic.Result); ok {
-				n := len(tr.Inbound) + len(tr.Outbound)
-				if n > hs.apiTotal {
-					hs.apiTotal = n
-				}
-			}
-		case "dddmodel":
-			if r, ok := panel.RawResult.(dddmodel.Result); ok && r.HasData() && hs.dddLabel == "" {
-				hs.dddLabel = fmt.Sprintf("%d%% DDD", r.DDDScore)
-			}
-		case "architecture":
-			if r, ok := panel.RawResult.(arch.Result); ok && r.HasDetection() && hs.patternLabel == "" {
-				if r.Mode == "client" && len(r.Patterns) > 0 {
-					hs.patternLabel = fmt.Sprintf("%d%% %s", int(r.Patterns[0].Confidence*100+0.5), r.Patterns[0].Name)
-				}
-			}
-		}
-		headerStats[panel.Platform] = hs
-	}
+	// Per-platform stats shown in the card headers (API count, dominant
+	// architecture signal) — see platformHeaderStats.
+	headerStats := platformHeaderStats(res)
 
 	autoOpen := len(platforms) <= 2
 
@@ -3579,11 +3621,13 @@ func renderTabs(res *result.AnalysisResult) string {
 			`<button class="as-seg-btn as-seg-btn--active" data-view="html">HTML</button>` +
 			`<button class="as-seg-btn" data-view="md">MD</button>` +
 			`</div>`)
+		fmt.Fprintf(&b, `<button type="button" class="as-toggle as-md-dl" data-md-src="p%d-md" data-md-file="%s" title="Download this platform as a Markdown file">⬇ MD</button>`,
+			i, esc(slugFile(res.ProjectName+"-"+pg.TabLabel())+".md"))
 		b.WriteString(`<div class="as-plat-view as-plat-view--html">`)
 		b.WriteString(renderPlatformPanel(res, pg))
 		b.WriteString(`</div>`)
-		fmt.Fprintf(&b, `<pre class="as-plat-view as-plat-view--md" style="display:none">%s</pre>`,
-			esc(markdown.RenderPlatform(res, pg)))
+		fmt.Fprintf(&b, `<pre class="as-plat-view as-plat-view--md" id="p%d-md" style="display:none">%s</pre>`,
+			i, esc(markdown.RenderPlatform(res, pg)))
 		b.WriteString(`</div>`) // .as-plat-card__body
 		b.WriteString(`</div>`) // .as-plat-card
 	}
@@ -3615,105 +3659,10 @@ func platBadgeHTML(pg *scanner.PlatformGroup) string {
 
 func renderPlatformPanel(res *result.AnalysisResult, pg *scanner.PlatformGroup) string {
 	files := res.FilesForPlatform(pg.Platform)
-	lines, decls := 0, 0
-	langCount := map[string]bool{}
-	for _, f := range files {
-		lines += f.LineCount
-		decls += len(f.Declarations)
-		langCount[f.LanguageID] = true
-	}
-
-	// Split panels: architecture dropped (rendered above), ddd, spec coverage,
-	// traffic, the "Programming Methods" constructs (design patterns, data
-	// structures, algorithms — grouped after Domain Model), rest.
-	var dddPanels, specPanels, trafficPanels, constructPanels, otherPanels []result.ModulePanel
-	for _, p := range res.PanelsForPlatform(pg.Platform) {
-		switch p.ModuleID {
-		case "architecture":
-			// rendered in the dedicated Architecture section above; skip
-		case "codestructure", "langrichness", "memoryleaks", "regex", "deadcode", "concurrency":
-			// rendered as their own subcards in 💡 Module Insights; skip
-		case "dddmodel", "oopvspop":
-			dddPanels = append(dddPanels, p)
-		case "speccoverage":
-			specPanels = append(specPanels, p)
-		case "traffic":
-			trafficPanels = append(trafficPanels, p)
-		case "couplingcohesion", "designpattern", "datastructures", "algorithms", "complexity", "magicconstants":
-			constructPanels = append(constructPanels, p)
-		default:
-			otherPanels = append(otherPanels, p)
-		}
-	}
-
 	var b strings.Builder
-	b.WriteString(`<div class="as-cards">`)
-	card(&b, fmtNum(pg.FileCount), "files", false)
-	card(&b, fmtNum(lines), "lines", false)
-	card(&b, fmtNum(decls), "declarations", false)
-	card(&b, fmtNum(len(pg.Modules)), plural(len(pg.Modules), "module", "modules"), false)
-	b.WriteString(`</div>`)
-
-	badge := platBadgeHTML(pg)
-
-	// 1. 🏛️ Architecture
-	{
-		lp := pg.LanguagePlatform
-		if lp == "" {
-			lp = pg.Platform
-		}
-		layersHTML := renderArchLayers(files)
-		componentsHTML := renderArchComponents(files, buildTechSet(res, files))
-		versionsHTML := renderArchVersions(res.Scan.Versions[lp])
-		if layersHTML != "" || componentsHTML != "" || versionsHTML != "" {
-			fmt.Fprintf(&b, `<div class="as-section" id="%s"><div class="as-section__head">%s<span class="ico">🏛️</span><h3>Architecture</h3></div>`,
-				esc(cultAnchorID("arch", pg.Platform)), badge)
-			b.WriteString(layersHTML)
-			b.WriteString(componentsHTML)
-			b.WriteString(versionsHTML)
-			b.WriteString(`</div>`)
-		}
-	}
-
-	// 2. 🎯 Domain Model
-	b.WriteString(renderModulePanels(dddPanels, badge))
-
-	// 2b. 🧠 Programming Methods — design patterns, data structures, algorithms
-	b.WriteString(renderProgrammingMethods(constructPanels, badge))
-
-	// 3. 🧱 Spec Coverage
-	b.WriteString(renderModulePanels(specPanels, badge))
-
-	// 4. 🛜 Traffic — with SPEC COV column when spec coverage data is available.
-	var specRes *speccoverage.Result
-	for _, p := range specPanels {
-		if r, ok := p.RawResult.(speccoverage.Result); ok {
-			specRes = &r
-			break
-		}
-	}
-	if len(trafficPanels) > 0 {
-		b.WriteString(renderTrafficWithSpec(trafficPanels, specRes, badge, langspec.Default.IsClientPlatform(pg.Platform)))
-	}
-
-	// 5. 💡 Module Insights — Hotspots · Modules · TODOs · Longest Functions
-	b.WriteString(renderModuleInsights(res, pg, files, res.RootPath, badge))
-
-	// 7. 🐙 Git Analysis — per-platform churn + contributors
-	b.WriteString(renderPlatformGit(res, pg, files, badge))
-
-	// 8. 🛡️ Danger Details
-	b.WriteString(renderPlatformSecurity(res, pg.Platform, badge))
-
-	// 9. 📂 Modules & Microservices — per-platform file inventory. Only
-	// included under --render-modules (its declaration graph is
-	// CDN-loaded, and the section itself can be large for big platforms).
-	if res.Scan.RenderModules {
-		b.WriteString(renderModuleDetailsPlatform(res.RootPath, files, badge))
-	}
-
-	// Remaining panels
-	b.WriteString(renderModulePanels(otherPanels))
+	// The cards themselves come from report.Cards — the one list both this
+	// document and the Markdown export are assembled from (see report/cards.go).
+	b.WriteString(renderPlatformCards(res, pg, files, platBadgeHTML(pg)))
 	return b.String()
 }
 
@@ -3736,7 +3685,17 @@ func buildTechSet(res *result.AnalysisResult, files []*parser.ParsedFile) map[st
 	return ts
 }
 
-func renderHotspots(res *result.AnalysisResult, pg *scanner.PlatformGroup) string {
+// hotspotRow is one module of the 🕸️ Dependency Hotspots table.
+type hotspotRow struct {
+	name  string // already qualified with the folder, "(root)" for the root
+	uses  int    // in-degree: modules depending on this one
+	lines int
+	decl  int
+}
+
+// hotspotRows picks the platform's most-depended-on modules (top 12). Shared by
+// the HTML table and its Markdown twin.
+func hotspotRows(res *result.AnalysisResult, pg *scanner.PlatformGroup) []hotspotRow {
 	inPlatform := map[string]bool{}
 	for _, m := range pg.Modules {
 		inPlatform[m] = true
@@ -3777,9 +3736,6 @@ func renderHotspots(res *result.AnalysisResult, pg *scanner.PlatformGroup) strin
 		}
 		rows = append(rows, row{h.Name, h.InDeg, mloc[h.Name], mdecl[h.Name]})
 	}
-	if len(rows) == 0 {
-		return ""
-	}
 	sort.SliceStable(rows, func(i, j int) bool {
 		if rows[i].uses != rows[j].uses {
 			return rows[i].uses > rows[j].uses
@@ -3789,6 +3745,27 @@ func renderHotspots(res *result.AnalysisResult, pg *scanner.PlatformGroup) strin
 	if len(rows) > 12 {
 		rows = rows[:12]
 	}
+	out := make([]hotspotRow, 0, len(rows))
+	for _, r := range rows {
+		name := r.name
+		if name == "root" {
+			name = "(root)"
+		}
+		out = append(out, hotspotRow{qualify(name), r.uses, r.lines, r.decl})
+	}
+	return out
+}
+
+func renderHotspots(res *result.AnalysisResult, pg *scanner.PlatformGroup) string {
+	rows := hotspotRows(res, pg)
+	if len(rows) == 0 {
+		return ""
+	}
+	inPlatform := map[string]bool{}
+	for _, m := range pg.Modules {
+		inPlatform[m] = true
+	}
+	folder := platformFolderSuffix(pg.Platform)
 
 	var b strings.Builder
 	b.WriteString(`<div class="as-section"><div class="as-section__head"><span class="ico">🕸️</span><h3>Dependency Hotspots</h3></div>`)
@@ -3803,12 +3780,8 @@ func renderHotspots(res *result.AnalysisResult, pg *scanner.PlatformGroup) strin
 
 	b.WriteString(`<table class="as-table as-hot__table"><thead><tr><th>Module</th><th>Uses</th><th>Lines</th><th>Decl</th></tr></thead><tbody>`)
 	for _, r := range rows {
-		name := r.name
-		if name == "root" {
-			name = "(root)"
-		}
 		fmt.Fprintf(&b, `<tr><td class="mono">%s</td><td class="mono">%d</td><td class="mono">%s</td><td class="mono">%d</td></tr>`,
-			esc(qualify(name)), r.uses, fmtNum(r.lines), r.decl)
+			esc(r.name), r.uses, fmtNum(r.lines), r.decl)
 	}
 	b.WriteString(`</tbody></table></div>`)
 	return b.String()
@@ -4099,36 +4072,8 @@ func renderModuleGraphSVG(res *result.AnalysisResult, inPlatform map[string]bool
 
 // renderPlatformSecurity shows findings whose file belongs to the platform.
 func renderPlatformSecurity(res *result.AnalysisResult, plat langspec.Platform, headBadge string) string {
-	pmap := map[string]langspec.Platform{}
-	for _, f := range res.Files {
-		pmap[f.FilePath] = langspec.Platform(f.Platform)
-	}
-	var filtered []security.RuleResult
-	total := 0
-	for _, rr := range res.Security {
-		var fs []security.Finding
-		for _, f := range rr.Findings {
-			if pmap[f.FullPath] == plat && !security.IsTestPath(f.FullPath) {
-				fs = append(fs, f)
-			}
-		}
-		if len(fs) > 0 {
-			filtered = append(filtered, security.RuleResult{Rule: rr.Rule, Findings: fs, TotalCount: len(fs)})
-			total += len(fs)
-		}
-	}
-	// severity tally
-	hi, med, lo := 0, 0, 0
-	for _, rr := range filtered {
-		switch rr.Rule.Severity {
-		case security.SevHigh:
-			hi += rr.TotalCount
-		case security.SevMedium:
-			med += rr.TotalCount
-		default:
-			lo += rr.TotalCount
-		}
-	}
+	sec := res.PlatformSecurity(plat)
+	filtered, total, hi, med, lo := sec.Rules, sec.Total, sec.High, sec.Medium, sec.Low
 	var b strings.Builder
 	if total == 0 {
 		fmt.Fprintf(&b, `<div class="as-section as-danger-section" id="%s"><div class="as-section__head">%s<span class="ico">🛡️</span><h3>Danger Details</h3></div>`,
@@ -4454,30 +4399,6 @@ func moduleIcon(id string) string {
 // ── Per-platform git (churn + contributors filtered to platform files) ───────
 
 // platformLangExts maps a LanguagePlatform to its canonical file extensions.
-func platformLangExts(lp langspec.Platform) map[string]bool {
-	table := map[langspec.Platform][]string{
-		"go":         {".go"},
-		"python":     {".py"},
-		"ts_js":      {".ts", ".tsx", ".js", ".jsx"},
-		"swift_objc": {".swift", ".m", ".mm"},
-		"kotlin":     {".kt", ".kts"},
-		"java":       {".java"},
-		"ruby":       {".rb"},
-		"rust":       {".rs"},
-		"csharp":     {".cs"},
-		"cpp":        {".cpp", ".cc", ".cxx", ".hpp", ".h"},
-	}
-	exts, ok := table[lp]
-	if !ok {
-		return nil
-	}
-	m := make(map[string]bool, len(exts))
-	for _, e := range exts {
-		m[e] = true
-	}
-	return m
-}
-
 func renderPlatformGit(res *result.AnalysisResult, pg *scanner.PlatformGroup, files []*parser.ParsedFile, headBadge string) string {
 	g := res.Git
 	if !g.Available {
@@ -4487,73 +4408,8 @@ func renderPlatformGit(res *result.AnalysisResult, pg *scanner.PlatformGroup, fi
 		return b.String()
 	}
 
-	// Each sub-project may have its own .git root. git log --name-only outputs
-	// paths relative to that repo root, not to res.RootPath. Find the deepest
-	// matching repo root for each file so the relative paths align with RelPath
-	// in the churn stats.
-	repoRoot := func(fp string) string {
-		best := res.RootPath
-		for _, repo := range g.Repos {
-			if len(repo) > len(best) &&
-				(strings.HasPrefix(fp, repo+string(filepath.Separator)) || fp == repo) {
-				best = repo
-			}
-		}
-		return best
-	}
-
-	platRel := map[string]bool{}
-	for _, f := range files {
-		root := repoRoot(f.FilePath)
-		if r, err := filepath.Rel(root, f.FilePath); err == nil {
-			platRel[r] = true
-		}
-	}
-
-	// Filter churn to this platform's files; fall back to language-extension
-	// match when path matching yields nothing (single .git + small topN).
-	var platChurn []git.FileChurnStat
-	for _, c := range g.Churn {
-		if platRel[c.RelPath] {
-			platChurn = append(platChurn, c)
-		}
-	}
-	if len(platChurn) == 0 {
-		exts := platformLangExts(pg.LanguagePlatform)
-		for _, c := range g.Churn {
-			if exts[strings.ToLower(filepath.Ext(c.RelPath))] {
-				platChurn = append(platChurn, c)
-			}
-		}
-	}
-
-	// Contributors: derive from platform churn (language-accurate).
-	// Fall back to module-name matching (works for per-folder git repos).
-	platAuthors := map[string]*git.AuthorStats{}
-	for _, c := range platChurn {
-		for _, authorName := range c.TopAuthors {
-			if a, ok := g.Authors[authorName]; ok {
-				platAuthors[authorName] = a
-			}
-		}
-	}
-	if len(platAuthors) == 0 {
-		platMods := map[string]bool{}
-		for _, m := range pg.Modules {
-			platMods[m] = true
-			if m == "" {
-				platMods["root"] = true
-			}
-		}
-		for name, a := range g.Authors {
-			for mod := range a.MicroserviceCounts {
-				if platMods[mod] {
-					platAuthors[name] = a
-					break
-				}
-			}
-		}
-	}
+	pgit := res.PlatformGit(pg, files)
+	platAuthors, platChurn := pgit.Authors, pgit.Churn
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `<div class="as-section"><div class="as-section__head">%s<span class="ico">🐙</span><h3>Git Analysis</h3></div>`, headBadge)
@@ -4571,22 +4427,25 @@ func renderPlatformGit(res *result.AnalysisResult, pg *scanner.PlatformGroup, fi
 
 // ── Per-platform module/microservice detail ───────────────────────────────────
 
-func renderModuleDetailsPlatform(rootPath string, files []*parser.ParsedFile, headBadge string) string {
-	type mod struct {
-		name  string
-		plat  langspec.Platform
-		ptype string
-		files []*parser.ParsedFile
-		lines int
-		decls int
-		kinds map[parser.DeclKind]int
-	}
+// invModule is one module of the 📂 Modules & Microservices inventory.
+type invModule struct {
+	name  string
+	plat  langspec.Platform
+	ptype string
+	files []*parser.ParsedFile
+	lines int
+	decls int
+	kinds map[parser.DeclKind]int
+}
+
+// moduleInventory groups the files by module, biggest first.
+func moduleInventory(files []*parser.ParsedFile) []*invModule {
 	var order []string
-	mods := map[string]*mod{}
+	mods := map[string]*invModule{}
 	for _, f := range files {
 		m := mods[f.ModuleName]
 		if m == nil {
-			m = &mod{name: f.ModuleName, plat: langspec.Platform(f.Platform), ptype: f.ProjectType, kinds: map[parser.DeclKind]int{}}
+			m = &invModule{name: f.ModuleName, plat: langspec.Platform(f.Platform), ptype: f.ProjectType, kinds: map[parser.DeclKind]int{}}
 			mods[f.ModuleName] = m
 			order = append(order, f.ModuleName)
 		}
@@ -4600,10 +4459,7 @@ func renderModuleDetailsPlatform(rootPath string, files []*parser.ParsedFile, he
 			m.kinds[d.Kind]++
 		}
 	}
-	if len(mods) == 0 {
-		return ""
-	}
-	list := make([]*mod, 0, len(mods))
+	list := make([]*invModule, 0, len(mods))
 	for _, n := range order {
 		list = append(list, mods[n])
 	}
@@ -4613,6 +4469,41 @@ func renderModuleDetailsPlatform(rootPath string, files []*parser.ParsedFile, he
 		}
 		return list[i].name < list[j].name
 	})
+	return list
+}
+
+// inventoryFiles splits a module's files into the listed ones and the
+// "Code Generated" ones (generated files of 90+ lines), biggest first;
+// tests, tiny files and declaration-less stubs are left out.
+func inventoryFiles(files []*parser.ParsedFile) (keep, gen []*parser.ParsedFile) {
+	all := append([]*parser.ParsedFile(nil), files...)
+	sort.SliceStable(all, func(i, j int) bool { return all[i].LineCount > all[j].LineCount })
+	for _, f := range all {
+		if isGeneratedFile(f.FilePath) {
+			if f.LineCount >= 90 {
+				gen = append(gen, f)
+			}
+			continue
+		}
+		if isTestFile(f.FilePath) {
+			continue
+		}
+		if f.LanguageID == "ts" && f.LineCount < 15 {
+			continue
+		}
+		if len(f.Declarations) == 0 && f.LineCount < 30 {
+			continue
+		}
+		keep = append(keep, f)
+	}
+	return keep, gen
+}
+
+func renderModuleDetailsPlatform(rootPath string, files []*parser.ParsedFile, headBadge string) string {
+	list := moduleInventory(files)
+	if len(list) == 0 {
+		return ""
+	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `<div class="as-section"><div class="as-section__head">%s<span class="ico">📂</span><h3>Modules &amp; Microservices</h3></div>`, headBadge)
@@ -4645,27 +4536,7 @@ func renderModuleDetailsPlatform(rootPath string, files []*parser.ParsedFile, he
 			b.WriteString(g)
 		}
 
-		all := append([]*parser.ParsedFile(nil), m.files...)
-		sort.SliceStable(all, func(i, j int) bool { return all[i].LineCount > all[j].LineCount })
-		var keep, genFiles []*parser.ParsedFile
-		for _, f := range all {
-			if isGeneratedFile(f.FilePath) {
-				if f.LineCount >= 90 {
-					genFiles = append(genFiles, f)
-				}
-				continue
-			}
-			if isTestFile(f.FilePath) {
-				continue
-			}
-			if f.LanguageID == "ts" && f.LineCount < 15 {
-				continue
-			}
-			if len(f.Declarations) == 0 && f.LineCount < 30 {
-				continue
-			}
-			keep = append(keep, f)
-		}
+		keep, genFiles := inventoryFiles(m.files)
 		if len(keep) == 0 && len(genFiles) == 0 {
 			b.WriteString(`</div>`)
 			continue
@@ -4712,15 +4583,18 @@ func renderBranchingModel(bs git.BranchStats) string {
 	return b.String()
 }
 
-func renderTeam(authors map[string]*git.AuthorStats) string {
-	type row struct {
-		name    string
-		commits int
-		files   int
-	}
-	var rows []row
+// authorRow is one line of the 👥 Top Contributors table.
+type authorRow struct {
+	name    string
+	commits int
+	files   int
+}
+
+// topAuthors ranks the ten busiest authors. Shared with the Markdown twin.
+func topAuthors(authors map[string]*git.AuthorStats) []authorRow {
+	var rows []authorRow
 	for name, a := range authors {
-		rows = append(rows, row{name, a.TotalCommits, a.FilesModified})
+		rows = append(rows, authorRow{name, a.TotalCommits, a.FilesModified})
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].commits != rows[j].commits {
@@ -4731,6 +4605,11 @@ func renderTeam(authors map[string]*git.AuthorStats) string {
 	if len(rows) > 10 {
 		rows = rows[:10]
 	}
+	return rows
+}
+
+func renderTeam(authors map[string]*git.AuthorStats) string {
+	rows := topAuthors(authors)
 	var b strings.Builder
 	b.WriteString(`<div><div class="as-sub">👥 Top Contributors</div>`)
 	if len(rows) == 0 {

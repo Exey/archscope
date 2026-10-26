@@ -6,7 +6,6 @@
 package modules
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
@@ -29,15 +28,14 @@ type ReportModule interface {
 	Analyze(files []*parser.ParsedFile) any
 	// RenderHTML turns an Analyze result into an HTML fragment for the tab.
 	RenderHTML(result any) string
+	// RenderMarkdown turns the same result into Markdown — the twin of
+	// RenderHTML, and as complete: whatever the HTML panel shows (including its
+	// "nothing found ✅" state) the Markdown carries too. It is part of the
+	// interface, not an optional extra, so a module cannot ship in one report
+	// format only.
+	RenderMarkdown(result any) string
 	// SummaryCards returns optional extra cards for the tab header.
 	SummaryCards(result any) []SummaryCard
-}
-
-// MarkdownRenderer is an optional extension of ReportModule. Modules that
-// implement it produce rich markdown sections in --md output reports.
-// Modules that do not implement it are silently skipped in markdown output.
-type MarkdownRenderer interface {
-	RenderMarkdown(result any) string
 }
 
 // ─── Module metadata ──────────────────────────────────────────────────────────
@@ -81,19 +79,21 @@ func MetaFor(id string) ModuleMeta {
 
 // ─── Transformer ──────────────────────────────────────────────────────────────
 
-// RenderedPanel is one module's output produced by Transformer.HTMLPanels.
+// RenderedPanel is one module's output produced by Transformer.HTMLPanels, in
+// both formats.
 type RenderedPanel struct {
 	ModuleID string
 	Title    string
 	HTML     string
+	MD       string // RenderMarkdown of the same result
 	Cards    []SummaryCard
 	Result   any
 }
 
 // Transformer accumulates module analysis results for a single platform tab
 // and renders them in the canonical order defined by MetaByID.
-// Use NewTransformer, call Add for each module+result, then call HTMLPanels or
-// Markdown to produce output.
+// Use NewTransformer, call Add for each module+result, then call HTMLPanels:
+// each RenderedPanel carries the module's HTML and its Markdown twin.
 type Transformer struct {
 	entries []xfmEntry
 }
@@ -123,30 +123,12 @@ func (t *Transformer) HTMLPanels() []RenderedPanel {
 			ModuleID: e.module.ID(),
 			Title:    e.module.Title(),
 			HTML:     html,
+			MD:       e.module.RenderMarkdown(e.result),
 			Cards:    e.module.SummaryCards(e.result),
 			Result:   e.result,
 		})
 	}
 	return out
-}
-
-// Markdown returns all non-empty markdown fragments joined in canonical order.
-// Modules that do not implement MarkdownRenderer are silently skipped.
-func (t *Transformer) Markdown() string {
-	var b strings.Builder
-	for _, e := range t.sorted() {
-		mr, ok := e.module.(MarkdownRenderer)
-		if !ok {
-			continue
-		}
-		md := mr.RenderMarkdown(e.result)
-		if strings.TrimSpace(md) == "" {
-			continue
-		}
-		meta := MetaFor(e.module.ID())
-		fmt.Fprintf(&b, "### %s %s\n\n%s", meta.Icon, e.module.Title(), md)
-	}
-	return b.String()
 }
 
 func (t *Transformer) sorted() []xfmEntry {

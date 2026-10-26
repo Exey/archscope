@@ -764,22 +764,34 @@ func (DataStructures) SummaryCards(res any) []modules.SummaryCard {
 // RenderMarkdown renders detected structures as a markdown table.
 func (DataStructures) RenderMarkdown(res any) string {
 	r, ok := res.(Result)
-	if !ok || !r.HasDetection() {
+	if !ok {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString("| Structure | Count | Examples |\n")
-	b.WriteString("|-----------|------:|---------|\n")
+	if !r.HasDetection() {
+		return "No developer-implemented data structures detected from naming conventions.\n\n"
+	}
+	byCat := map[string][]Match{}
 	for _, m := range r.Matches {
-		var ex []string
-		for i, o := range m.Occurrences {
-			if i == 6 {
-				ex = append(ex, fmt.Sprintf("+%d more", len(m.Occurrences)-6))
-				break
+		byCat[m.Category.label] = append(byCat[m.Category.label], m)
+	}
+	var b strings.Builder
+	b.WriteString("| Category | Structure | Count | Examples |\n|----------|-----------|------:|----------|\n")
+	for _, cat := range categoryOrder {
+		for _, m := range byCat[cat.label] {
+			var ex []string
+			for i, o := range m.Occurrences {
+				if i == maxLinksPerStructure {
+					ex = append(ex, fmt.Sprintf("+%d more", len(m.Occurrences)-maxLinksPerStructure))
+					break
+				}
+				ex = append(ex, fmt.Sprintf("%s (%s:%d)", o.TypeName, baseName(o.FilePath), o.Line))
 			}
-			ex = append(ex, fmt.Sprintf("%s (%s:%d)", o.TypeName, baseName(o.FilePath), o.Line))
+			name := m.Name
+			if m.Detail != "" {
+				name += " — " + m.Detail
+			}
+			fmt.Fprintf(&b, "| %s %s | %s | %d | %s |\n", cat.icon, cat.label, mdTableCell(name), m.Count, mdTableCell(strings.Join(ex, ", ")))
 		}
-		fmt.Fprintf(&b, "| %s | %d | %s |\n", m.Name, m.Count, strings.Join(ex, ", "))
 	}
 	b.WriteString("\n")
 	return b.String()

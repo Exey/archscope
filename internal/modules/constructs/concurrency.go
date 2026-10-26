@@ -160,11 +160,11 @@ func (Concurrency) SummaryCards(res any) []modules.SummaryCard {
 
 func (Concurrency) RenderMarkdown(res any) string {
 	r, ok := res.(ConcurrencyReport)
-	if !ok || !r.HasData() {
+	if !ok {
 		return ""
 	}
 	var b strings.Builder
-	issueCardMarkdown(&b, "concurrency / API", r.Issues)
+	issueCardMarkdown(&b, "🧵", "concurrency / API", r.Issues)
 	return b.String()
 }
 

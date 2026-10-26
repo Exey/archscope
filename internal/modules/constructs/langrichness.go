@@ -282,6 +282,13 @@ func (LanguageRichness) RenderMarkdown(res any) string {
 	var b strings.Builder
 	for _, e := range r.Entries {
 		fmt.Fprintf(&b, "**%s:** %d%% (%d/%d keywords used)\n\n", e.Label, e.Percent, e.Found, e.Total)
+		if len(e.Missing) > 0 {
+			missingStr := strings.Join(e.Missing, ", ")
+			if len(missingStr) > 120 {
+				missingStr = missingStr[:117] + "…"
+			}
+			fmt.Fprintf(&b, "Not found: %s\n\n", missingStr)
+		}
 	}
 	return b.String()
 }

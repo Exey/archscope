@@ -412,18 +412,33 @@ func (Complexity) RenderMarkdown(res any) string {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "**Time health:** %d/100 · **Space health:** %d/100\n\n", r.TimeHealth, r.SpaceHealth)
+	fmt.Fprintf(&b, "**Time O-Health:** %d%% · **Space O-Health:** %d%%\n\n", r.TimeHealth, r.SpaceHealth)
+	if !r.Usage.IsEmpty() {
+		var chips []string
+		for _, c := range []struct {
+			label string
+			n     int
+		}{
+			{"Array", r.Usage.Array}, {"Dictionary", r.Usage.Dictionary},
+			{"Set", r.Usage.Set}, {"Sequence", r.Usage.Sequence}, {".lazy", r.Usage.Lazy},
+		} {
+			if c.n > 0 {
+				chips = append(chips, fmt.Sprintf("%s ×%d", c.label, c.n))
+			}
+		}
+		fmt.Fprintf(&b, "**Collection usage:** %s\n\n", strings.Join(chips, " · "))
+	}
 	writeViolTable := func(title string, vs []Violation) {
 		if len(vs) == 0 {
 			return
 		}
-		fmt.Fprintf(&b, "%s\n\n| Big-O | Symbol | Reason | Location |\n|-------|--------|--------|----------|\n", title)
+		fmt.Fprintf(&b, "#### %s (%d)\n\n| Big-O | Symbol | Reason | Location |\n|-------|--------|--------|----------|\n", title, len(vs))
 		for i, v := range vs {
-			if i == 20 {
-				fmt.Fprintf(&b, "| | | | +%d more |\n", len(vs)-20)
+			if i == maxViolationsShown {
+				fmt.Fprintf(&b, "| | | | … and %d more |\n", len(vs)-maxViolationsShown)
 				break
 			}
-			fmt.Fprintf(&b, "| %s | %s | %s | %s:%d |\n", v.bigO(), v.Symbol, v.Reason, baseName(v.FilePath), v.Line)
+			fmt.Fprintf(&b, "| %s | %s | %s | %s:%d |\n", v.bigO(), mdTableCell(v.Symbol), mdTableCell(v.Reason), baseName(v.FilePath), v.Line)
 		}
 		b.WriteString("\n")
 	}

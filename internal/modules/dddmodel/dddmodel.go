@@ -607,41 +607,52 @@ func (m Module) SummaryCards(res any) []modules.SummaryCard {
 
 func (m Module) RenderMarkdown(res any) string {
 	r, ok := res.(Result)
-	if !ok || !r.HasData() {
+	if !ok {
 		return ""
 	}
+	if !r.HasData() {
+		return "No backend files found for Domain Model analysis.\n\n"
+	}
+	cfg := m.cfg()
 	var b strings.Builder
 	fmt.Fprintf(&b, "**DDD Score: %d%%** — %s\n\n", r.DDDScore, r.Verdict)
-
-	type pat struct {
-		label    string
-		count    int
-		examples []string
-	}
-	rows := []pat{
-		{"Aggregates", r.AggregateCount, r.ExAgg},
-		{"Entities", r.EntitiesCount, r.ExEntity},
-		{"Value Objects", r.VOCount, r.ExVO},
-		{"Domain Events", r.DomainEvtCount, r.ExEvent},
-		{"Repositories", r.RepositoryCount, r.ExRepo},
-		{"Domain Services", r.DomainSvcCount, r.ExDomSvc},
-		{"Use Cases", r.UseCaseCount, r.ExUseCase},
-		{"Factories", r.FactoryCount, r.ExFactory},
-		{"Specifications", r.SpecCount, r.ExSpec},
-		{"Event Handlers", r.EventHandlerCount, r.ExEventHandler},
-	}
-	b.WriteString("| Pattern | Count | Examples |\n")
-	b.WriteString("|---------|------:|---------|\n")
-	for _, row := range rows {
-		if row.count == 0 {
-			continue
+	fmt.Fprintf(&b, "Domain model signal across %d types · %d%% domain richness · %d%% anemic tendency\n\n", r.TotalTypes, r.DDDScore, 100-r.DDDScore)
+	b.WriteString("| Category | Score | Weight |\n|----------|------:|-------:|\n")
+	fmt.Fprintf(&b, "| Rich Domain Types | %d%% | %.0f%% |\n", r.RichScore, cfg.WeightRichTypes*100)
+	fmt.Fprintf(&b, "| Tactical Patterns | %d%% | %.0f%% |\n", r.TacticalScore, cfg.WeightTactical*100)
+	fmt.Fprintf(&b, "| Layer Separation | %d%% | %.0f%% |\n\n", r.LayerScore, cfg.WeightLayer*100)
+	b.WriteString("| # | Metric | Value | DDD Score | Signal |\n|--:|--------|-------|----------:|--------|\n")
+	n := 0
+	for _, row := range m.metricRows(r) {
+		switch {
+		case row.section != "":
+			fmt.Fprintf(&b, "| | **%s** | | | |\n", row.section)
+		case row.info:
+			n++
+			fmt.Fprintf(&b, "| %d | %s | %s | | |\n", n, row.mdName(), mdCell(row.value))
+		default:
+			n++
+			p := pct(row.score)
+			fmt.Fprintf(&b, "| %d | %s | %s | %d%% | %s |\n", n, row.mdName(), mdCell(row.value), p, signalLabel(p))
 		}
-		ex := strings.Join(row.examples, ", ")
-		fmt.Fprintf(&b, "| %s | %d | %s |\n", row.label, row.count, ex)
 	}
 	b.WriteString("\n")
 	return b.String()
 }
+
+func signalLabel(p int) string {
+	switch {
+	case p >= 65:
+		return "DDD"
+	case p >= 40:
+		return "Mixed"
+	default:
+		return "Anemic"
+	}
+}
+
+// mdCell keeps a value from breaking out of a Markdown table cell.
+func mdCell(s string) string { return strings.ReplaceAll(strings.ReplaceAll(s, "|", "\\|"), "\n", " ") }
 
 // ── RenderHTML ─────────────────────────────────────────────────────────────
 
@@ -681,6 +692,70 @@ func (m Module) RenderHTML(res any) string {
 	catBar(&b, "Layer Separation", r.LayerScore, fmt.Sprintf("W %.0f%%", cfg.WeightLayer*100))
 	b.WriteString(`</div>`)
 
+	b.WriteString(`<table class="as-pop__metrics"><thead><tr><th>#</th><th>Metric</th><th>Value</th><th>DDD Score</th><th>Signal</th></tr></thead><tbody>`)
+	n := 0
+	for _, row := range m.metricRows(r) {
+		switch {
+		case row.section != "":
+			sect(&b, row.section)
+		case row.info:
+			infoRow(&b, &n, row.nameHTML(), row.value)
+		default:
+			metric(&b, &n, row.nameHTML(), row.hint, row.value, row.score)
+		}
+	}
+	b.WriteString(`</tbody></table></div>`)
+	return b.String()
+}
+
+// dddRow is one line of the metrics table, shared by the HTML and Markdown
+// renderers so both list the same signals.
+type dddRow struct {
+	section string // non-empty: a section divider ("Rich Domain Types · 40%")
+	name    string // plain text; `code` spans in backticks
+	lower   string // non-empty: the inverted-row marker ("↓ fewer = DDD")
+	hint    string // tooltip text (HTML only)
+	value   string
+	score   float64 // 0..1
+	info    bool    // shown without a score
+	note    string  // italic suffix on an info row's name
+}
+
+func (r dddRow) nameHTML() string {
+	parts := strings.Split(esc(r.name), "`")
+	var b strings.Builder
+	for i, p := range parts {
+		switch {
+		case i%2 == 1 && i < len(parts)-1:
+			b.WriteString("<code>" + p + "</code>")
+		case i%2 == 1:
+			b.WriteString("`" + p)
+		default:
+			b.WriteString(p)
+		}
+	}
+	if r.lower != "" {
+		b.WriteString(` <span class="as-pop__inv">` + esc(r.lower) + `</span>`)
+	}
+	if r.note != "" {
+		b.WriteString(` <em>(` + esc(r.note) + `)</em>`)
+	}
+	return b.String()
+}
+
+func (r dddRow) mdName() string {
+	n := r.name
+	if r.lower != "" {
+		n += " (" + r.lower + ")"
+	}
+	if r.note != "" {
+		n += " _(" + r.note + ")_"
+	}
+	return n
+}
+
+// metricRows lists every signal behind the DDD score, in table order.
+func (m Module) metricRows(r Result) []dddRow {
 	// Anemic marker totals for the inverted row.
 	anemicTotal := r.DAOCount + r.DTOCount + r.ManagerCount + r.BOCount + r.DOCount + r.POCount
 	richTotal := r.EntitiesCount + r.VOCount + r.AggregateCount
@@ -690,97 +765,72 @@ func (m Module) RenderHTML(res any) string {
 		anemicInv = 1.0 - float64(anemicTotal)/float64(combined)
 	}
 	allAnemicEx := mergeEx(r.ExDAO, r.ExDTO, r.ExManager, r.ExBO, r.ExDO, r.ExPO)
-
-	b.WriteString(`<table class="as-pop__metrics"><thead><tr><th>#</th><th>Metric</th><th>Value</th><th>DDD Score</th><th>Signal</th></tr></thead><tbody>`)
-	n := 0
-
-	// ── Rich Domain Types ─────────────────────────────────────────────────────
-	sect(&b, "Rich Domain Types · 40%")
+	cfg := m.cfg()
 
 	richNote := ""
 	if r.NoNamingEvidence {
 		richNote = " (no naming or directory evidence — fallback 50%)"
 	}
-	metric(&b, &n,
-		"Entities (<code>*Entity</code> or <code>entity/</code> dir)"+richNote,
-		"Named entities (types with identity and lifecycle) detected by *Entity suffix or by living in an entity/ directory.",
-		exVal(r.EntitiesCount, r.ExEntity), bool01(r.EntitiesCount > 0))
-	metric(&b, &n,
-		"Value Objects (<code>*ValueObject</code>, <code>*VO</code> or <code>valueobject/</code> dir)",
-		"Immutable types defined by their attributes. Detected by suffix or by directory.",
-		exVal(r.VOCount, r.ExVO), bool01(r.VOCount > 0))
-	metric(&b, &n,
-		"Aggregates (<code>*AggregateRoot</code>, <code>*Aggregate</code> or <code>aggregate/</code> dir) — weighted ×2",
-		"Aggregate roots enforce consistency boundaries. Weighted double because they are the pivotal DDD building block.",
-		exVal(r.AggregateCount, r.ExAgg), bool01(r.AggregateCount > 0))
-	metric(&b, &n,
-		`Anemic markers (<code>*DAO</code> <code>*DTO</code> <code>*Manager</code> <code>*BO</code> <code>*DO</code> <code>*PO</code>) <span class="as-pop__inv">↓ fewer = DDD</span>`,
-		"Data-bag and service-layer suffixes. Classic signs of the Anemic Domain Model anti-pattern.",
-		exVal(anemicTotal, allAnemicEx), anemicInv)
+	rows := []dddRow{
+		{section: fmt.Sprintf("Rich Domain Types · %.0f%%", cfg.WeightRichTypes*100)},
+		{name: "Entities (`*Entity` or `entity/` dir)" + richNote,
+			hint:  "Named entities (types with identity and lifecycle) detected by *Entity suffix or by living in an entity/ directory.",
+			value: exVal(r.EntitiesCount, r.ExEntity), score: bool01(r.EntitiesCount > 0)},
+		{name: "Value Objects (`*ValueObject`, `*VO` or `valueobject/` dir)",
+			hint:  "Immutable types defined by their attributes. Detected by suffix or by directory.",
+			value: exVal(r.VOCount, r.ExVO), score: bool01(r.VOCount > 0)},
+		{name: "Aggregates (`*AggregateRoot`, `*Aggregate` or `aggregate/` dir) — weighted ×2",
+			hint:  "Aggregate roots enforce consistency boundaries. Weighted double because they are the pivotal DDD building block.",
+			value: exVal(r.AggregateCount, r.ExAgg), score: bool01(r.AggregateCount > 0)},
+		{name: "Anemic markers (`*DAO` `*DTO` `*Manager` `*BO` `*DO` `*PO`)", lower: "↓ fewer = DDD",
+			hint:  "Data-bag and service-layer suffixes. Classic signs of the Anemic Domain Model anti-pattern.",
+			value: exVal(anemicTotal, allAnemicEx), score: anemicInv},
 
-	// ── Tactical DDD Patterns ─────────────────────────────────────────────────
-	sect(&b, "Tactical DDD Patterns · 35%")
-	metric(&b, &n,
-		"Repositories (<code>*Repository</code> or <code>repository/</code> dir)",
-		"Collection-like interfaces that abstract aggregate persistence. Detected by suffix or by directory.",
-		exVal(r.RepositoryCount, r.ExRepo), bool01(r.RepositoryCount > 0))
-	metric(&b, &n,
-		"Domain Events (<code>*DomainEvent</code> or <code>event/</code> dir)",
-		"Immutable records of domain facts. Enable loose coupling between aggregates.",
-		exVal(r.DomainEvtCount, r.ExEvent), bool01(r.DomainEvtCount > 0))
-	metric(&b, &n,
-		"Domain Services (<code>*DomainService</code>, <code>*Service</code> in domain or service dir)",
-		"Stateless operations that don't naturally belong to an entity. Plain *Service counts only when inside a domain/ or service/ directory.",
-		exVal(r.DomainSvcCount, r.ExDomSvc), bool01(r.DomainSvcCount > 0))
-	metric(&b, &n,
-		"Specifications (<code>*Specification</code>, <code>*Spec</code>)",
-		"Encapsulated, combinable business rules. A powerful DDD pattern for query criteria.",
-		exVal(r.SpecCount, r.ExSpec), bool01(r.SpecCount > 0))
-	metric(&b, &n,
-		"Use Cases (<code>*UseCase</code>, <code>*ApplicationService</code> or <code>usecase/</code> dir)",
-		"Application-layer orchestrators that drive domain objects through a business scenario.",
-		exVal(r.UseCaseCount, r.ExUseCase), bool01(r.UseCaseCount > 0))
-	metric(&b, &n,
-		"Factories (<code>*Factory</code>)",
-		"DDD creation pattern — encapsulates complex aggregate construction so callers never see an invalid state.",
-		exVal(r.FactoryCount, r.ExFactory), bool01(r.FactoryCount > 0))
-	metric(&b, &n,
-		"Event Handlers (<code>*EventHandler</code>)",
-		"Application-layer subscribers that react to domain events, enabling loosely coupled cross-aggregate workflows.",
-		exVal(r.EventHandlerCount, r.ExEventHandler), bool01(r.EventHandlerCount > 0))
+		{section: fmt.Sprintf("Tactical DDD Patterns · %.0f%%", cfg.WeightTactical*100)},
+		{name: "Repositories (`*Repository` or `repository/` dir)",
+			hint:  "Collection-like interfaces that abstract aggregate persistence. Detected by suffix or by directory.",
+			value: exVal(r.RepositoryCount, r.ExRepo), score: bool01(r.RepositoryCount > 0)},
+		{name: "Domain Events (`*DomainEvent` or `event/` dir)",
+			hint:  "Immutable records of domain facts. Enable loose coupling between aggregates.",
+			value: exVal(r.DomainEvtCount, r.ExEvent), score: bool01(r.DomainEvtCount > 0)},
+		{name: "Domain Services (`*DomainService`, `*Service` in domain or service dir)",
+			hint:  "Stateless operations that don't naturally belong to an entity. Plain *Service counts only when inside a domain/ or service/ directory.",
+			value: exVal(r.DomainSvcCount, r.ExDomSvc), score: bool01(r.DomainSvcCount > 0)},
+		{name: "Specifications (`*Specification`, `*Spec`)",
+			hint:  "Encapsulated, combinable business rules. A powerful DDD pattern for query criteria.",
+			value: exVal(r.SpecCount, r.ExSpec), score: bool01(r.SpecCount > 0)},
+		{name: "Use Cases (`*UseCase`, `*ApplicationService` or `usecase/` dir)",
+			hint:  "Application-layer orchestrators that drive domain objects through a business scenario.",
+			value: exVal(r.UseCaseCount, r.ExUseCase), score: bool01(r.UseCaseCount > 0)},
+		{name: "Factories (`*Factory`)",
+			hint:  "DDD creation pattern — encapsulates complex aggregate construction so callers never see an invalid state.",
+			value: exVal(r.FactoryCount, r.ExFactory), score: bool01(r.FactoryCount > 0)},
+		{name: "Event Handlers (`*EventHandler`)",
+			hint:  "Application-layer subscribers that react to domain events, enabling loosely coupled cross-aggregate workflows.",
+			value: exVal(r.EventHandlerCount, r.ExEventHandler), score: bool01(r.EventHandlerCount > 0)},
 
-	// ── Layer Separation ──────────────────────────────────────────────────────
-	sect(&b, "Layer Separation · 25%")
-	metric(&b, &n,
-		"<code>/domain/</code>, <code>/aggregate/</code>, <code>/core/</code>, <code>/biz/</code> …",
-		"An explicit domain layer. Triggered by: domain, domains, core, business, biz, aggregate(s), entity/ies, valueobject(s), vo, event(s), model.",
-		presStr(r.HasDomainPath), bool01(r.HasDomainPath))
-	metric(&b, &n,
-		"<code>/infrastructure/</code>, <code>/persistence/</code>, <code>/data/</code>, <code>/db/</code> …",
-		"A separate infrastructure layer keeps technical concerns out of the domain. Triggered by: infrastructure, infra, persistence, db, data, repo, repository/ies.",
-		presStr(r.HasInfraPath), bool01(r.HasInfraPath))
-	metric(&b, &n,
-		"<code>/application/</code> or <code>/app/</code>",
-		"An application layer orchestrates domain objects and separates use-case logic from the domain model.",
-		presStr(r.HasAppPath), bool01(r.HasAppPath))
-	metric(&b, &n,
-		"Port/Adapter directories (<code>/port/</code>, <code>/primary/</code>, <code>/secondary/</code> …)",
-		"Hexagonal architecture — ports and adapters enforce strict dependency inversion at the boundary.",
-		presStr(r.HasHexagonal), bool01(r.HasHexagonal))
-	metric(&b, &n,
-		`<code>/dao/</code>, <code>/mapper/</code>, or <code>/assembler/</code> <span class="as-pop__inv">↓ absent = DDD</span>`,
-		"These directories signal classic three-layer anemic architecture without an explicit domain model.",
-		presStr(r.HasDAOPath), bool01(!r.HasDAOPath))
-
-	// ── Informational (not scored) ────────────────────────────────────────────
-	if r.ModelCount > 0 {
-		infoRow(&b, &n,
-			`<code>*Model</code> types <em>(informational — not scored)</em>`,
-			exVal(r.ModelCount, r.ExModel)+` · neutral in Go/Python`)
+		{section: fmt.Sprintf("Layer Separation · %.0f%%", cfg.WeightLayer*100)},
+		{name: "`/domain/`, `/aggregate/`, `/core/`, `/biz/` …",
+			hint:  "An explicit domain layer. Triggered by: domain, domains, core, business, biz, aggregate(s), entity/ies, valueobject(s), vo, event(s), model.",
+			value: presStr(r.HasDomainPath), score: bool01(r.HasDomainPath)},
+		{name: "`/infrastructure/`, `/persistence/`, `/data/`, `/db/` …",
+			hint:  "A separate infrastructure layer keeps technical concerns out of the domain. Triggered by: infrastructure, infra, persistence, db, data, repo, repository/ies.",
+			value: presStr(r.HasInfraPath), score: bool01(r.HasInfraPath)},
+		{name: "`/application/` or `/app/`",
+			hint:  "An application layer orchestrates domain objects and separates use-case logic from the domain model.",
+			value: presStr(r.HasAppPath), score: bool01(r.HasAppPath)},
+		{name: "Port/Adapter directories (`/port/`, `/primary/`, `/secondary/` …)",
+			hint:  "Hexagonal architecture — ports and adapters enforce strict dependency inversion at the boundary.",
+			value: presStr(r.HasHexagonal), score: bool01(r.HasHexagonal)},
+		{name: "`/dao/`, `/mapper/`, or `/assembler/`", lower: "↓ absent = DDD",
+			hint:  "These directories signal classic three-layer anemic architecture without an explicit domain model.",
+			value: presStr(r.HasDAOPath), score: bool01(!r.HasDAOPath)},
 	}
-
-	b.WriteString(`</tbody></table></div>`)
-	return b.String()
+	if r.ModelCount > 0 {
+		rows = append(rows, dddRow{name: "`*Model` types", note: "informational — not scored", info: true,
+			value: exVal(r.ModelCount, r.ExModel) + " · neutral in Go/Python"})
+	}
+	return rows
 }
 
 // ── Render helpers ─────────────────────────────────────────────────────────

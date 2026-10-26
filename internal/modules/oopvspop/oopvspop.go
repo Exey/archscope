@@ -173,33 +173,125 @@ func (Module) RenderHTML(res any) string {
 	b.WriteString(`</div>`)
 
 	b.WriteString(`<table class="as-pop__metrics"><thead><tr><th>#</th><th>Metric</th><th>Value</th><th>POP Score</th><th>Signal</th></tr></thead><tbody>`)
-	concrete := r.Classes + r.Structs + r.Enums
 	n := 0
-	sect(&b, "Protocol Design · 55%")
-	metric(&b, &n, "Protocol presence", fmt.Sprintf("%d protocols · %d types", r.Protocols, r.TotalTypes), ratio(r.Protocols, r.Protocols+concrete))
-	metric(&b, &n, "Constrained generics", fmt.Sprintf("%d generic funcs", r.Generics), capped(r.Generics, max1(r.TotalTypes)))
-	metric(&b, &n, "<code>some</code> usage", fmt.Sprintf("%d usages", r.Some), capped(r.Some, max1(r.TotalTypes)))
-	metric(&b, &n, "<code>associatedtype</code>", fmt.Sprintf("%d / %d protocols", r.Assoc, r.Protocols), condRatio(r.Protocols > 0, r.Assoc, r.Protocols))
-	metric(&b, &n, "Protocol extensions", fmt.Sprintf("%d extensions", r.Extensions), capped(r.Extensions, max1(r.TotalTypes)))
+	for _, row := range metricRows(r) {
+		switch {
+		case row.section != "":
+			sect(&b, row.section)
+		case row.info:
+			infoRow(&b, &n, row.nameHTML(), row.value)
+		default:
+			metric(&b, &n, row.nameHTML(), row.value, row.score)
+		}
+	}
+	b.WriteString(`</tbody></table></div>`)
+	return b.String()
+}
 
-	sect(&b, "Value Semantics · 30%")
-	metric(&b, &n, "Struct vs Class ratio", fmt.Sprintf("%d structs · %d classes", r.Structs, r.Classes), ratio(r.Structs, r.Structs+r.Classes))
-	metric(&b, &n, "<code>final</code> classes", fmt.Sprintf("%d / %d classes", r.Final, r.Classes), ratio(r.Final, max1(r.Classes)))
-	infoRow(&b, &n, "Enums (value type)", fmt.Sprintf("%d enums", r.Enums))
+// popRow is one line of the metrics table, shared by the HTML and Markdown
+// renderers so the two always list the same signals.
+type popRow struct {
+	section string // non-empty: a section divider ("Protocol Design · 55%")
+	name    string // plain text; `code` spans in backticks
+	lower   bool   // a lower raw value reads as more POP
+	value   string
+	score   float64 // 0..1 POP score (unused for info rows)
+	info    bool    // shown without a score (counter-signals, enums)
+}
 
-	sect(&b, "Anti-inheritance · 15%")
-	metric(&b, &n, `<code>override</code> density <span class="as-pop__inv">↓ lower = POP</span>`, fmt.Sprintf("%d in %d classes", r.Override, r.Classes), clamp01(1.0-capped(r.Override, max1(r.Classes))))
-	metric(&b, &n, `NSObject inheritance <span class="as-pop__inv">↓ lower = POP</span>`, fmt.Sprintf("%d / %d classes", r.NSObject, r.Classes), clamp01(1.0-ratio(r.NSObject, max1(r.Classes))))
+func (r popRow) nameHTML() string {
+	parts := strings.Split(esc(r.name), "`")
+	var b strings.Builder
+	for i, p := range parts {
+		if i%2 == 1 && i < len(parts)-1 {
+			b.WriteString("<code>" + p + "</code>")
+		} else if i%2 == 1 {
+			b.WriteString("`" + p)
+		} else {
+			b.WriteString(p)
+		}
+	}
+	if r.lower {
+		b.WriteString(` <span class="as-pop__inv">↓ lower = POP</span>`)
+	}
+	return b.String()
+}
 
-	sect(&b, "Counter-signals")
+// metricRows lists the signals behind the score, in table order.
+func metricRows(r Result) []popRow {
+	concrete := r.Classes + r.Structs + r.Enums
 	note := ""
 	if r.Singletons > 0 {
 		note = " — OOP indicator"
 	}
-	infoRow(&b, &n, "⚠ Singletons (static shared/instance)", fmt.Sprintf("%d found%s", r.Singletons, note))
+	return []popRow{
+		{section: "Protocol Design · 55%"},
+		{name: "Protocol presence", value: fmt.Sprintf("%d protocols · %d types", r.Protocols, r.TotalTypes), score: ratio(r.Protocols, r.Protocols+concrete)},
+		{name: "Constrained generics", value: fmt.Sprintf("%d generic funcs", r.Generics), score: capped(r.Generics, max1(r.TotalTypes))},
+		{name: "`some` usage", value: fmt.Sprintf("%d usages", r.Some), score: capped(r.Some, max1(r.TotalTypes))},
+		{name: "`associatedtype`", value: fmt.Sprintf("%d / %d protocols", r.Assoc, r.Protocols), score: condRatio(r.Protocols > 0, r.Assoc, r.Protocols)},
+		{name: "Protocol extensions", value: fmt.Sprintf("%d extensions", r.Extensions), score: capped(r.Extensions, max1(r.TotalTypes))},
+		{section: "Value Semantics · 30%"},
+		{name: "Struct vs Class ratio", value: fmt.Sprintf("%d structs · %d classes", r.Structs, r.Classes), score: ratio(r.Structs, r.Structs+r.Classes)},
+		{name: "`final` classes", value: fmt.Sprintf("%d / %d classes", r.Final, r.Classes), score: ratio(r.Final, max1(r.Classes))},
+		{name: "Enums (value type)", value: fmt.Sprintf("%d enums", r.Enums), info: true},
+		{section: "Anti-inheritance · 15%"},
+		{name: "`override` density", lower: true, value: fmt.Sprintf("%d in %d classes", r.Override, r.Classes), score: clamp01(1.0 - capped(r.Override, max1(r.Classes)))},
+		{name: "NSObject inheritance", lower: true, value: fmt.Sprintf("%d / %d classes", r.NSObject, r.Classes), score: clamp01(1.0 - ratio(r.NSObject, max1(r.Classes)))},
+		{section: "Counter-signals"},
+		{name: "⚠ Singletons (static shared/instance)", value: fmt.Sprintf("%d found%s", r.Singletons, note), info: true},
+	}
+}
 
-	b.WriteString(`</tbody></table></div>`)
+// RenderMarkdown mirrors RenderHTML: verdict, the OOP↔POP position, the three
+// weighted categories and the metrics table.
+func (Module) RenderMarkdown(res any) string {
+	r, ok := res.(Result)
+	if !ok {
+		return ""
+	}
+	if !r.HasData() {
+		return "No Swift types found to place on the OOP–POP spectrum.\n\n"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "**%s** — %d%% protocol-oriented · %d%% object-oriented (style signal across %d types)\n\n", r.Verdict, r.POPScore, 100-r.POPScore, r.TotalTypes)
+	b.WriteString("| Category | Score | Weight |\n|----------|------:|-------:|\n")
+	fmt.Fprintf(&b, "| Protocol Design | %d%% | 55%% |\n| Value Semantics | %d%% | 30%% |\n| Anti-inheritance | %d%% | 15%% |\n\n", r.ProtoDesignScore, r.ValueScore, r.AntiInheritScore)
+	b.WriteString("| # | Metric | Value | POP Score | Signal |\n|--:|--------|-------|----------:|--------|\n")
+	n := 0
+	for _, row := range metricRows(r) {
+		switch {
+		case row.section != "":
+			fmt.Fprintf(&b, "| | **%s** | | | |\n", row.section)
+		case row.info:
+			n++
+			fmt.Fprintf(&b, "| %d | %s | %s | | |\n", n, row.mdName(), row.value)
+		default:
+			n++
+			p := pct(row.score)
+			fmt.Fprintf(&b, "| %d | %s | %s | %d%% | %s |\n", n, row.mdName(), row.value, p, signalLabel(p))
+		}
+	}
+	b.WriteString("\n")
 	return b.String()
+}
+
+func (r popRow) mdName() string {
+	if r.lower {
+		return r.name + " (↓ lower = POP)"
+	}
+	return r.name
+}
+
+func signalLabel(p int) string {
+	switch {
+	case p >= 65:
+		return "POP"
+	case p >= 40:
+		return "Mixed"
+	default:
+		return "OOP"
+	}
 }
 
 // ── render helpers ─────────────────────────────────────────────────────────

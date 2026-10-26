@@ -348,16 +348,8 @@ func (Module) RenderMarkdown(res any) string {
 				l.Icon, l.Name, l.FileCount, fmtNumMD(l.LineCount))
 		}
 		b.WriteString("\n")
-	} else if r.Mode == "client" && len(r.Patterns) > 0 {
-		b.WriteString("#### Patterns\n\n")
-		b.WriteString("| Pattern | Confidence |\n")
-		b.WriteString("|---------|----------:|\n")
-		for _, p := range r.Patterns {
-			if p.Confidence >= confidenceThreshold {
-				fmt.Fprintf(&b, "| %s | %.0f%% |\n", p.Name, p.Confidence*100)
-			}
-		}
-		b.WriteString("\n")
+	} else {
+		b.WriteString(r.PatternsMarkdown())
 	}
 	if len(r.Components) > 0 {
 		b.WriteString("#### Components\n\n")
@@ -384,6 +376,25 @@ func (Module) RenderMarkdown(res any) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// PatternsMarkdown is the table of detected client architecture patterns
+// (MVVM, VIPER, …) with their confidence; "" for a backend result or when none
+// clears the threshold.
+func (r Result) PatternsMarkdown() string {
+	if r.Mode != "client" || len(r.Patterns) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, p := range r.Patterns {
+		if p.Confidence >= confidenceThreshold {
+			fmt.Fprintf(&b, "| %s | %.0f%% |\n", p.Name, p.Confidence*100)
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "#### Patterns\n\n| Pattern | Confidence |\n|---------|----------:|\n" + b.String() + "\n"
 }
 
 // fmtNumMD formats an integer with comma thousands separators.

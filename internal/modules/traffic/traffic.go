@@ -150,14 +150,30 @@ func (Module) RenderMarkdown(res any) string {
 	if !ok || !r.HasData() {
 		return ""
 	}
+	return r.MarkdownTables(nil)
+}
+
+// MarkdownTables is the Inbound / Outbound pair of tables the HTML panel draws.
+// spec, when non-nil, adds a "Spec" column to the inbound table: it returns the
+// cell text for one route (✅ documented · ❓ not found in any spec).
+func (r Result) MarkdownTables(spec func(Entry) string) string {
 	var b strings.Builder
-	renderTrafficTableMD := func(title string, entries []Entry) {
+	fmt.Fprintf(&b, "%d inbound · %d outbound connection signals detected from string literals\n\n", len(r.Inbound), len(r.Outbound))
+	table := func(title string, entries []Entry, withSpec bool) {
+		fmt.Fprintf(&b, "#### %s", title)
+		if len(entries) > 0 {
+			fmt.Fprintf(&b, " (%d)", len(entries))
+		}
+		b.WriteString("\n\n")
 		if len(entries) == 0 {
+			b.WriteString("— No signals detected\n\n")
 			return
 		}
-		fmt.Fprintf(&b, "#### %s\n\n", title)
-		b.WriteString("| URI / Pattern | Protocol | Format | Module | File |\n")
-		b.WriteString("|---------------|----------|--------|--------|------|\n")
+		if withSpec {
+			b.WriteString("| URI / Pattern | Protocol | Format | Spec | Module | File |\n|---------------|----------|--------|:----:|--------|------|\n")
+		} else {
+			b.WriteString("| URI / Pattern | Protocol | Format | Module | File |\n|---------------|----------|--------|--------|------|\n")
+		}
 		for _, e := range entries {
 			uri := e.URI
 			if e.Port != "" && !strings.Contains(uri, e.Port) {
@@ -167,13 +183,18 @@ func (Module) RenderMarkdown(res any) string {
 			if mod == "" {
 				mod = "root"
 			}
-			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n",
-				mdCell(uri), mdCell(e.Protocol), mdCell(e.DataFmt), mdCell(mod), mdCell(fileCellMD(e)))
+			if withSpec {
+				fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n",
+					mdCell(uri), mdCell(e.Protocol), mdCell(e.DataFmt), spec(e), mdCell(mod), mdCell(fileCellMD(e)))
+			} else {
+				fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n",
+					mdCell(uri), mdCell(e.Protocol), mdCell(e.DataFmt), mdCell(mod), mdCell(fileCellMD(e)))
+			}
 		}
 		b.WriteString("\n")
 	}
-	renderTrafficTableMD("📥 Inbound", r.Inbound)
-	renderTrafficTableMD("📤 Outbound", r.Outbound)
+	table("📥 Inbound", r.Inbound, spec != nil)
+	table("📤 Outbound", r.Outbound, false)
 	return b.String()
 }
 

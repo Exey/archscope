@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/exey/archscope/internal/report"
+	"github.com/exey/archscope/internal/report/markdown"
 	"github.com/exey/archscope/internal/result"
 )
 
@@ -69,6 +70,12 @@ func Render(res *result.AnalysisResult) string {
 	fmt.Fprintf(&b, `<h1>%s</h1>`, esc(res.ProjectName))
 	b.WriteString(`</div>`)
 	b.WriteString(`<div class="as-head__actions">`)
+	// "MD": downloads the repo-wide cards as one Markdown file. The document sits
+	// in a hidden <textarea>, so it works offline from the saved report.
+	fmt.Fprintf(&b, `<div class="as-theme-seg"><button type="button" id="as-md-global" class="as-seg-btn" data-md-src="as-global-md" data-md-file="%s" `+
+		`title="Download the global report as Markdown — the repo-wide cards only; every platform card has its own MD view">⬇ MD</button></div>`,
+		esc(slugFile(res.ProjectName)+"-global.md"))
+	fmt.Fprintf(&b, `<textarea id="as-global-md" hidden readonly>%s</textarea>`, esc(markdown.RenderGlobal(res)))
 	b.WriteString(`<div class="as-theme-seg">` +
 		`<button id="as-theme-dark" class="as-seg-btn as-seg-btn--active">🌙</button>` +
 		`<button id="as-theme-light" class="as-seg-btn">☀</button>` +
@@ -85,41 +92,11 @@ func Render(res *result.AnalysisResult) string {
 	fmt.Fprintf(&b, `<div class="as-sourceline">%s%s</div>`,
 		esc(src), projectTypeSuffix(langs))
 
-	// Global cards
-	b.WriteString(renderGlobalCards(res))
-
-	// Programming Culture: per-language seniority read + priority issues —
-	// leads the report, ahead of the tech stack, as the highest-level summary.
-	b.WriteString(renderProgrammingCulture(res))
-
-	// Tech stack + packages & modules (repo-wide)
-	b.WriteString(renderStackAndModules(res))
-
-	// Technical Radar: mermaid radar-beta of the detected stack
-	b.WriteString(renderTechRadarSection(res))
-
-	// Global architecture graph (modules + tech nodes)
-	b.WriteString(renderGlobalArchGraph(res))
-
-	// Global security index (gauge + categories) — before DevOps so the
-	// Danger Index can link into the Weaknesses card below it.
-	b.WriteString(renderSecurityIndex(res))
-
-	// DevOps: detected tools + Dockerfile/Helm/Compose static-analysis matrix
-	b.WriteString(renderDevOpsSection(res))
-
-	// OpenAPI / Swagger specifications (vacuum's rules, ported)
-	b.WriteString(renderOpenAPISection(res))
-
-	// VS Code path editor (global, shown once before the platform tabs)
-	b.WriteString(renderVSCodePathCard(res.RootPath))
-
-	// Contribution calendar — one row per platform, 52-week heat map
-	b.WriteString(renderContributionsCard(res))
-
-	// Infrastructure Platforms: one collapsible card per detected Kubernetes
-	// cluster (folded by default), shown above the language Platform cards.
-	b.WriteString(renderInfraPlatforms(res.K8sLint))
+	// The repo-wide cards, in the order report.Cards lists them: summary,
+	// Programming Culture (leads, as the highest-level read), tech stack, radar,
+	// architecture graph, Danger Index, DevOps, OpenAPI, VS Code path editor,
+	// contributions, infrastructure platforms.
+	b.WriteString(renderGlobalCardList(res))
 
 	// Platform tabs (Git Analysis + Modules & Microservices are per-platform inside)
 	b.WriteString(renderTabs(res))
@@ -153,4 +130,22 @@ func projectTypeSuffix(langs string) string {
 		return ""
 	}
 	return "  ·  " + esc(langs)
+}
+
+// slugFile makes a project or platform name safe for a download file name.
+func slugFile(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "archscope"
+	}
+	return out
 }

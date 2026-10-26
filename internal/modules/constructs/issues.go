@@ -211,35 +211,51 @@ func writeIssueSubcard(b *strings.Builder, key, icon, title, hint string, issues
 	writeSubClose(b)
 }
 
-// issuesMarkdown renders issues grouped by rule as a markdown table.
-func issuesMarkdown(b *strings.Builder, title string, issues []CSIssue, withSev bool, maxLoc int) {
+// mdSubOpen opens one titled subcard of a Markdown panel: a heading with its
+// hit count, then the hint, as writeSubOpen does for HTML.
+func mdSubOpen(b *strings.Builder, icon, title string, count int, hint string) {
+	fmt.Fprintf(b, "#### %s %s (%d)\n\n", icon, title, count)
+	if hint != "" {
+		b.WriteString(hint + "\n\n")
+	}
+}
+
+// mdTableCell keeps a value from breaking out of a Markdown table cell.
+func mdTableCell(s string) string {
+	s = strings.ReplaceAll(s, "|", `\|`)
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r", ""), "\n", " ")
+}
+
+// issuesMarkdown is writeIssueSubcard's twin: issues grouped by rule as a
+// table — Severity · Issue · Hits · Fix · Where, the HTML table's columns.
+func issuesMarkdown(b *strings.Builder, icon, title, hint string, issues []CSIssue, withSev bool, maxLoc int) {
 	if len(issues) == 0 {
 		return
 	}
-	fmt.Fprintf(b, "%s (%d)\n\n", title, len(issues))
+	mdSubOpen(b, icon, title, len(issues), hint)
 	if withSev {
-		b.WriteString("| Severity | Issue | Hits | Locations |\n|----------|-------|-----:|-----------|\n")
+		b.WriteString("| Severity | Issue | Hits | Fix | Where |\n|----------|-------|-----:|-----|-------|\n")
 	} else {
-		b.WriteString("| Issue | Hits | Examples |\n|-------|-----:|----------|\n")
+		b.WriteString("| Issue | Hits | Fix | Where |\n|-------|-----:|-----|-------|\n")
 	}
 	for _, g := range groupIssues(issues) {
-		limit := maxLoc
 		var ex []string
 		for i, is := range g.Items {
-			if i == limit {
-				ex = append(ex, fmt.Sprintf("+%d more", len(g.Items)-limit))
+			if i == maxLoc {
+				ex = append(ex, fmt.Sprintf("+%d more", len(g.Items)-maxLoc))
 				break
 			}
 			loc := fmt.Sprintf("%s:%d", baseName(is.FilePath), is.Line)
 			if is.Detail != "" {
 				loc += " (" + is.Detail + ")"
 			}
-			ex = append(ex, loc)
+			ex = append(ex, mdTableCell(loc))
 		}
+		where := strings.Join(ex, "<br>")
 		if withSev {
-			fmt.Fprintf(b, "| %s | %s | %d | %s |\n", sevLabel(g.Severity), g.Rule, len(g.Items), strings.Join(ex, "<br>"))
+			fmt.Fprintf(b, "| %s | %s | %d | %s | %s |\n", sevLabel(g.Severity), mdTableCell(g.Rule), len(g.Items), mdTableCell(g.Message), where)
 		} else {
-			fmt.Fprintf(b, "| %s | %d | %s |\n", g.Rule, len(g.Items), strings.Join(ex, "<br>"))
+			fmt.Fprintf(b, "| %s | %d | %s | %s |\n", mdTableCell(g.Rule), len(g.Items), mdTableCell(g.Message), where)
 		}
 	}
 	b.WriteString("\n")
@@ -310,19 +326,22 @@ func issueGroupsByName(issues []CSIssue) []namedIssues {
 	return out
 }
 
-// issueCardMarkdown is writeIssueCard's markdown twin.
-func issueCardMarkdown(b *strings.Builder, noun string, issues []CSIssue) {
+// issueCardMarkdown is writeIssueCard's markdown twin: the same summary line,
+// the same per-group subcards, and the same "✅ none found" confirmation.
+func issueCardMarkdown(b *strings.Builder, icon, noun string, issues []CSIssue) {
 	if len(issues) == 0 {
+		fmt.Fprintf(b, "✅ No %s issues detected in the scanned files.\n\n", noun)
 		return
 	}
 	h, m, l := issueSevCounts(issues)
-	fmt.Fprintf(b, "**%d %s issues** (%dH / %dM / %dL)\n\n", len(issues), noun, h, m, l)
+	fmt.Fprintf(b, "%s **%d** %s issue%s (%dH / %dM / %dL)\n\n", icon, len(issues), noun, plural(len(issues), "", "s"), h, m, l)
 	for _, grp := range issueGroupsByName(issues) {
-		title := grp.name
-		if title == "" {
-			title = noun
+		if grp.name == "" {
+			issuesMarkdown(b, "", noun, "", grp.items, true, maxIssueLocations)
+			continue
 		}
-		issuesMarkdown(b, title, grp.items, true, maxIssueLocations)
+		info := groupInfo[grp.name]
+		issuesMarkdown(b, info.icon, grp.name, info.hint, grp.items, true, maxIssueLocations)
 	}
 }
 

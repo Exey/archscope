@@ -13,6 +13,12 @@ go run ./cmd/archscope ~/code --open
 
 `~/code` is any directory: a single app, a service repo, or a **parent folder** where several repositories are cloned side by side. Modules/services are auto-detected up to 3 levels deep, so `services/<svc>/`, `src/<module>/` and monorepo layouts all work. `--open` launches the finished report in your browser. Use `--format md` for a Markdown report, `--format sarif` for SARIF 2.1.0, or `--format both` for HTML + SARIF together.
 
+**Markdown from the report itself.** Every export carries what its HTML shows, because both are built from the same card table (see *Adding a card* below):
+- **⬇ MD** in the header, left of the 🌙/☀ toggle — downloads the **global report** (`<project>-global.md`): summary, 🔰 Programming Culture (with how each score is computed, 📈 Evolution and priority issues), 🧰 tech stack, 📡 radar, 🛡️ Danger Index with the CWE index, ☁️ DevOps, 📜 OpenAPI, 📅 contributions and ☸️ infrastructure — no per-platform sections.
+- **MD** on each platform card — shows that platform as Markdown, and **⬇ MD** next to it downloads it (`<project>-<platform>.md`).
+- **⬇ Export MD** in 📈 Evolution — the comparison or timeline on screen.
+- `--format md` — all of the above in one file.
+
 ![report.png](https://i.postimg.cc/vb5zbqx3/collage-4columns.png)
 
 ## 📈 Evolution — what got better, what got worse
@@ -248,6 +254,15 @@ Adding a language (e.g. `rust.go`) needs no central edit — importing the packa
 
 C, C++, and Objective-C all share the `.h` extension. Since a `LanguageSpec` normally owns its extensions exclusively, `.h` is instead resolved per-file by content: each of the three specs registers a `Sniff` predicate (ObjC signals like `@interface`/`#import`, C++ signals like `class`/`namespace`/`std::`), and whichever one matches first wins — plain C is the fallback when neither matches. See `langspec.Registry.ResolveShared` and `internal/lang/{c,cpp,objc}.go`.
 
+### Adding a card (HTML and Markdown together)
+
+The report's cards live in one table, `report.Cards` in `internal/report/cards.go`. The HTML document, the header **⬇ MD** button, each platform's MD view and `--format md` all walk that table, so a card added once shows up everywhere, in the order you place it.
+
+1. **Add a `Card`** to `report.Cards` at the position it should appear (`Scope: report.Global` for a repo-wide card, `report.Platform` for one inside each platform card).
+2. **A report module needs nothing more.** Give the `Card` its `Module` ID and the panel's `RenderHTML` / `RenderMarkdown` do the rest — `RenderMarkdown` is part of the `modules.ReportModule` interface, so a module that lacks one doesn't compile, and it must show whatever its HTML shows, including the "✅ nothing found" state.
+3. **Any other card** is registered in `internal/report/html/cards.go` with **one call that takes both renderers**: `report.Add("id", renderHTML, renderMarkdown)`. Pass `nil` for a format only if the `Card` carries a `NoHTML` / `NoMarkdown` reason (the VS Code path editor is the one example). Write the Markdown next to the HTML (`cards_md_global.go`, `cards_md_platform.go`) and build both from the same row-builder, so they read the same data.
+4. **Checks that keep you honest:** a `Card` nobody registered panics at the first render, naming it; `TestEveryCardIsInBothFormats` runs the real pipeline over a Go + Python + TypeScript project and fails if a card has HTML but no Markdown (or the reverse); `TestModulePanelsCarryBothFormats` does the same for module panels. If your card needs a richer fixture, extend `writeProject` in `internal/report/html/parity_test.go`.
+
 ### Adding a new language
 
 Most of it really is "drop a file in `internal/lang/` and its `init()` self-registers" — no central dispatch table to edit. The checklist below is everything a *new* language still needs, drawn from adding C/C++ support:
@@ -473,10 +488,10 @@ internal/
     speccoverage/  API spec coverage: OpenAPI · gRPC · GraphQL vs. code routes (Go · Python · Java · Kotlin · TypeScript)
     traffic/       HTTP/gRPC/WebSocket route + connection detection, plus 🩺 Traffic Health scoring
   result/      AnalysisResult aggregate + pipeline (Run / RunWithProgress)
-  report/      shared HTML theme
-    html/        HTML writer (tabs, panels, SVG dependency graph, git section)
+  report/      shared HTML theme + cards.go, the card table both formats are built from
+    html/        HTML writer (tabs, panels, SVG dependency graph, git section) and the card registrations (cards.go: each card's HTML and Markdown side by side)
     sarif/       SARIF 2.1.0 writer
-    markdown/    Markdown writer (mirrors HTML content; no CSS/JS)
+    markdown/    Markdown document composer (title, platform sections, CWE index; no CSS/JS)
 testdata/      go-sample · multi (5-language) · arch-sample (MVVM + patterns)
 ```
 

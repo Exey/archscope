@@ -235,8 +235,8 @@ func (Module) RenderMarkdown(res any) string {
 
 	missing := len(r.Extra)
 	implemented := len(r.ImplOps) - len(r.Extra)
-	fmt.Fprintf(&b, "**%d%% code→spec** · %d endpoint in spec · %d missing spec entries · %d spec files\n\n",
-		r.SpecReady, implemented, missing, r.FileCount)
+	fmt.Fprintf(&b, "**%d%% — %s** (code→spec: what %% of code routes have a spec entry)\n\n%d missing spec entries for endpoint · %d endpoint in spec · %d spec files\n\n",
+		r.SpecReady, coverageVerdict(r.SpecReady, len(r.Extra)), missing, implemented, r.FileCount)
 
 	if len(r.SpecOps) > 0 {
 		seen := map[string]string{}

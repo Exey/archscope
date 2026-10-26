@@ -812,21 +812,25 @@ func mlLocationsMD(locs []mlLocation) string {
 	return out
 }
 
-// RenderMarkdown renders one row per rule, with every occurrence's location.
+// RenderMarkdown is RenderHTML's twin: the summary line and one row per rule,
+// with its fix advice and every occurrence's location — or the "✅ none" line.
 func (MemoryLeaks) RenderMarkdown(res any) string {
 	r, ok := res.(MemoryLeaksReport)
-	if !ok || !r.HasData() {
+	if !ok {
 		return ""
 	}
+	if !r.HasData() {
+		return "✅ No potential memory leaks detected in the scanned files.\n\n"
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "**%d potential leaks** (%dH / %dM / %dL)\n\n", r.Total(), r.High, r.Medium, r.Low)
-	b.WriteString("| Severity | Issue | Locations |\n|----------|-------|-----------|\n")
+	fmt.Fprintf(&b, "💧 **%d** potential leak%s (%dH / %dM / %dL)\n\n", r.Total(), plural(r.Total(), "", "s"), r.High, r.Medium, r.Low)
+	b.WriteString("| Severity | Issue | Fix | Locations |\n|----------|-------|-----|-----------|\n")
 	groups, extra := mlCap(groupMLFindings(r.Findings), maxViolationsShown)
 	for _, g := range groups {
-		fmt.Fprintf(&b, "| %s | %s | %s |\n", g.Severity, g.Label, mlLocationsMD(g.Locations))
+		fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", strings.ToUpper(string(g.Severity)), mdTableCell(g.Label), mdTableCell(g.Advice), mdTableCell(mlLocationsMD(g.Locations)))
 	}
 	if extra > 0 {
-		fmt.Fprintf(&b, "| | | +%d more |\n", extra)
+		fmt.Fprintf(&b, "| | | | … and %d more |\n", extra)
 	}
 	b.WriteString("\n")
 	return b.String()

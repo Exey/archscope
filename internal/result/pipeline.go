@@ -315,6 +315,7 @@ func runModules(scan *scanner.ScanResult, files []*parser.ParsedFile, step func(
 				ModuleID:  rp.ModuleID,
 				Title:     rp.Title,
 				HTML:      rp.HTML,
+				MD:        rp.MD,
 				Cards:     rp.Cards,
 				RawResult: rp.Result,
 			})

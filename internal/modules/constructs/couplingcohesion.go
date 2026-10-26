@@ -361,8 +361,18 @@ func (CouplingCohesion) RenderHTML(res any) string {
 	return b.String()
 }
 
-func writeCouplingOffenders(b *strings.Builder, mods []ModuleCoupling, types []TypeCoupling) {
-	var rows []string
+// couplingHot is one row of the Coupling hotspots table: a module with high
+// efferent coupling, or a type with high CBO.
+type couplingHot struct {
+	name, metric, instability string
+	file                      string
+	line                      int
+}
+
+// couplingHotspots picks the rows of the Coupling hotspots table. Shared by the
+// HTML table and its Markdown twin.
+func couplingHotspots(mods []ModuleCoupling, types []TypeCoupling) []couplingHot {
+	var rows []couplingHot
 	shown := 0
 	for _, m := range mods {
 		if m.Ce <= 8 {
@@ -371,8 +381,7 @@ func writeCouplingOffenders(b *strings.Builder, mods []ModuleCoupling, types []T
 		if shown == maxOffendersShown {
 			break
 		}
-		rows = append(rows, fmt.Sprintf(`<tr><td class="mono">%s</td><td>Ca %d / Ce %d</td><td>I %.2f</td><td>—</td></tr>`,
-			html.EscapeString(m.Name), m.Ca, m.Ce, m.Instability))
+		rows = append(rows, couplingHot{name: m.Name, metric: fmt.Sprintf("Ca %d / Ce %d", m.Ca, m.Ce), instability: fmt.Sprintf("I %.2f", m.Instability)})
 		shown++
 	}
 	for _, t := range types {
@@ -382,24 +391,15 @@ func writeCouplingOffenders(b *strings.Builder, mods []ModuleCoupling, types []T
 		if shown == maxOffendersShown {
 			break
 		}
-		loc := occurrenceLink(fmt.Sprintf("%s:%d", baseName(t.FilePath), t.Line), t.FilePath, t.Line)
-		rows = append(rows, fmt.Sprintf(`<tr><td class="mono">%s</td><td>CBO %d</td><td>—</td><td>%s</td></tr>`,
-			html.EscapeString(t.TypeName), t.CBO, loc))
+		rows = append(rows, couplingHot{name: t.TypeName, metric: fmt.Sprintf("CBO %d", t.CBO), file: t.FilePath, line: t.Line})
 		shown++
 	}
-	if len(rows) == 0 {
-		return
-	}
-	fmt.Fprintf(b, `<div class="as-cx__viol-title">Coupling hotspots <span class="as-count">(%d)</span></div>`, len(rows))
-	b.WriteString(`<table class="as-table as-cx__table"><thead><tr><th>Module / Type</th><th>Ca/Ce or CBO</th><th>Instability</th><th>Location</th></tr></thead><tbody>`)
-	for _, row := range rows {
-		b.WriteString(row)
-	}
-	b.WriteString(`</tbody></table>`)
+	return rows
 }
 
-func writeCohesionOffenders(b *strings.Builder, types []TypeCohesion) {
-	var rows []string
+// cohesionHotspots picks the rows of the Cohesion hotspots table.
+func cohesionHotspots(types []TypeCohesion) []TypeCohesion {
+	var rows []TypeCohesion
 	for i, t := range types {
 		if t.NormalizedLCOM <= 0.5 && t.CAM >= 0.5 {
 			continue
@@ -407,17 +407,42 @@ func writeCohesionOffenders(b *strings.Builder, types []TypeCohesion) {
 		if i == maxOffendersShown {
 			break
 		}
-		loc := occurrenceLink(fmt.Sprintf("%s:%d", baseName(t.FilePath), t.Line), t.FilePath, t.Line)
-		rows = append(rows, fmt.Sprintf(`<tr><td class="mono">%s</td><td>LCOM %d / LCOM4 %d</td><td>%.2f</td><td>%.2f</td><td>%s</td></tr>`,
-			html.EscapeString(t.TypeName), t.LCOM, t.LCOM4, t.NormalizedLCOM, t.CAM, loc))
+		rows = append(rows, t)
 	}
-	if len(rows) == 0 {
+	return rows
+}
+
+func writeCouplingOffenders(b *strings.Builder, mods []ModuleCoupling, types []TypeCoupling) {
+	hot := couplingHotspots(mods, types)
+	if len(hot) == 0 {
 		return
 	}
-	fmt.Fprintf(b, `<div class="as-cx__viol-title">Cohesion hotspots <span class="as-count">(%d)</span></div>`, len(rows))
+	fmt.Fprintf(b, `<div class="as-cx__viol-title">Coupling hotspots <span class="as-count">(%d)</span></div>`, len(hot))
+	b.WriteString(`<table class="as-table as-cx__table"><thead><tr><th>Module / Type</th><th>Ca/Ce or CBO</th><th>Instability</th><th>Location</th></tr></thead><tbody>`)
+	for _, h := range hot {
+		inst, loc := h.instability, "—"
+		if inst == "" {
+			inst = "—"
+		}
+		if h.file != "" {
+			loc = occurrenceLink(fmt.Sprintf("%s:%d", baseName(h.file), h.line), h.file, h.line)
+		}
+		fmt.Fprintf(b, `<tr><td class="mono">%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`, html.EscapeString(h.name), h.metric, inst, loc)
+	}
+	b.WriteString(`</tbody></table>`)
+}
+
+func writeCohesionOffenders(b *strings.Builder, types []TypeCohesion) {
+	hot := cohesionHotspots(types)
+	if len(hot) == 0 {
+		return
+	}
+	fmt.Fprintf(b, `<div class="as-cx__viol-title">Cohesion hotspots <span class="as-count">(%d)</span></div>`, len(hot))
 	b.WriteString(`<table class="as-table as-cx__table"><thead><tr><th>Type</th><th>LCOM / LCOM4</th><th>Norm. LCOM</th><th>CAM</th><th>Location</th></tr></thead><tbody>`)
-	for _, row := range rows {
-		b.WriteString(row)
+	for _, t := range hot {
+		loc := occurrenceLink(fmt.Sprintf("%s:%d", baseName(t.FilePath), t.Line), t.FilePath, t.Line)
+		fmt.Fprintf(b, `<tr><td class="mono">%s</td><td>LCOM %d / LCOM4 %d</td><td>%.2f</td><td>%.2f</td><td>%s</td></tr>`,
+			html.EscapeString(t.TypeName), t.LCOM, t.LCOM4, t.NormalizedLCOM, t.CAM, loc)
 	}
 	b.WriteString(`</tbody></table>`)
 }
@@ -440,20 +465,41 @@ func (CouplingCohesion) RenderMarkdown(res any) string {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "**Coupling:** %d%%", r.CouplingScore)
+	fmt.Fprintf(&b, "**🔗 Coupling:** %d%%", r.CouplingScore)
 	if r.HasCohesionData {
-		fmt.Fprintf(&b, " · **Cohesion:** %d%%\n", r.CohesionScore)
+		fmt.Fprintf(&b, " · **🧬 Cohesion:** %d%%\n\n", r.CohesionScore)
 	} else {
-		b.WriteString(" · **Cohesion:** N/A (not available for this language yet)\n")
+		b.WriteString(" · **🧬 Cohesion:** N/A — needs per-method field/call data, not available for this language yet.\n\n")
 	}
-	if len(r.Modules) > 0 {
-		b.WriteString("\n| Module | Ca | Ce | Instability |\n|---|---|---|---|\n")
-		for i, m := range r.Modules {
-			if i == maxOffendersShown {
-				break
+	b.WriteString("**🔗 Coupling**\n\n")
+	for _, g := range couplingGlossary {
+		fmt.Fprintf(&b, "- **%s** — %s\n", g.term, g.desc)
+	}
+	b.WriteString("\n**🧬 Cohesion**\n\n")
+	for _, g := range cohesionGlossary {
+		fmt.Fprintf(&b, "- **%s** — %s\n", g.term, g.desc)
+	}
+	b.WriteString("\n")
+	if hot := couplingHotspots(r.Modules, r.Types); len(hot) > 0 {
+		fmt.Fprintf(&b, "#### Coupling hotspots (%d)\n\n| Module / Type | Ca/Ce or CBO | Instability | Location |\n|---------------|--------------|-------------|----------|\n", len(hot))
+		for _, h := range hot {
+			inst, loc := h.instability, "—"
+			if inst == "" {
+				inst = "—"
 			}
-			fmt.Fprintf(&b, "| %s | %d | %d | %.2f |\n", m.Name, m.Ca, m.Ce, m.Instability)
+			if h.file != "" {
+				loc = fmt.Sprintf("%s:%d", baseName(h.file), h.line)
+			}
+			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", mdTableCell(h.name), h.metric, inst, loc)
 		}
+		b.WriteString("\n")
+	}
+	if hot := cohesionHotspots(r.Cohesion); len(hot) > 0 {
+		fmt.Fprintf(&b, "#### Cohesion hotspots (%d)\n\n| Type | LCOM / LCOM4 | Norm. LCOM | CAM | Location |\n|------|--------------|-----------:|----:|----------|\n", len(hot))
+		for _, t := range hot {
+			fmt.Fprintf(&b, "| %s | LCOM %d / LCOM4 %d | %.2f | %.2f | %s:%d |\n", mdTableCell(t.TypeName), t.LCOM, t.LCOM4, t.NormalizedLCOM, t.CAM, baseName(t.FilePath), t.Line)
+		}
+		b.WriteString("\n")
 	}
 	return b.String()
 }
