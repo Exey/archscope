@@ -11,7 +11,7 @@ cd archscope
 go run ./cmd/archscope ~/code --open
 ```
 
-`~/code` is any directory: a single app, a service repo, or a **parent folder** where several repositories are cloned side by side. Modules/services are auto-detected up to 3 levels deep, so `services/<svc>/`, `src/<module>/` and monorepo layouts all work. `--open` launches the finished report in your browser. Use `--format md` for a Markdown report, `--format sarif` for SARIF 2.1.0, or `--format both` for HTML + SARIF together.
+`~/code` is any directory: a single app, a service repo, or a **parent folder** where several repositories are cloned side by side. Modules/services are auto-detected up to 3 levels deep, so `services/<svc>/`, `src/<module>/` and monorepo layouts all work. `--open` launches the finished report in your browser. `--browser chrome` (or `firefox`, `safari`, `edge`, `brave`, `opera`, any app name) opens it in that browser instead of the default and implies `--open`. Use `--format md` for a Markdown report, `--format sarif` for SARIF 2.1.0, or `--format both` for HTML + SARIF together.
 
 **Markdown from the report itself.** Every export carries what its HTML shows, because both are built from the same card table (see *Adding a card* below):
 - **⬇ MD** in the header, left of the 🌙/☀ toggle — downloads the **global report** (`<project>-global.md`): summary, 🔰 Programming Culture (with how each score is computed, 📈 Evolution and priority issues), 🧰 tech stack, 📡 radar, 🛡️ Danger Index with the CWE index, ☁️ DevOps, 📜 OpenAPI, 📅 contributions and ☸️ infrastructure — no per-platform sections.
@@ -253,6 +253,8 @@ Each language is **one self-registering file** in `internal/lang/`. A `LanguageS
 Adding a language (e.g. `rust.go`) needs no central edit — importing the package triggers its `init()`. The `Client` flag is what routes a tab to pattern detection vs. the layered backend view; the module noun/icon control how its modules are labeled.
 
 C, C++, and Objective-C all share the `.h` extension. Since a `LanguageSpec` normally owns its extensions exclusively, `.h` is instead resolved per-file by content: each of the three specs registers a `Sniff` predicate (ObjC signals like `@interface`/`#import`, C++ signals like `class`/`namespace`/`std::`), and whichever one matches first wins — plain C is the fallback when neither matches. See `langspec.Registry.ResolveShared` and `internal/lang/{c,cpp,objc}.go`.
+
+**Quality of the added code (review mode).** Above *Nothing got worse* the 📈 Evolution card shows how the merge request's new functions fare: the share with a doc comment (or Python docstring), the share a test file refers to by name (a heuristic, not line coverage), the share of *complex* new functions (cyclomatic > 10 or 50+ lines) that are documented, and added source vs test lines. Every complex new function without a doc comment is also a review item on its file, with an MR line link and a code quote — the rule being that a complex method always gets a doc.
 
 ### Adding a card (HTML and Markdown together)
 

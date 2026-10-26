@@ -192,7 +192,11 @@ func writeComparisonBody(b *strings.Builder, c evolution.Comparison, rv *evoluti
 	}
 	b.WriteString(`</div>`)
 
-	// Step 4 — below it all: what got worse, and where it was added.
+	// Step 4 — how well the added code is documented and tested, then what got
+	// worse and where it was added.
+	if rv != nil && c.IsReview() {
+		writeQuality(b, rv.Quality)
+	}
 	writeDetails(b, c, rv != nil)
 }
 

@@ -224,3 +224,33 @@ func writeTimelinePane(b *strings.Builder, tl evolution.Timeline) {
 		b.WriteString(`</details>`)
 	}
 }
+
+// writeQuality is the "Quality of the added code" strip of a review: doc and test
+// coverage of the new functions, and the complex ones still missing a doc comment,
+// each with its MR link.
+func writeQuality(b *strings.Builder, q *evolution.Quality) {
+	if q.Empty() {
+		return
+	}
+	chip := func(icon, label string, n, d int, tip string) {
+		pct := evolution.Pct(n, d)
+		cls := "up"
+		if pct < 50 {
+			cls = "down"
+		}
+		fmt.Fprintf(b, `<span class="as-evo__chip as-evo__chip--%s" title="%s">%s %s %d/%d · %d%%</span> `, cls, esc(tip), icon, esc(label), n, d, pct)
+	}
+	b.WriteString(`<div class="as-rv__q"><div class="as-evo__dtitle">Quality of the added code</div><div>`)
+	chip("📝", "documented", q.Documented, q.Funcs, "New functions with a doc comment directly above (or a Python docstring)")
+	chip("🧪", "referenced by tests", q.Tested, q.Funcs, "New functions whose name a test file mentions — a heuristic, not line coverage")
+	chip("🌀", "complex documented", q.ComplexDocumented, q.Complex, "New functions with cyclomatic complexity over 10 or 50+ lines")
+	fmt.Fprintf(b, `<span class="as-evo__info">+%s source · +%s test lines</span></div>`, fmtNum(q.AddedSrc), fmtNum(q.AddedTest))
+	if len(q.Undocumented) > 0 {
+		fmt.Fprintf(b, `<ul class="as-evo__items">`)
+		for _, it := range q.Undocumented {
+			fmt.Fprintf(b, `<li>%s</li>`, itemHTML(it, "", true))
+		}
+		b.WriteString(`</ul>`)
+	}
+	b.WriteString(`</div>`)
+}

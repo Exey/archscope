@@ -156,6 +156,7 @@ func RunReview(res *AnalysisResult, cfg config.Config, ref, against string, extr
 	evolution.EnrichReview(repo, sub, info.BaseSHA, info.HeadSHA, &comps[idx])
 	info.AttachFiles(repo, comps[idx])
 	attachSpecFindings(res, repo, &info)
+	attachQuality(res, repo, &info)
 	res.Review = &info
 	if progress != nil {
 		progress(info.String())

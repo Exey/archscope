@@ -7,6 +7,7 @@
 // Flags:
 //
 //	--open          open the report in the default browser when done
+//	--browser <name> open the report in that browser (chrome | firefox | safari | edge | brave | opera | <app>); implies --open
 //	--output, -o    output directory (default: from config, usually "output")
 //	--format        "html" | "sarif" | "md" (comma-separated for multiple; default: html)
 //	--config        path to .archscope.json (default: .archscope.json in cwd)
@@ -94,6 +95,7 @@ func splitArgs(rawArgs []string) (target string, flagArgs []string, err error) {
 		"fail-on":  true,
 		"group-by": true,
 		"against":  true,
+		"browser":  true,
 	}
 	for i := 0; i < len(rawArgs); i++ {
 		a := rawArgs[i]
@@ -172,6 +174,7 @@ func main() {
 
 	var (
 		openFlag      bool
+		browserFlag   string
 		outputDir     string
 		format        string
 		cfgPath       string
@@ -189,6 +192,7 @@ func main() {
 	)
 
 	fs.BoolVar(&openFlag, "open", false, "open the HTML report in the browser when done")
+	fs.StringVar(&browserFlag, "browser", "", "open the report in this browser (chrome, firefox, safari, edge, brave or an app name); implies --open")
 	fs.StringVar(&outputDir, "output", "", "output directory (overrides config)")
 	fs.StringVar(&outputDir, "o", "", "output directory (shorthand for --output)")
 	fs.StringVar(&format, "format", "", "output format: html | sarif | md (comma-separated for multiple; overrides config)")
@@ -236,6 +240,11 @@ func main() {
 	}
 	if langPlatforms && groupBy == "" {
 		groupBy = "language"
+	}
+
+	browserName = browserFlag
+	if browserFlag != "" {
+		openFlag = true
 	}
 
 	if err := run(target, ref, depth, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec, reviewRef, againstRef, openFlag, renderModules, scanAllFiles, noGitPull); err != nil {
@@ -502,6 +511,7 @@ func printUsage() {
 
 Flags:
   --open              open the HTML report in the browser when done
+  --browser <name>    open it in that browser instead of the default (chrome | firefox | safari | edge | brave | opera | <app>); implies --open
   --format <fmt>      html | sarif | md (comma-separated for multiple; default: from config)
   --output, -o <dir>  output directory    (default: from config, usually "output")
   --config <file>     path to .archscope.json
@@ -524,6 +534,48 @@ Flags:
 `)
 }
 
+// browserName is the --browser choice ("" = the system default).
+var browserName string
+
+// browserCommand builds the command that opens path in the named browser, or
+// in the system default when name is empty. Friendly names (chrome, firefox,
+// safari, edge, brave) map to each OS's app or binary; anything else is passed
+// through as an application name.
+func browserCommand(goos, name, path string) *exec.Cmd {
+	key := strings.ToLower(strings.TrimSpace(name))
+	apps := map[string]string{"chrome": "Google Chrome", "firefox": "Firefox", "safari": "Safari", "edge": "Microsoft Edge", "brave": "Brave Browser", "opera": "Opera", "chromium": "Chromium", "arc": "Arc"}
+	switch goos {
+	case "darwin":
+		if key == "" {
+			return exec.Command("/usr/bin/open", path)
+		}
+		app := apps[key]
+		if app == "" {
+			app = name
+		}
+		return exec.Command("/usr/bin/open", "-a", app, path)
+	case "linux":
+		bin := "xdg-open"
+		if key != "" {
+			bin = map[string]string{"chrome": "google-chrome", "edge": "microsoft-edge", "brave": "brave-browser"}[key]
+			if bin == "" {
+				bin = key
+			}
+		}
+		return exec.Command(bin, path)
+	case "windows":
+		if key == "" {
+			return exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
+		}
+		exe := map[string]string{"chrome": "chrome", "edge": "msedge"}[key]
+		if exe == "" {
+			exe = key
+		}
+		return exec.Command("cmd", "/c", "start", "", exe, path)
+	}
+	return nil
+}
+
 func openInBrowser(path string) {
 	if _, err := os.Stat(path); err != nil {
 		fmt.Fprintf(os.Stderr, "open: file not found: %s\n", path)
@@ -531,15 +583,7 @@ func openInBrowser(path string) {
 	}
 	fmt.Printf("open: %s\n", path)
 
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("/usr/bin/open", path)
-	case "linux":
-		cmd = exec.Command("xdg-open", path)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
-	}
+	cmd := browserCommand(runtime.GOOS, browserName, path)
 	if cmd == nil {
 		return
 	}

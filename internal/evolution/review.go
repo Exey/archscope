@@ -34,6 +34,9 @@ type Review struct {
 	Project  string // group/subgroup/project
 	MRSource string // "local refs" | "ls-remote" | ""
 	Provider string // "gitlab" | "github": which host's links the report builds
+
+	// Quality is how well the code this change adds is documented and tested.
+	Quality *Quality
 }
 
 // mrRefRe matches GitLab's refs/merge-requests/N/head and GitHub's
@@ -445,6 +448,7 @@ func RenderReviewMarkdown(rv *Review) string {
 		}
 	}
 	b.WriteString("\n")
+	b.WriteString(RenderQualityMarkdown(rv.Quality))
 	return b.String()
 }
 
