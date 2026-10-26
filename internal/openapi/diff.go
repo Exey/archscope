@@ -1,6 +1,8 @@
 package openapi
 
 import (
+	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -14,12 +16,23 @@ type Change struct {
 	Detail   string // "GET /pets: response 200 property `id` removed"
 	Line     int    // line in the NEW document (the parent's line when something was removed)
 	Severity string // HIGH (breaking) | MEDIUM (warning) | LOW (info)
+
+	// Places lists the operations a grouped change shows up in (root-cause
+	// grouping: the same change reached through several endpoints is one change).
+	Places []string
+	// Question is what a reviewer has to decide about it.
+	Question string
 }
 
 const (
 	lvBreaking = "breaking"
 	lvWarning  = "warning"
 	lvInfo     = "info"
+	// lvRefactor: the schema was restructured (inline ↔ $ref / allOf) and the
+	// effective properties, types and required flags are unchanged.
+	lvRefactor = "refactor"
+	// lvDocs: descriptions and summaries only.
+	lvDocs = "docs"
 )
 
 // Diff compares two documents. ok is false when either isn't a specification.
@@ -38,7 +51,8 @@ func Diff(oldSrc, newSrc string) (changes []Change, ok bool) {
 		seen: map[string]bool{}, refSeen: map[string]bool{},
 	}
 	d.run()
-	rank := map[string]int{lvBreaking: 0, lvWarning: 1, lvInfo: 2}
+	d.out = groupChanges(d.out)
+	rank := map[string]int{lvBreaking: 0, lvWarning: 1, lvRefactor: 2, lvInfo: 3, lvDocs: 4}
 	sort.SliceStable(d.out, func(i, j int) bool {
 		if rank[d.out[i].Level] != rank[d.out[j].Level] {
 			return rank[d.out[i].Level] < rank[d.out[j].Level]
@@ -49,6 +63,10 @@ func Diff(oldSrc, newSrc string) (changes []Change, ok bool) {
 }
 
 type differ struct {
+	// shape counts changes to what a schema contains (properties, types,
+	// required flags …) — as opposed to nullability, docs or refactors — so a
+	// restructuring is only called a refactor when the shape really is the same.
+	shape   int
 	ol, nl  *linter
 	out     []Change
 	seen    map[string]bool
@@ -56,6 +74,9 @@ type differ struct {
 }
 
 func (d *differ) add(level, rule, detail string, line int) {
+	if level != lvDocs && level != lvRefactor && rule != "Now nullable" && rule != "No longer nullable" {
+		d.shape++
+	}
 	key := level + "|" + rule + "|" + detail
 	if d.seen[key] {
 		return
@@ -68,7 +89,7 @@ func (d *differ) add(level, rule, detail string, line int) {
 	case lvWarning:
 		sev = "MEDIUM"
 	}
-	d.out = append(d.out, Change{Level: level, Rule: rule, Detail: detail, Line: line, Severity: sev})
+	d.out = append(d.out, Change{Level: level, Rule: rule, Detail: detail, Line: line, Severity: sev, Question: questionFor(level, rule)})
 }
 
 func opKey(method, path string) string { return strings.ToUpper(method) + " " + path }
@@ -132,6 +153,9 @@ func indexOps(l *linter) map[string]operation {
 func (d *differ) operation(key string, o, n operation) {
 	if oid, nid := o.op.Get("operationId").Str(), n.op.Get("operationId").Str(); oid != nid && oid != "" {
 		d.add(lvWarning, "operationId changed", key+": `"+oid+"` → `"+nid+"` (generated client methods are renamed)", n.op.KeyLine("operationId"))
+	}
+	if os, ns := o.op.Get("summary").Str(), n.op.Get("summary").Str(); os != ns && (os != "" || ns != "") {
+		d.add(lvDocs, "Summary changed", key+": summary text", n.op.KeyLine("summary"))
 	}
 	if !o.op.Get("deprecated").Bool() && n.op.Get("deprecated").Bool() {
 		d.add(lvInfo, "Operation deprecated", key, n.op.KeyLine("deprecated"))
@@ -340,28 +364,146 @@ func (d *differ) servers() {
 
 // ---- schemas ----
 
-// schema compares two schemas in a direction ("request": consumers send it;
+// A schema is compared by what it *means*, not how it is written: $refs are
+// followed and allOf members merged, so moving an inline object into a $ref (or
+// wrapping it in allOf) is a refactor, not "every property removed".
+
+// expand lists the nodes that together make up a schema: the node itself (without
+// its allOf) and, recursively, every allOf member, each with $ref resolved.
+func (d *differ) expand(l *linter, n *Node, depth int) []*Node {
+	if n == nil || depth > 6 {
+		return nil
+	}
+	n = l.resolve(n)
+	if n == nil || n.Kind != Map {
+		return nil
+	}
+	out := []*Node{n}
+	for _, m := range n.Get("allOf").Items() {
+		out = append(out, d.expand(l, m, depth+1)...)
+	}
+	return out
+}
+
+type sv []*Node
+
+func (v sv) first(key string) *Node {
+	for _, n := range v {
+		if n.Has(key) {
+			return n.Get(key)
+		}
+	}
+	return nil
+}
+
+func (v sv) str(key string) string {
+	if n := v.first(key); n != nil {
+		return n.Str()
+	}
+	return ""
+}
+
+func (v sv) any(key string) bool {
+	for _, n := range v {
+		if n.Get(key).Bool() {
+			return true
+		}
+	}
+	return false
+}
+
+func (v sv) typ() string {
+	for _, n := range v {
+		if t := typeList(schemaTypeSet(n)); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+func (v sv) required() map[string]bool {
+	m := map[string]bool{}
+	for _, n := range v {
+		for _, r := range n.Get("required").Items() {
+			m[r.Str()] = true
+		}
+	}
+	return m
+}
+
+// props returns the property names in order, and each property's raw schemas
+// (one per member that declares it).
+func (v sv) props() ([]string, map[string][]*Node) {
+	var names []string
+	m := map[string][]*Node{}
+	for _, n := range v {
+		keys, vals := n.Get("properties").Pairs()
+		for i, k := range keys {
+			if _, ok := m[k]; !ok {
+				names = append(names, k)
+			}
+			m[k] = append(m[k], vals[i])
+		}
+	}
+	return names, m
+}
+
+func composed(raw []*Node) bool {
+	for _, n := range raw {
+		if n != nil && (n.Has("$ref") || n.Has("allOf")) {
+			return true
+		}
+	}
+	return false
+}
+
+// schema compares two schema nodes in a direction ("request": consumers send it;
 // "response": consumers read it). line is the new document's line to report at.
 func (d *differ) schema(a, b *Node, dir, label string, depth int, line int) {
-	if a == nil || b == nil || depth > 8 {
+	if a == nil || b == nil {
 		return
 	}
-	if ref := b.Get("$ref").Str(); ref != "" {
-		key := dir + "|" + ref
-		if d.refSeen[key] {
-			return
+	d.schemaN([]*Node{a}, []*Node{b}, dir, label, depth, line)
+}
+
+func (d *differ) schemaN(rawA, rawB []*Node, dir, label string, depth int, line int) {
+	if len(rawA) == 0 || len(rawB) == 0 || depth > 8 {
+		return
+	}
+	for _, n := range rawB {
+		if ref := n.Get("$ref").Str(); ref != "" {
+			key := dir + "|" + ref
+			if len(rawB) == 1 {
+				if d.refSeen[key] {
+					return
+				}
+				d.refSeen[key] = true
+			}
+			label += " → " + ref[strings.LastIndex(ref, "/")+1:]
 		}
-		d.refSeen[key] = true
-		label += " → " + ref[strings.LastIndex(ref, "/")+1:]
 	}
-	a, b = d.ol.resolve(a), d.nl.resolve(b)
-	if a == nil || b == nil || a.Kind != Map || b.Kind != Map {
+	var av, bv sv
+	for _, n := range rawA {
+		av = append(av, d.expand(d.ol, n, 0)...)
+	}
+	for _, n := range rawB {
+		bv = append(bv, d.expand(d.nl, n, 0)...)
+	}
+	if len(av) == 0 || len(bv) == 0 {
 		return
 	}
-	if b.Line > 0 {
-		line = b.Line
+	if bv[0].Line > 0 {
+		line = bv[0].Line
 	}
-	ta, tb := typeList(schemaTypeSet(a)), typeList(schemaTypeSet(b))
+	before := d.shape
+	d.schemaV(av, bv, dir, label, depth, line)
+	if d.shape == before && composed(rawA) != composed(rawB) {
+		d.add(lvRefactor, "Refactor, same shape", label+": inline schema ↔ $ref / allOf — properties, types and required flags unchanged (verified)", line)
+	}
+}
+
+func (d *differ) schemaV(av, bv sv, dir, label string, depth int, line int) {
+	ta, tb := av.typ(), bv.typ()
 	if ta != "" && tb != "" && ta != tb {
 		widening := dir == "request" && ta == "integer" && tb == "number"
 		narrowing := dir == "response" && ta == "number" && tb == "integer"
@@ -370,22 +512,23 @@ func (d *differ) schema(a, b *Node, dir, label string, depth int, line int) {
 		}
 		return
 	}
-	if fa, fb := a.Get("format").Str(), b.Get("format").Str(); fa != fb && (fa != "" || fb != "") && ta != "string" {
+	if fa, fb := av.str("format"), bv.str("format"); fa != fb && (fa != "" || fb != "") && ta != "string" {
 		d.add(lvWarning, "Format changed", label+": `"+fa+"` → `"+fb+"`", line)
 	}
-	// nullability
-	an, bn := a.Get("nullable").Bool(), b.Get("nullable").Bool()
+	an, bn := av.any("nullable"), bv.any("nullable")
 	if dir == "request" && an && !bn {
 		d.add(lvBreaking, "No longer nullable", label, line)
 	}
 	if dir == "response" && !an && bn {
 		d.add(lvBreaking, "Now nullable", label+" (readers may not expect null)", line)
 	}
-	d.enumDiff(a, b, dir, label, line)
-	d.limitsDiff(a, b, dir, label, line)
+	if da, db := av.str("description"), bv.str("description"); da != db && (da != "" || db != "") {
+		d.add(lvDocs, "Description changed", label+": description text", line)
+	}
+	d.enumDiffV(av, bv, dir, label, line)
+	d.limitsDiffV(av, bv, dir, label, line)
 
-	// required
-	ar, br := requiredSet(a), requiredSet(b)
+	ar, br := av.required(), bv.required()
 	for p := range br {
 		if !ar[p] && dir == "request" {
 			d.add(lvBreaking, "Property became required", label+": `"+p+"`", line)
@@ -396,11 +539,10 @@ func (d *differ) schema(a, b *Node, dir, label string, depth int, line int) {
 			d.add(lvBreaking, "Property no longer guaranteed", label+": `"+p+"` is not required any more", line)
 		}
 	}
-	// properties
-	apk, apv := a.Get("properties").Pairs()
-	bprops := b.Get("properties")
-	for i, p := range apk {
-		if !bprops.Has(p) {
+	an2, am := av.props()
+	bn2, bm := bv.props()
+	for _, p := range an2 {
+		if _, ok := bm[p]; !ok {
 			if dir == "response" {
 				d.add(lvBreaking, "Response property removed", label+": `"+p+"`", line)
 			} else {
@@ -408,41 +550,34 @@ func (d *differ) schema(a, b *Node, dir, label string, depth int, line int) {
 			}
 			continue
 		}
-		d.schema(apv[i], bprops.Get(p), dir, label+"."+p, depth+1, line)
+		d.schemaN(am[p], bm[p], dir, label+"."+p, depth+1, line)
 	}
-	bpk, bpv := bprops.Pairs()
-	for i, p := range bpk {
-		if !a.Get("properties").Has(p) {
-			if dir == "request" && br[p] {
-				continue // reported as required
-			}
-			d.add(lvInfo, "Property added", label+": `"+p+"`", bpv[i].Line)
+	for _, p := range bn2 {
+		if _, ok := am[p]; !ok && !(dir == "request" && br[p]) {
+			d.add(lvInfo, "Property added", label+": `"+p+"`", line)
 		}
 	}
-	// items and compositions
-	d.schema(a.Get("items"), b.Get("items"), dir, label+"[]", depth+1, line)
-	for _, c := range []string{"allOf", "oneOf", "anyOf"} {
-		ai, bi := a.Get(c).Items(), b.Get(c).Items()
+	if ai, bi := av.first("items"), bv.first("items"); ai != nil && bi != nil {
+		d.schemaN([]*Node{ai}, []*Node{bi}, dir, label+"[]", depth+1, line)
+	}
+	for _, c := range []string{"oneOf", "anyOf"} {
+		ca, cb := av.first(c), bv.first(c)
+		if ca == nil && cb == nil {
+			continue
+		}
+		ai, bi := ca.Items(), cb.Items()
 		if len(ai) != len(bi) {
 			d.add(lvWarning, "Composition changed", label+": `"+c+"` has "+itoa(len(ai))+" → "+itoa(len(bi))+" members", line)
 			continue
 		}
 		for i := range ai {
-			d.schema(ai[i], bi[i], dir, label+"."+c+"["+itoa(i)+"]", depth+1, line)
+			d.schemaN([]*Node{ai[i]}, []*Node{bi[i]}, dir, label+"."+c+"["+itoa(i)+"]", depth+1, line)
 		}
 	}
 }
 
-func requiredSet(n *Node) map[string]bool {
-	m := map[string]bool{}
-	for _, r := range n.Get("required").Items() {
-		m[r.Str()] = true
-	}
-	return m
-}
-
-func (d *differ) enumDiff(a, b *Node, dir, label string, line int) {
-	ae, be := a.Get("enum"), b.Get("enum")
+func (d *differ) enumDiffV(a, b sv, dir, label string, line int) {
+	ae, be := a.first("enum"), b.first("enum")
 	if ae == nil && be == nil {
 		return
 	}
@@ -477,14 +612,15 @@ func enumSet(n *Node) map[string]bool {
 	return m
 }
 
-func (d *differ) limitsDiff(a, b *Node, dir, label string, line int) {
+func (d *differ) limitsDiffV(a, b sv, dir, label string, line int) {
 	type lim struct {
 		kw    string
 		upper bool // an upper bound: lowering it narrows what is accepted
 	}
 	for _, c := range []lim{{"maxLength", true}, {"minLength", false}, {"maximum", true}, {"minimum", false}, {"maxItems", true}, {"minItems", false}, {"maxProperties", true}, {"minProperties", false}} {
-		av, aok := num(a.Get(c.kw))
-		bv, bok := num(b.Get(c.kw))
+		an, bn := a.first(c.kw), b.first(c.kw)
+		av, aok := num(an)
+		bv, bok := num(bn)
 		if aok == bok && av == bv {
 			continue
 		}
@@ -500,12 +636,12 @@ func (d *differ) limitsDiff(a, b *Node, dir, label string, line int) {
 		loosened := (aok && !bok) || (aok && bok && !tighter)
 		switch {
 		case tighter && dir == "request":
-			d.add(lvBreaking, "Request validation tightened", label+": `"+c.kw+"` "+fmtLim(a.Get(c.kw))+" → "+fmtLim(b.Get(c.kw)), line)
+			d.add(lvBreaking, "Request validation tightened", label+": `"+c.kw+"` "+fmtLim(an)+" → "+fmtLim(bn), line)
 		case loosened && dir == "response":
-			d.add(lvWarning, "Response limit loosened", label+": `"+c.kw+"` "+fmtLim(a.Get(c.kw))+" → "+fmtLim(b.Get(c.kw)), line)
+			d.add(lvWarning, "Response limit loosened", label+": `"+c.kw+"` "+fmtLim(an)+" → "+fmtLim(bn), line)
 		}
 	}
-	if pa, pb := a.Get("pattern").Str(), b.Get("pattern").Str(); pa != pb && dir == "request" && pb != "" {
+	if pa, pb := a.str("pattern"), b.str("pattern"); pa != pb && dir == "request" && pb != "" {
 		d.add(lvBreaking, "Request pattern changed", label+": `"+pa+"` → `"+pb+"`", line)
 	}
 }
@@ -515,4 +651,119 @@ func fmtLim(n *Node) string {
 		return "none"
 	}
 	return n.Str()
+}
+
+func requiredSet(n *Node) map[string]bool {
+	m := map[string]bool{}
+	for _, r := range n.Get("required").Items() {
+		m[r.Str()] = true
+	}
+	return m
+}
+
+// ---- reviewer questions and root-cause grouping ----
+
+// questionFor is what a reviewer must decide about a change of this kind.
+func questionFor(level, rule string) string {
+	switch {
+	case rule == "Now nullable" || rule == "No longer nullable":
+		return "Intentional? If yes: plan migration, deprecation or a new version, and regenerate SDKs. If accidental: revert."
+	case level == lvBreaking:
+		return "Intentional? If yes: plan migration / deprecation / a new API version / SDK regeneration. If not: revert."
+	case level == lvRefactor:
+		return "Confirm the referenced schema still has the same properties, types and required flags."
+	}
+	return ""
+}
+
+var reOpPrefix = regexp.MustCompile(`^([A-Z]+ \S+): (.*)$`)
+
+// subjectRules are the rules whose subjects (the `property` names) merge into one
+// change when they share an origin: "6 properties removed from model" is one finding.
+var subjectRules = map[string]bool{
+	"Response property removed": true, "Request property removed": true, "Property added": true,
+	"Property became required": true, "Property no longer guaranteed": true,
+	"Response enum value added": true, "Request enum value removed": true,
+}
+
+// groupChanges collapses changes that share a root cause: the same rule on the
+// same schema member reached through several endpoints is ONE change that lists
+// its places; several properties removed from one schema are one change.
+func groupChanges(in []Change) []Change {
+	type g struct {
+		idx      int
+		places   []string
+		subjects []string
+		seenP    map[string]bool
+		seenS    map[string]bool
+	}
+	groups := map[string]*g{}
+	var out []Change
+	for _, c := range in {
+		m := reOpPrefix.FindStringSubmatch(c.Detail)
+		if m == nil {
+			out = append(out, c)
+			continue
+		}
+		op, loc := m[1], m[2]
+		subj := ""
+		if i := strings.LastIndex(loc, ": "); i >= 0 {
+			loc, subj = loc[:i], loc[i+2:]
+		}
+		leaf := loc
+		if i := strings.LastIndexAny(leaf, ".→ "); i >= 0 {
+			leaf = leaf[i+1:]
+		}
+		key := c.Level + "|" + c.Rule + "|" + leaf
+		if !subjectRules[c.Rule] {
+			key += "|" + subj
+		}
+		gr, ok := groups[key]
+		if !ok {
+			gr = &g{idx: len(out), seenP: map[string]bool{}, seenS: map[string]bool{}}
+			groups[key] = gr
+			cc := c
+			cc.Detail = strings.TrimSpace(leaf + ": " + subj)
+			if subj == "" {
+				cc.Detail = loc
+			}
+			out = append(out, cc)
+		}
+		if !gr.seenP[op] {
+			gr.seenP[op] = true
+			gr.places = append(gr.places, op)
+		}
+		if subj != "" && subjectRules[c.Rule] && !gr.seenS[subj] {
+			gr.seenS[subj] = true
+			gr.subjects = append(gr.subjects, subj)
+		}
+	}
+	for _, gr := range groups {
+		c := &out[gr.idx]
+		c.Places = gr.places
+		if len(gr.subjects) > 0 {
+			// leaf is kept as the context; subjects are the merged `names`
+			ctx := strings.SplitN(c.Detail, ": ", 2)[0]
+			c.Detail = ctx + ": " + strings.Join(gr.subjects, ", ")
+		}
+		if len(gr.places) > 0 {
+			c.Detail += " — " + placesSummary(gr.places)
+		}
+	}
+	return out
+}
+
+func placesSummary(p []string) string {
+	if len(p) == 1 {
+		return "in " + p[0]
+	}
+	shown := p
+	if len(shown) > 4 {
+		shown = shown[:4]
+	}
+	s := strings.Join(shown, ", ")
+	if len(p) > 4 {
+		s += fmt.Sprintf(" +%d more", len(p)-4)
+	}
+	return fmt.Sprintf("in %d places: %s", len(p), s)
 }

@@ -53,6 +53,10 @@ func LevelLabel(level string) string {
 		return "BREAKING"
 	case lvWarning:
 		return "RISKY"
+	case lvRefactor:
+		return "REFACTOR"
+	case lvDocs:
+		return "DOCS"
 	}
 	return "COMPATIBLE"
 }
@@ -75,18 +79,28 @@ func GroupChanges(cs []Change) []ChangeGroup {
 }
 
 // ChangeCounts tallies changes by level.
-func ChangeCounts(cs []Change) (breaking, risky, compatible int) {
+func ChangeCounts(cs []Change) (breaking, risky, refactor, compatible, docs int) {
 	for _, c := range cs {
 		switch c.Level {
 		case lvBreaking:
 			breaking++
 		case lvWarning:
 			risky++
+		case lvRefactor:
+			refactor++
+		case lvDocs:
+			docs++
 		default:
 			compatible++
 		}
 	}
 	return
+}
+
+// ChangeSummary is the one-line tally shown above the changes table.
+func ChangeSummary(cs []Change) string {
+	br, rk, rf, cp, dc := ChangeCounts(cs)
+	return fmt.Sprintf("%d breaking · %d risky · %d refactor (verified same shape) · %d compatible · %d docs only", br, rk, rf, cp, dc)
 }
 
 // Counts tallies the non-advisory findings by severity.
@@ -118,8 +132,7 @@ func RenderMarkdown(reps []FileReport, rel func(string) string) string {
 		h, m, l := Counts(f.Findings)
 		fmt.Fprintf(&b, "### `%s` — OpenAPI %s · %d operations · %dH · %dM · %dL\n\n", rel(f.Path), f.Version, f.Operations, h, m, l)
 		if len(f.Changes) > 0 {
-			br, rk, cp := ChangeCounts(f.Changes)
-			fmt.Fprintf(&b, "**Changes since the base** — %d breaking · %d risky · %d compatible\n\n| Impact | Change | Hits | Where |\n|--------|--------|-----:|-------|\n", br, rk, cp)
+			fmt.Fprintf(&b, "**Changes since the base** — %s\n\n| Impact | Change | Hits | Where |\n|--------|--------|-----:|-------|\n", ChangeSummary(f.Changes))
 			base := f.Path
 			if i := strings.LastIndexAny(base, `/\`); i >= 0 {
 				base = base[i+1:]

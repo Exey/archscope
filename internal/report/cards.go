@@ -147,7 +147,7 @@ var Cards = []Card{
 	{ID: "memoryleaks", Scope: Platform, Module: "memoryleaks", Style: StyleInsight, Title: "💧 Memory Leaks", HTMLGroup: "insights"},
 	{ID: "regex", Scope: Platform, Module: "regex", Style: StyleInsight, Title: "🔤🔎 Strings & Regex", HTMLGroup: "insights"},
 	{ID: "deadcode", Scope: Platform, Module: "deadcode", Style: StyleInsight, Title: "🪦 Dead Code", HTMLGroup: "insights"},
-	{ID: "concurrency", Scope: Platform, Module: "concurrency", Style: StyleInsight, Title: "🧵 Concurrency & API Misuse", HTMLGroup: "insights"},
+	{ID: "concurrency", Scope: Platform, Module: "concurrency", Style: StyleInsight, Title: "🧵 Concurrency", HTMLGroup: "insights"},
 	{ID: "todos", Scope: Platform, Title: "📝 TODOs & FIXMEs", HTMLGroup: "insights"},
 	{ID: "longestfuncs", Scope: Platform, Title: "📏 Longest Functions", HTMLGroup: "insights"},
 	{ID: "biggesttypes", Scope: Platform, Title: "📐 Biggest Types", HTMLGroup: "insights"},

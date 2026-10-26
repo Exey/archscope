@@ -90,7 +90,7 @@ func CrossJoin(a, b []string) int {
 	put("backend/domain/user.go", "package domain\n\n// UserRepository stores users.\ntype UserRepository interface{ Find(id int) string }\n\n// UserService is the domain service.\ntype UserService struct{ Repo UserRepository }\n")
 
 	var py strings.Builder
-	py.WriteString("import os\n\nPASSWORD = 'hunter2hunter2'  # TODO: move to env\n\n")
+	py.WriteString("import os\nimport redis\nfrom celery import shared_task\n\nr = redis.Redis(host='cache')\n\n@shared_task(bind=True, queue='mail')\ndef send(self):\n    r.setex('mail:%s:sent', 60, 1)\n\nPASSWORD = 'hunter2hunter2'  # TODO: move to env\n\n")
 	for i := 0; i < 90; i++ {
 		fmt.Fprintf(&py, `
 def task_%[1]d(items=[], flag=False):

@@ -3870,7 +3870,7 @@ func renderModuleInsights(res *result.AnalysisResult, pg *scanner.PlatformGroup,
 	if dc := renderInsightCard(res, pg, "deadcode", "🪦", "Dead Code"); dc != "" {
 		parts = append(parts, dc)
 	}
-	if cc := renderInsightCard(res, pg, "concurrency", "🧵", "Concurrency & API Misuse"); cc != "" {
+	if cc := renderInsightCard(res, pg, "concurrency", "🧵", "Concurrency"); cc != "" {
 		parts = append(parts, cc)
 	}
 	if t := renderTodosFixmes(files); t != "" {

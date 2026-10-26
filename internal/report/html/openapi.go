@@ -85,9 +85,8 @@ func renderSpecChanges(f openapi.FileReport) string {
 	if len(f.Changes) == 0 {
 		return ""
 	}
-	br, rk, cp := openapi.ChangeCounts(f.Changes)
 	var b strings.Builder
-	fmt.Fprintf(&b, `<div class="as-ml__summary">Changes since the base — <b>%d breaking</b> · %d risky · %d compatible</div>`, br, rk, cp)
+	fmt.Fprintf(&b, `<div class="as-ml__summary">Changes since the base — <b>%s</b></div>`, esc(openapi.ChangeSummary(f.Changes)))
 	b.WriteString(`<table class="as-table as-cs__table"><thead><tr><th>Impact</th><th>Change</th><th>Hits</th><th class="as-cs__th-where">Where</th></tr></thead><tbody>`)
 	for _, g := range openapi.GroupChanges(f.Changes) {
 		var links []string

@@ -663,7 +663,7 @@ func computeCultureRow(res *result.AnalysisResult, pg *scanner.PlatformGroup, pa
 			r.hasDead = true
 			r.deadTotal, r.deadHigh, r.deadMed, r.deadLow = v.Total(), v.High, v.Medium, v.Low
 		case constructs.ConcurrencyReport:
-			r.hasConc = true
+			r.hasConc = v.Scored
 			r.concHigh, r.concMed, r.concTotal = v.High, v.Medium, v.Total()
 		}
 	}

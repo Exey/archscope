@@ -229,7 +229,7 @@ func attachSpecFindings(res *AnalysisResult, repo string, rv *evolution.Review) 
 				pos = p
 			}
 			f.Issues = append(f.Issues, evolution.Item{
-				Dim: 2, Kind: "OpenAPI", Name: name, Note: c.Detail, Rel: rel, Path: abs, Line: line,
+				Dim: 2, Kind: "OpenAPI", Name: name, Note: c.Detail + questionSuffix(c.Question), Rel: rel, Path: abs, Line: line,
 				Weight: weight, RepoPath: f.Path, OldPos: pos, Key: "oasdiff|" + c.Level + "|" + c.Rule + "|" + c.Detail,
 			})
 		}
@@ -264,4 +264,12 @@ func attachSpecFindings(res *AnalysisResult, repo string, rv *evolution.Review) 
 			})
 		}
 	}
+}
+
+// questionSuffix appends what the reviewer has to decide to a change's note.
+func questionSuffix(q string) string {
+	if q == "" {
+		return ""
+	}
+	return " — " + q
 }

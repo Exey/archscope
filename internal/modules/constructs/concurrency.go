@@ -1,10 +1,13 @@
-// concurrency.go is the 🧵 Concurrency & API Misuse card: Go-only checks
-// ported from go-critic that catch concurrency and standard-library misuse —
+// concurrency.go is the 🧵 Concurrency card. Its issue checks are Go-only,
+// ported from go-critic, catching concurrency and standard-library misuse —
 // sync.Map load-then-delete races (syncMapLoadAndDelete), exposed embedded
 // mutexes (exposedSyncMutex), sync.OnceFunc used wrongly (badSyncOnceFunc),
 // nil request bodies (httpNoBody), hand-rolled time conversions
 // (timeExprSimplify) and wg.Add(-1). It feeds ⚡ Performance in Programming
-// Culture. Lexical, over the length-preserving masked source (srcmask.go).
+// Culture. Beside them sits a topology inventory (concurrency_topology.go:
+// Celery tasks, atomic transactions, Redis and MQ topology) for Python, Go,
+// TypeScript/JavaScript, Java and Kotlin. Lexical, over the length-preserving
+// masked source (srcmask.go).
 package constructs
 
 import (
@@ -22,17 +25,27 @@ func init() { modules.Default.Register(Concurrency{}) }
 // Concurrency is the concurrency / API-misuse detector.
 type Concurrency struct{}
 
-func (Concurrency) ID() string                       { return "concurrency" }
-func (Concurrency) Title() string                    { return "Concurrency & API Misuse" }
-func (Concurrency) AppliesTo(languageID string) bool { return languageID == "go" }
+func (Concurrency) ID() string    { return "concurrency" }
+func (Concurrency) Title() string { return "Concurrency" }
+func (Concurrency) AppliesTo(languageID string) bool {
+	switch languageID {
+	case "go", "python", "ts", "typescript", "javascript", "java", "kotlin":
+		return true
+	}
+	return false
+}
 
 // ConcurrencyReport is the module output.
 type ConcurrencyReport struct {
 	Issues            []CSIssue
 	High, Medium, Low int
+	Topology          Topology
+	// Scored is true when Go files were checked: only then do the issue checks
+	// ran, so only then does the card feed ⚡ Performance (and may say "none found").
+	Scored bool
 }
 
-func (r ConcurrencyReport) HasData() bool { return len(r.Issues) > 0 }
+func (r ConcurrencyReport) HasData() bool { return len(r.Issues) > 0 || !r.Topology.Empty() }
 func (r ConcurrencyReport) Total() int    { return len(r.Issues) }
 
 var (
@@ -52,15 +65,40 @@ var (
 func (Concurrency) Analyze(files []*parser.ParsedFile) any {
 	cache := newSourceCache()
 	var rep ConcurrencyReport
+	seen := map[string]bool{}
 	for _, f := range files {
-		if ext(f.FilePath) != ".go" || security.IsTestOrBenchPath(f.FilePath) || isConstructDetectorFile(f.FilePath) {
+		if security.IsTestOrBenchPath(f.FilePath) || isConstructDetectorFile(f.FilePath) {
 			continue
 		}
+		e := ext(f.FilePath)
+		switch e {
+		case ".py", ".ts", ".tsx", ".js", ".jsx", ".java", ".kt", ".go":
+			if raw := cache.rawLines(f.FilePath); raw != nil {
+				te := e
+				switch e {
+				case ".tsx":
+					te = ".ts"
+				case ".jsx":
+					te = ".js"
+				}
+				scanTopology(&rep.Topology, f.FilePath, te, raw, seen)
+			}
+		}
+		if e != ".go" {
+			continue
+		}
+		rep.Scored = true
 		if raw := cache.rawLines(f.FilePath); raw != nil {
 			rep.Issues = append(rep.Issues, suppressIssues(security.NewSuppressor(raw), scanConcurrency(f.FilePath, maskSource(raw, ".go")))...)
 		}
 	}
 	sortIssuesBySeverity(rep.Issues)
+	rep.Topology.sort()
+	// live dumps describe the whole system: show them on platforms that have Celery/MQ code (or Python)
+	if lv := loadLive(); !lv.Empty() && (len(rep.Topology.Celery)+len(rep.Topology.MQ) > 0 || hasPython(files)) {
+		rep.Topology.Live = lv
+		rep.Topology.Drift = lv.reconcile(rep.Topology.Celery)
+	}
 	rep.High, rep.Medium, rep.Low = issueSevCounts(rep.Issues)
 	return rep
 }
@@ -155,7 +193,14 @@ func (Concurrency) SummaryCards(res any) []modules.SummaryCard {
 	if !ok || !r.HasData() {
 		return nil
 	}
-	return []modules.SummaryCard{{Num: strconv.Itoa(r.Total()), Label: "concurrency / API issues"}}
+	var cards []modules.SummaryCard
+	if r.Scored {
+		cards = append(cards, modules.SummaryCard{Num: strconv.Itoa(r.Total()), Label: "concurrency / API issues"})
+	}
+	if n := r.Topology.Total(); n > 0 {
+		cards = append(cards, modules.SummaryCard{Num: strconv.Itoa(n), Label: "topology entries"})
+	}
+	return cards
 }
 
 func (Concurrency) RenderMarkdown(res any) string {
@@ -164,7 +209,10 @@ func (Concurrency) RenderMarkdown(res any) string {
 		return ""
 	}
 	var b strings.Builder
-	issueCardMarkdown(&b, "🧵", "concurrency / API", r.Issues)
+	if r.Scored {
+		issueCardMarkdown(&b, "🧵", "concurrency / API", r.Issues)
+	}
+	topologyMarkdown(&b, r.Topology)
 	return b.String()
 }
 
@@ -174,6 +222,22 @@ func (Concurrency) RenderHTML(res any) string {
 		return ""
 	}
 	var b strings.Builder
-	writeIssueCard(&b, "🧵", "concurrency / API", r.Issues)
+	if r.Scored {
+		writeIssueCard(&b, "🧵", "concurrency / API", r.Issues)
+	}
+	if !r.Topology.Empty() {
+		b.WriteString(`<div class="as-cs">`)
+		writeTopology(&b, r.Topology)
+		b.WriteString(`</div>`)
+	}
 	return b.String()
+}
+
+func hasPython(files []*parser.ParsedFile) bool {
+	for _, f := range files {
+		if ext(f.FilePath) == ".py" {
+			return true
+		}
+	}
+	return false
 }

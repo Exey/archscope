@@ -7,6 +7,8 @@
 // Flags:
 //
 //	--open          open the report in the default browser when done
+//	--spec <file>   OpenAPI spec (repeatable, comma-separated) the code is analysed against, in addition to specs found in the tree
+//	--inspect <file> saved celery inspect / rabbitmqctl output for the 🧵 Concurrency card (repeatable)
 //	--browser <name> open the report in that browser (chrome | firefox | safari | edge | brave | opera | <app>); implies --open
 //	--output, -o    output directory (default: from config, usually "output")
 //	--format        "html" | "sarif" | "md" (comma-separated for multiple; default: html)
@@ -96,6 +98,8 @@ func splitArgs(rawArgs []string) (target string, flagArgs []string, err error) {
 		"group-by": true,
 		"against":  true,
 		"browser":  true,
+		"spec":     true,
+		"inspect":  true,
 	}
 	for i := 0; i < len(rawArgs); i++ {
 		a := rawArgs[i]
@@ -175,6 +179,8 @@ func main() {
 	var (
 		openFlag      bool
 		browserFlag   string
+		specFlag      listFlag
+		inspectFlag   listFlag
 		outputDir     string
 		format        string
 		cfgPath       string
@@ -192,6 +198,8 @@ func main() {
 	)
 
 	fs.BoolVar(&openFlag, "open", false, "open the HTML report in the browser when done")
+	fs.Var(&specFlag, "spec", "OpenAPI/Swagger spec file(s) to analyse the code against — comma-separated or repeated; used for 📜 OpenAPI lint and 🧱 Spec Coverage in addition to specs found in the tree")
+	fs.Var(&inspectFlag, "inspect", "saved output of `celery inspect registered|scheduled` or `rabbitmqctl list_queues|list_exchanges|list_bindings` (comma-separated or repeated) — shown in the 🧵 Concurrency card and compared with the tasks found in code")
 	fs.StringVar(&browserFlag, "browser", "", "open the report in this browser (chrome, firefox, safari, edge, brave or an app name); implies --open")
 	fs.StringVar(&outputDir, "output", "", "output directory (overrides config)")
 	fs.StringVar(&outputDir, "o", "", "output directory (shorthand for --output)")
@@ -243,6 +251,8 @@ func main() {
 	}
 
 	browserName = browserFlag
+	specPaths = splitSpecs(strings.Join(specFlag, ","))
+	inspectPaths = splitSpecs(strings.Join(inspectFlag, ","))
 	if browserFlag != "" {
 		openFlag = true
 	}
@@ -287,6 +297,8 @@ func preflightReview(path, reviewRef, againstRef string) ([]string, error) {
 // fires on every return path because os.Exit in main would bypass it.
 func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec, reviewRef, againstRef string, openFlag, renderModules, scanAllFiles, noGitPull bool) error {
 	cfg := config.Load(cfgPath)
+	cfg.SpecPaths = specPaths
+	cfg.InspectPaths = inspectPaths
 	if outputDir == "" {
 		outputDir = cfg.Output.Dir
 	}
@@ -511,6 +523,8 @@ func printUsage() {
 
 Flags:
   --open              open the HTML report in the browser when done
+  --spec <file>       OpenAPI spec to analyse the code against (comma-separated or repeated); added to the specs found in the tree
+  --inspect <file>    saved "celery inspect registered|scheduled" / "rabbitmqctl list_queues|list_exchanges|list_bindings" output (comma-separated or repeated)
   --browser <name>    open it in that browser instead of the default (chrome | firefox | safari | edge | brave | opera | <app>); implies --open
   --format <fmt>      html | sarif | md (comma-separated for multiple; default: from config)
   --output, -o <dir>  output directory    (default: from config, usually "output")
@@ -532,6 +546,32 @@ Flags:
                       or "auto" (= 2w,1m,last-tag). Several values: comma- or space-separated,
                       e.g. --evolution 1m 2w  (3 points: 1 month ago -> 2 weeks ago -> now)
 `)
+}
+
+// listFlag collects a repeated string flag.
+type listFlag []string
+
+func (l *listFlag) String() string     { return strings.Join(*l, ",") }
+func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
+
+// inspectPaths are the --inspect dumps (absolute).
+var inspectPaths []string
+
+// specPaths are the --spec files (absolute).
+var specPaths []string
+
+// splitSpecs turns the --spec value(s) into absolute paths.
+func splitSpecs(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			if abs, err := filepath.Abs(p); err == nil {
+				p = abs
+			}
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // browserName is the --browser choice ("" = the system default).

@@ -58,6 +58,33 @@ var skipDirs = map[string]bool{
 	"__pycache__": true, ".gradle": true, ".idea": true,
 }
 
+// extraSpecs are --spec files: parsed in addition to the ones found in the tree.
+var extraSpecs []string
+
+// SetExtraSpecs registers the --spec files (absolute paths) and drops cached scans.
+func SetExtraSpecs(paths []string) {
+	specCacheMu.Lock()
+	extraSpecs = append([]string(nil), paths...)
+	specCache = map[string]specCacheEntry{}
+	specCacheMu.Unlock()
+}
+
+// specOpsFromFile parses one spec file of any name; rel labels it in reports.
+func specOpsFromFile(abs, rel string) []SpecOp {
+	b, err := os.ReadFile(abs)
+	if err != nil {
+		return nil
+	}
+	nameL := strings.ToLower(filepath.Base(abs))
+	switch {
+	case strings.HasSuffix(nameL, ".proto"):
+		return parseProto(string(b), rel)
+	case strings.HasSuffix(nameL, ".graphql"), strings.HasSuffix(nameL, ".gql"):
+		return parseGraphQL(string(b), rel)
+	}
+	return parseOpenAPI(string(b), rel)
+}
+
 // specCache avoids re-walking the same project root for every platform tab.
 var specCacheMu sync.Mutex
 var specCache = map[string]specCacheEntry{}
@@ -128,6 +155,30 @@ func scanSpecFiles(root string) ([]SpecOp, int) {
 		}
 	}
 	walk(root, 0)
+
+	specCacheMu.Lock()
+	extras := append([]string(nil), extraSpecs...)
+	specCacheMu.Unlock()
+	for _, abs := range extras {
+		rel, err := filepath.Rel(root, abs)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			rel = abs
+		}
+		dup := false
+		for _, o := range ops {
+			if o.File == rel {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
+		if found := specOpsFromFile(abs, rel); len(found) > 0 {
+			ops = append(ops, found...)
+			fileCount++
+		}
+	}
 
 	specCacheMu.Lock()
 	specCache[root] = specCacheEntry{ops, fileCount}

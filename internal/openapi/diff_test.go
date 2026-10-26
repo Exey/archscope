@@ -193,3 +193,67 @@ func TestDiffSwagger2(t *testing.T) {
 		t.Errorf("swagger 2 changes missing:\n%s", dump(cs))
 	}
 }
+
+func inlineModelSpec(model string) string {
+	ep := func(path string) string {
+		return "  " + path + ":\n    get:\n      responses:\n        '200':\n          description: ok\n          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/Resp" + strings.NewReplacer("/", "", "{", "", "}", "").Replace(path) + "'\n"
+	}
+	resp := func(n string) string {
+		return "    Resp" + n + ":\n      type: object\n      properties:\n        model:\n" + model
+	}
+	return "openapi: 3.0.3\ninfo: {title: T, version: '1'}\npaths:\n" + ep("/threads") + ep("/threads/one") + ep("/threads/two") +
+		"components:\n  schemas:\n" + resp("threads") + resp("threadsone") + resp("threadstwo") +
+		"    Model:\n      type: object\n      required: [id]\n      properties:\n        id: {type: string}\n        title: {type: string}\n        description: {type: string}\n"
+}
+
+// An inline object that becomes allOf + $ref (and nullable) is ONE nullable
+// change and ONE verified refactor — not a removed property per field per endpoint.
+func TestDiffGroupsByRootCauseAndFlattensRefs(t *testing.T) {
+	inline := "          type: object\n          required: [id]\n          properties:\n            id: {type: string}\n            title: {type: string}\n            description: {type: string}\n"
+	wrapped := "          nullable: true\n          allOf:\n            - $ref: '#/components/schemas/Model'\n"
+	cs, ok := Diff(inlineModelSpec(inline), inlineModelSpec(wrapped))
+	if !ok {
+		t.Fatal("not a spec")
+	}
+	br, _, rf, _, _ := ChangeCounts(cs)
+	if br != 1 {
+		t.Errorf("want exactly 1 breaking change (nullable), got %d:\n%s", br, dump(cs))
+	}
+	if rf == 0 {
+		t.Errorf("want the inline → allOf/$ref refactor reported as verified:\n%s", dump(cs))
+	}
+	for _, c := range cs {
+		if c.Rule == "Response property removed" || c.Rule == "Composition changed" {
+			t.Errorf("false report survived flattening: %+v", c)
+		}
+		if c.Rule == "Now nullable" {
+			if len(c.Places) != 3 || c.Question == "" {
+				t.Errorf("nullable should list its 3 places and a question: %+v", c)
+			}
+		}
+	}
+
+	// a genuinely removed property still is breaking, once
+	dropped := strings.Replace(inline, "            description: {type: string}\n", "", 1)
+	cs, _ = Diff(inlineModelSpec(inline), inlineModelSpec(dropped))
+	n := 0
+	for _, c := range cs {
+		if c.Rule == "Response property removed" {
+			n++
+			if len(c.Places) != 3 || !strings.Contains(c.Detail, "description") {
+				t.Errorf("one removal, three places: %+v", c)
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("want 1 grouped removal, got %d:\n%s", n, dump(cs))
+	}
+}
+
+func TestDiffDocsOnly(t *testing.T) {
+	a := "openapi: 3.0.3\ninfo: {title: T, version: '1'}\npaths:\n  /a:\n    get:\n      summary: old\n      responses:\n        '200': {description: ok}\n"
+	cs, _ := Diff(a, strings.Replace(a, "summary: old", "summary: new", 1))
+	if len(cs) != 1 || cs[0].Level != lvDocs {
+		t.Errorf("a summary edit is docs-only: %s", dump(cs))
+	}
+}

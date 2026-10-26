@@ -64,6 +64,8 @@ type Config struct {
 	ReviewChanged []string `json:"-"`
 	OnlyPlatforms []string `json:"-"`
 	NoSpecScan    bool     `json:"-"` // baseline trees skip the OpenAPI scan
+	InspectPaths  []string `json:"-"` // --inspect: celery inspect / rabbitmqctl dumps
+	SpecPaths     []string `json:"-"` // --spec: OpenAPI documents to analyse the code against, wherever they live
 }
 
 // Default returns the repo-shipped defaults.

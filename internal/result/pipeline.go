@@ -5,6 +5,7 @@ package result
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -16,6 +17,8 @@ import (
 	"github.com/exey/archscope/internal/graph"
 	"github.com/exey/archscope/internal/langspec"
 	"github.com/exey/archscope/internal/modules"
+	"github.com/exey/archscope/internal/modules/constructs"
+	"github.com/exey/archscope/internal/modules/speccoverage"
 	"github.com/exey/archscope/internal/openapi"
 	"github.com/exey/archscope/internal/parser"
 	"github.com/exey/archscope/internal/scanner"
@@ -192,6 +195,26 @@ func RunWithProgress(rootPath string, cfg config.Config, progress func(string)) 
 			step(fmt.Sprintf("OpenAPI: %d spec file(s), %d finding(s)", len(specs), n))
 		}
 	}
+
+	// --spec files outside the tree (or not found by the scan) are linted too.
+	if len(cfg.SpecPaths) > 0 && !cfg.NoSpecScan && len(cfg.OnlyPlatforms) == 0 {
+		have := map[string]bool{}
+		for _, s := range specs {
+			have[filepath.Clean(s.Path)] = true
+		}
+		for _, p := range cfg.SpecPaths {
+			if have[filepath.Clean(p)] {
+				continue
+			}
+			if b, err := os.ReadFile(p); err == nil {
+				if rep, ok := openapi.LintFile(p, string(b)); ok {
+					specs = append(specs, rep)
+				}
+			}
+		}
+	}
+	speccoverage.SetExtraSpecs(cfg.SpecPaths)
+	constructs.SetInspectDumps(cfg.InspectPaths)
 
 	// 6) Report modules, run per platform tab.
 	step("Running report modules…")
