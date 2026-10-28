@@ -38,6 +38,7 @@ type Live struct {
 	Bindings   []TopoEntry
 }
 
+// Empty reports whether the dumps held no registered tasks, schedule, queues, exchanges or bindings; a nil Live is empty.
 func (l *Live) Empty() bool {
 	return l == nil || len(l.Registered)+len(l.Scheduled)+len(l.Queues)+len(l.Exchanges)+len(l.Bindings) == 0
 }

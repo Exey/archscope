@@ -31,8 +31,13 @@ func init() { modules.Default.Register(Module{}) }
 // Module is the universal architecture detector.
 type Module struct{}
 
-func (Module) ID() string                       { return "architecture" }
-func (Module) Title() string                    { return "Architecture" }
+// ID is the module's stable identifier, "architecture", used to select and order its panel.
+func (Module) ID() string { return "architecture" }
+
+// Title is the heading of the module's panel, "Architecture".
+func (Module) Title() string { return "Architecture" }
+
+// AppliesTo reports that the module runs for every language.
 func (Module) AppliesTo(languageID string) bool { return true } // universal
 
 // Health is how well-populated a role is.

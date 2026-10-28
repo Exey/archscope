@@ -105,11 +105,11 @@ func attachQuality(res *AnalysisResult, repo string, rv *evolution.Review) {
 		if len(added) == 0 {
 			continue
 		}
-		lines := read(f.Path)
+		docs := constructs.NewDocIndex(f.Path, read(f.Path))
 		for _, d := range pf.Declarations {
 			if d.Kind == parser.DeclFunc && added[d.Line] && measurableFunc(d.Name) {
 				q.Funcs++
-				if hasDocComment(lines, d.Line, pf.LanguageID) {
+				if docs.Has(d.Line) {
 					q.Documented++
 				}
 				if testIdents[d.Name] {
@@ -129,7 +129,7 @@ func attachQuality(res *AnalysisResult, repo string, rv *evolution.Review) {
 			}
 			seenCx[key] = true
 			q.Complex++
-			if hasDocComment(lines, c.line, pf.LanguageID) {
+			if docs.Has(c.line) {
 				q.ComplexDocumented++
 				continue
 			}
@@ -159,38 +159,4 @@ func measurableFunc(name string) bool {
 		return false
 	}
 	return len(name) > 2
-}
-
-// hasDocComment reports whether the function starting at line (1-based) has a
-// doc comment directly above it (decorators and attributes in between are
-// skipped), or — for Python — a docstring as its first statement.
-func hasDocComment(lines []string, line int, lang string) bool {
-	for i := line - 2; i >= 0 && i < len(lines); i-- {
-		t := strings.TrimSpace(lines[i])
-		switch {
-		case t == "":
-			return false
-		case strings.HasPrefix(t, "@"), strings.HasPrefix(t, "#["), strings.HasPrefix(t, "#["):
-			continue
-		case strings.HasPrefix(t, "//"), strings.HasPrefix(t, "/*"), strings.HasPrefix(t, "*"), strings.HasSuffix(t, "*/"),
-			strings.HasPrefix(t, "--"), strings.HasPrefix(t, "///"):
-			return true
-		case strings.HasPrefix(t, "#") && lang != "python":
-			return strings.HasPrefix(t, "# ") || lang == "ruby"
-		case strings.HasPrefix(t, "#"):
-			return true
-		}
-		break
-	}
-	if lang == "python" {
-		i := line - 1
-		for ; i < len(lines) && i < line+8 && !strings.HasSuffix(strings.TrimSpace(lines[i]), ":"); i++ {
-		}
-		for i++; i < len(lines) && i < line+12; i++ {
-			if t := strings.TrimSpace(lines[i]); t != "" {
-				return strings.HasPrefix(t, `"""`) || strings.HasPrefix(t, `'''`) || strings.HasPrefix(t, `r"""`)
-			}
-		}
-	}
-	return false
 }

@@ -32,8 +32,13 @@ func init() { modules.Default.Register(DataStructures{}) }
 // generalized from Swift-only to every language ArchScope parses.
 type DataStructures struct{}
 
-func (DataStructures) ID() string                       { return "datastructures" }
-func (DataStructures) Title() string                    { return "Data Structures" }
+// ID is the module's stable identifier, "datastructures", used to select and order its panel.
+func (DataStructures) ID() string { return "datastructures" }
+
+// Title is the heading of the module's panel, "Data Structures".
+func (DataStructures) Title() string { return "Data Structures" }
+
+// AppliesTo reports that the module runs for every language.
 func (DataStructures) AppliesTo(languageID string) bool { return true } // universal
 
 // category groups the detected structures for display; each carries an icon.
@@ -423,6 +428,7 @@ func isTypeKind(k parser.DeclKind) bool {
 // catalog, gates generic-suffix matches behind body evidence, and runs the
 // name-free linked-structure engine over any Swift files present.
 func (DataStructures) Analyze(files []*parser.ParsedFile) any {
+	files = nonTestFiles(files) // test names and fixtures spell out the very things detected
 	type agg struct {
 		category category
 		occ      []Occurrence

@@ -176,49 +176,36 @@ func main() {
 	fs.SetOutput(os.Stderr)
 	fs.Usage = printUsage
 
+	o := runOptions{target: target}
 	var (
-		openFlag      bool
 		browserFlag   string
 		specFlag      listFlag
 		inspectFlag   listFlag
-		outputDir     string
-		format        string
-		cfgPath       string
-		ref           string
-		depth         int
 		langPlatforms bool
-		renderModules bool
-		failOn        string
-		groupBy       string
-		scanAllFiles  bool
-		noGitPull     bool
-		evolutionSpec string
-		reviewRef     string
-		againstRef    string
 	)
 
-	fs.BoolVar(&openFlag, "open", false, "open the HTML report in the browser when done")
+	fs.BoolVar(&o.open, "open", false, "open the HTML report in the browser when done")
 	fs.Var(&specFlag, "spec", "OpenAPI/Swagger spec file(s) to analyse the code against — comma-separated or repeated; used for 📜 OpenAPI lint and 🧱 Spec Coverage in addition to specs found in the tree")
 	fs.Var(&inspectFlag, "inspect", "saved output of `celery inspect registered|scheduled` or `rabbitmqctl list_queues|list_exchanges|list_bindings` (comma-separated or repeated) — shown in the 🧵 Concurrency card and compared with the tasks found in code")
 	fs.StringVar(&browserFlag, "browser", "", "open the report in this browser (chrome, firefox, safari, edge, brave or an app name); implies --open")
-	fs.StringVar(&outputDir, "output", "", "output directory (overrides config)")
-	fs.StringVar(&outputDir, "o", "", "output directory (shorthand for --output)")
-	fs.StringVar(&format, "format", "", "output format: html | sarif | md (comma-separated for multiple; overrides config)")
-	fs.StringVar(&cfgPath, "config", "", "path to .archscope.json (default: .archscope.json in cwd)")
-	fs.StringVar(&ref, "ref", "", "git ref for remote URLs (branch/tag/sha)")
-	fs.IntVar(&depth, "depth", 0, "clone depth for remote URLs; 0 = full history")
+	fs.StringVar(&o.outputDir, "output", "", "output directory (overrides config)")
+	fs.StringVar(&o.outputDir, "o", "", "output directory (shorthand for --output)")
+	fs.StringVar(&o.format, "format", "", "output format: html | sarif | md (comma-separated for multiple; overrides config)")
+	fs.StringVar(&o.cfgPath, "config", "", "path to .archscope.json (default: .archscope.json in cwd)")
+	fs.StringVar(&o.ref, "ref", "", "git ref for remote URLs (branch/tag/sha)")
+	fs.IntVar(&o.depth, "depth", 0, "clone depth for remote URLs; 0 = full history")
 	fs.BoolVar(&langPlatforms, "lang-platforms", false, "group all files of a language into one platform tab (shorthand for --group-by=language)")
-	fs.BoolVar(&renderModules, "render-modules", false, "include the Modules & Microservices section and its CDN-loaded graphs (omitted by default)")
-	fs.StringVar(&failOn, "fail-on", "", "exit 2 when findings exist at or above threshold: low | medium | high")
-	fs.StringVar(&groupBy, "group-by", "", "how to group platform tabs: language | folder | gitrepo (default: auto-detected from .git count, prompts interactively when 2+ repos are found)")
-	fs.BoolVar(&noGitPull, "no-git-pull", false, "review mode: don't fetch, switch to the reviewed branch or fast-forward branches — review the repository exactly as it is")
-	fs.BoolVar(&scanAllFiles, "scan-all-files", false, "also scan git-submodule (third-party/vendored) directories, skipped by default")
+	fs.BoolVar(&o.renderModules, "render-modules", false, "include the Modules & Microservices section and its CDN-loaded graphs (omitted by default)")
+	fs.StringVar(&o.failOn, "fail-on", "", "exit 2 when findings exist at or above threshold: low | medium | high")
+	fs.StringVar(&o.groupBy, "group-by", "", "how to group platform tabs: language | folder | gitrepo (default: auto-detected from .git count, prompts interactively when 2+ repos are found)")
+	fs.BoolVar(&o.noGitPull, "no-git-pull", false, "review mode: don't fetch, switch to the reviewed branch or fast-forward branches — review the repository exactly as it is")
+	fs.BoolVar(&o.scanAllFiles, "scan-all-files", false, "also scan git-submodule (third-party/vendored) directories, skipped by default")
 
-	fs.StringVar(&evolutionSpec, "evolution", "", "compare Programming Culture now vs. git history, comma- or space-separated: 2w | 1m | 3m | last-tag | YYYY-MM-DD | <commit> | auto (= 2w,1m,last-tag)")
+	fs.StringVar(&o.evolutionSpec, "evolution", "", "compare Programming Culture now vs. git history, comma- or space-separated: 2w | 1m | 3m | last-tag | YYYY-MM-DD | <commit> | auto (= 2w,1m,last-tag)")
 
-	fs.StringVar(&reviewRef, "review", "", "review mode: Evolution since a commit or branch (merge-base, like a merge request diff) with per-issue GitLab \"MR with line\" buttons; bare --review (or auto) = the local default branch (origin/HEAD, main, master, develop); \"last-commit\" = HEAD~1")
+	fs.StringVar(&o.reviewRef, "review", "", "review mode: Evolution since a commit or branch (merge-base, like a merge request diff) with per-issue GitLab \"MR with line\" buttons; bare --review (or auto) = the local default branch (origin/HEAD, main, master, develop); \"last-commit\" = HEAD~1")
 
-	fs.StringVar(&againstRef, "against", "", "review mode: compare the branch under review with this branch instead of the one you are on (e.g. --review feat/x --against main)")
+	fs.StringVar(&o.againstRef, "against", "", "review mode: compare the branch under review with this branch instead of the one you are on (e.g. --review feat/x --against main)")
 
 	if err := fs.Parse(flagArgs); err != nil {
 		if err != flag.ErrHelp {
@@ -232,32 +219,32 @@ func main() {
 		os.Exit(1)
 	}
 
-	switch strings.ToLower(failOn) {
+	switch strings.ToLower(o.failOn) {
 	case "", "low", "medium", "high":
 	default:
-		fmt.Fprintf(os.Stderr, "archscope: unknown --fail-on %q (want low | medium | high)\n", failOn)
+		fmt.Fprintf(os.Stderr, "archscope: unknown --fail-on %q (want low | medium | high)\n", o.failOn)
 		os.Exit(1)
 	}
 
-	groupBy = strings.ToLower(strings.TrimSpace(groupBy))
-	switch groupBy {
+	o.groupBy = strings.ToLower(strings.TrimSpace(o.groupBy))
+	switch o.groupBy {
 	case "", "language", "folder", "gitrepo":
 	default:
-		fmt.Fprintf(os.Stderr, "archscope: unknown --group-by %q (want language, folder, or gitrepo)\n", groupBy)
+		fmt.Fprintf(os.Stderr, "archscope: unknown --group-by %q (want language, folder, or gitrepo)\n", o.groupBy)
 		os.Exit(1)
 	}
-	if langPlatforms && groupBy == "" {
-		groupBy = "language"
+	if langPlatforms && o.groupBy == "" {
+		o.groupBy = "language"
 	}
 
 	browserName = browserFlag
 	specPaths = splitSpecs(strings.Join(specFlag, ","))
 	inspectPaths = splitSpecs(strings.Join(inspectFlag, ","))
 	if browserFlag != "" {
-		openFlag = true
+		o.open = true
 	}
 
-	if err := run(target, ref, depth, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec, reviewRef, againstRef, openFlag, renderModules, scanAllFiles, noGitPull); err != nil {
+	if err := run(o); err != nil {
 		if ec, ok := err.(*exitCodeError); ok {
 			if ec.msg != "" {
 				fmt.Fprintln(os.Stderr, ec.msg)
@@ -293,52 +280,59 @@ func preflightReview(path, reviewRef, againstRef string) ([]string, error) {
 	return changed, nil
 }
 
+// runOptions is what the command line asks one analysis run to do.
+type runOptions struct {
+	target, ref, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec, reviewRef, againstRef string
+	depth                                                                                          int
+	open, renderModules, scanAllFiles, noGitPull                                                   bool
+}
+
 // run executes the full analysis. Deferred cleanup (clone temp dir removal)
 // fires on every return path because os.Exit in main would bypass it.
-func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, groupBy, evolutionSpec, reviewRef, againstRef string, openFlag, renderModules, scanAllFiles, noGitPull bool) error {
-	cfg := config.Load(cfgPath)
+func run(o runOptions) error {
+	cfg := config.Load(o.cfgPath)
 	cfg.SpecPaths = specPaths
 	cfg.InspectPaths = inspectPaths
-	if outputDir == "" {
-		outputDir = cfg.Output.Dir
+	if o.outputDir == "" {
+		o.outputDir = cfg.Output.Dir
 	}
-	if format == "" {
-		format = cfg.Output.Format
+	if o.format == "" {
+		o.format = cfg.Output.Format
 	}
 	// Wire Fetch config defaults when CLI flags were not provided.
-	if ref == "" {
-		ref = cfg.Fetch.Ref
+	if o.ref == "" {
+		o.ref = cfg.Fetch.Ref
 	}
-	if depth == 0 && cfg.Fetch.Depth > 0 {
-		depth = cfg.Fetch.Depth
+	if o.depth == 0 && cfg.Fetch.Depth > 0 {
+		o.depth = cfg.Fetch.Depth
 	}
-	if scanAllFiles {
+	if o.scanAllFiles {
 		cfg.ScanAllFiles = true
 	}
-	if renderModules {
+	if o.renderModules {
 		cfg.RenderModules = true
 	}
 
-	src := fetch.FromArg(target, ref, depth)
+	src := fetch.FromArg(o.target, o.ref, o.depth)
 	resolved, err := fetch.Resolve(src)
 	if err != nil {
 		return fmt.Errorf("archscope: %w", err)
 	}
-	defer resolved.Cleanup() //nolint:errcheck
+	defer resolved.Cleanup() //nolint:errcheck // best-effort removal of the clone's temp dir
 
 	// Review mode needs the ref to exist: check it before scanning anything, so a
 	// typo'd branch or MR name fails in seconds instead of after a full analysis.
-	if reviewRef != "" && !noGitPull && !resolved.WasClone {
+	if o.reviewRef != "" && !o.noGitPull && !resolved.WasClone {
 		// Fetch, switch to the reviewed branch and bring it and its target branch up to
 		// date, so the diff is the merge request's own. --no-git-pull skips all of it.
 		if root, _, err := evolution.Toplevel(resolved.Path); err == nil {
-			if sr := evolution.SyncForReview(root, reviewRef, againstRef, func(m string) { fmt.Println(" → " + m) }); sr.Against != "" {
-				againstRef = sr.Against
+			if sr := evolution.SyncForReview(root, o.reviewRef, o.againstRef, func(m string) { fmt.Println(" → " + m) }); sr.Against != "" {
+				o.againstRef = sr.Against
 			}
 		}
 	}
-	if reviewRef != "" {
-		changed, err := preflightReview(resolved.Path, reviewRef, againstRef)
+	if o.reviewRef != "" {
+		changed, err := preflightReview(resolved.Path, o.reviewRef, o.againstRef)
 		if err != nil {
 			return err
 		}
@@ -352,17 +346,17 @@ func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, grou
 	// defaults to grouping by language regardless of how many languages are
 	// present; 2+ repos is a real "which way do you want this sliced"
 	// question, asked interactively when possible.
-	if groupBy == "" {
+	if o.groupBy == "" {
 		gitRepos := scanner.DiscoverGitRepos(resolved.Path, cfg.ExcludePaths)
 		switch {
 		case len(gitRepos) <= 1:
 			fmt.Println("archscope: single project (0-1 git repositories) — grouping platform tabs by language (pass --group-by to override)")
-			groupBy = "language"
+			o.groupBy = "language"
 		default:
-			groupBy = promptGroupingMode(len(gitRepos))
+			o.groupBy = promptGroupingMode(len(gitRepos))
 		}
 	}
-	applyGroupBy(&cfg, groupBy)
+	applyGroupBy(&cfg, o.groupBy)
 
 	pipelineStart := time.Now()
 	res, err := result.RunWithProgress(resolved.Path, cfg, func(msg string) {
@@ -373,23 +367,23 @@ func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, grou
 	}
 	if resolved.WasClone {
 		res.IsRemote = true
-		res.SourceURL = target
+		res.SourceURL = o.target
 	}
 
 	progressFn := func(msg string) {
 		fmt.Printf(" → [%5.1fs] %s\n", time.Since(pipelineStart).Seconds(), msg)
 	}
-	specs := evolution.ParseSpecs(evolutionSpec)
+	specs := evolution.ParseSpecs(o.evolutionSpec)
 	switch {
-	case reviewRef != "":
-		res.Evolution = result.RunReview(res, cfg, reviewRef, againstRef, specs, reporthtml.CultureScores, progressFn)
+	case o.reviewRef != "":
+		res.Evolution = result.RunReview(res, cfg, o.reviewRef, o.againstRef, specs, reporthtml.CultureScores, progressFn)
 	case len(specs) > 0:
 		res.Evolution = result.RunEvolution(res, cfg, specs, reporthtml.CultureScores, progressFn)
 	}
 
 	printCapabilityTable(res)
 
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	if err := os.MkdirAll(o.outputDir, 0o755); err != nil {
 		return fmt.Errorf("archscope: cannot create output dir: %w", err)
 	}
 
@@ -399,7 +393,7 @@ func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, grou
 	}
 
 	// Normalize format: "both" is a legacy alias for "html,sarif"; empty defaults to "html".
-	fmtStr := strings.ToLower(strings.TrimSpace(format))
+	fmtStr := strings.ToLower(strings.TrimSpace(o.format))
 	switch fmtStr {
 	case "both":
 		fmtStr = "html,sarif"
@@ -416,7 +410,7 @@ func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, grou
 		if !ok {
 			return fmt.Errorf("archscope: unknown format %q (want html, sarif, md)", id)
 		}
-		outPath := filepath.Join(outputDir, name+em.Ext())
+		outPath := filepath.Join(o.outputDir, name+em.Ext())
 		if err := em.Write(res, outPath); err != nil {
 			return fmt.Errorf("archscope: %s write failed: %w", strings.ToUpper(id), err)
 		}
@@ -426,14 +420,14 @@ func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, grou
 		}
 	}
 
-	if openFlag && reportPath != "" {
+	if o.open && reportPath != "" {
 		abs, _ := filepath.Abs(reportPath)
 		openInBrowser(abs)
 	}
 
 	// F11: exit 2 when --fail-on threshold is met.
-	if failOn != "" {
-		threshold := failOnRank(strings.ToLower(failOn))
+	if o.failOn != "" {
+		threshold := failOnRank(strings.ToLower(o.failOn))
 		for _, rr := range res.Security {
 			if rr.Passed() {
 				continue
@@ -441,7 +435,7 @@ func run(target, ref string, depth int, cfgPath, outputDir, format, failOn, grou
 			if failOnRank(strings.ToLower(string(rr.Rule.Severity))) >= threshold {
 				return &exitCodeError{
 					code: 2,
-					msg:  fmt.Sprintf("archscope: findings at or above %q threshold — exit 2", failOn),
+					msg:  fmt.Sprintf("archscope: findings at or above %q threshold — exit 2", o.failOn),
 				}
 			}
 		}

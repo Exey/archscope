@@ -38,6 +38,9 @@ func ExtractKotlinTraffic(filePath string, lines []string) (inbound, outbound []
 	var bc clientBlockComment
 	for i, raw := range lines {
 		t := strings.TrimSpace(raw)
+		if searchesText(t) {
+			continue // detector code that looks for these strings is not traffic
+		}
 		if bc.skip(t) {
 			continue
 		}

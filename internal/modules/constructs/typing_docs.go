@@ -33,7 +33,14 @@ type CSDocFile struct {
 	FilePath     string
 	Public       int
 	Documented   int
-	FirstMissing int // 1-based line of the first undocumented public symbol
+	FirstMissing int         // 1-based line of the first undocumented public symbol
+	Missing      []CSDocMiss // every undocumented public symbol, in file order
+}
+
+// CSDocMiss is one public symbol without a doc comment.
+type CSDocMiss struct {
+	Name string
+	Line int // 1-based
 }
 
 var (
@@ -97,12 +104,20 @@ func pyFullyTyped(m maskedFile, f pyFunc) bool {
 	return true
 }
 
-// countTypeIgnores counts type-checker suppression comments in raw lines.
-func countTypeIgnores(raw []string) int {
+// countTypeIgnores counts type-checker suppression comments (`# type: ignore`,
+// `@ts-ignore` …) in a file — in real comments only, and only in the languages
+// that have such a checker. A Go file that quotes "@ts-ignore" in a regexp or a
+// doc comment about it has not switched any checker off.
+func countTypeIgnores(m maskedFile, fe string) int {
+	switch fe {
+	case ".py", ".pyi", ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs":
+	default:
+		return 0
+	}
 	n := 0
-	for _, l := range raw {
-		if strings.Contains(l, "ignore") || strings.Contains(l, "@ts-") {
-			n += len(reTypeIgnore.FindAllStringIndex(l, -1))
+	for i := range m.raw {
+		if c := lineComment(m.raw[i], m.text[i]); c != "" && (strings.Contains(c, "ignore") || strings.Contains(c, "@ts-")) {
+			n += len(reTypeIgnore.FindAllStringIndex("#"+c, -1))
 		}
 	}
 	return n
@@ -113,10 +128,20 @@ func countTypeIgnores(raw []string) int {
 func docStats(filePath string, m maskedFile) (CSDocFile, bool) {
 	fe := ext(filePath)
 	d := CSDocFile{FilePath: filePath}
-	miss := func(line int) {
+	// miss records an undocumented symbol at a 0-based line; name comes from the
+	// declaration's first non-empty capture group.
+	miss := func(line int, groups ...string) {
 		if d.FirstMissing == 0 {
 			d.FirstMissing = line + 1
 		}
+		name := ""
+		for _, g := range groups {
+			if g != "" {
+				name = g
+				break
+			}
+		}
+		d.Missing = append(d.Missing, CSDocMiss{Name: name, Line: line + 1})
 	}
 	prevDoc := func(i int, isDoc func(string) bool) bool {
 		for j := i - 1; j >= 0 && j >= i-6; j-- {
@@ -133,46 +158,28 @@ func docStats(filePath string, m maskedFile) (CSDocFile, bool) {
 	}
 	switch fe {
 	case ".py", ".pyi":
-		funcs, classes := pyParse(m)
-		check := func(name string, start, bodyStart int) {
-			if strings.HasPrefix(name, "_") {
-				return
-			}
-			d.Public++
-			for j := bodyStart; j < len(m.code); j++ {
-				t := strings.TrimSpace(m.code[j])
-				if t == "" {
-					continue
-				}
-				if rePyDocOpen.MatchString(t) {
-					d.Documented++
-				} else {
-					miss(start)
-				}
-				return
-			}
-			miss(start)
-		}
-		for _, f := range funcs {
-			if f.enclosedDef || f.oneLiner {
+		for _, sym := range pyDocs(m) {
+			if sym.kind == "module" || !sym.public || sym.nested || (sym.oneLiner && !sym.has) {
 				continue
 			}
-			check(f.name, f.start, f.bodyStart)
-		}
-		for _, c := range classes {
-			check(c.name, c.start, c.start+1)
+			d.Public++
+			if sym.has {
+				d.Documented++
+			} else {
+				miss(sym.line, sym.name)
+			}
 		}
 	case ".go":
 		for i, l := range m.code {
 			g := reDocGoDecl.FindStringSubmatch(l)
-			if g == nil {
-				continue
+			if g == nil || goMethodOnUnexported(l) {
+				continue // a method of an unexported type is not part of the public API
 			}
 			d.Public++
 			if prevDoc(i, func(t string) bool { return strings.HasPrefix(t, "//") }) {
 				d.Documented++
 			} else {
-				miss(i)
+				miss(i, g[1:]...)
 			}
 		}
 	case ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs":
@@ -180,14 +187,15 @@ func docStats(filePath string, m maskedFile) (CSDocFile, bool) {
 			return d, false
 		}
 		for i, l := range m.code {
-			if !reDocTSDecl.MatchString(l) {
+			g := reDocTSDecl.FindStringSubmatch(l)
+			if g == nil {
 				continue
 			}
 			d.Public++
 			if prevDoc(i, func(t string) bool { return strings.HasSuffix(t, "*/") || strings.HasPrefix(t, "//") }) {
 				d.Documented++
 			} else {
-				miss(i)
+				miss(i, g[1:]...)
 			}
 		}
 	case ".java", ".kt", ".kts", ".cs":
@@ -199,7 +207,8 @@ func docStats(filePath string, m maskedFile) (CSDocFile, bool) {
 			re = reDocCSDecl
 		}
 		for i, l := range m.code {
-			if !re.MatchString(l) || strings.Contains(l, "private ") || strings.Contains(l, "protected ") || strings.Contains(l, "internal ") || strings.Contains(l, "override ") {
+			g := re.FindStringSubmatch(l)
+			if g == nil || strings.Contains(l, "private ") || strings.Contains(l, "protected ") || strings.Contains(l, "internal ") || strings.Contains(l, "override ") {
 				continue
 			}
 			if fe == ".java" && strings.TrimSpace(l) != "" && strings.Contains(l, "=") && !strings.Contains(l, "(") {
@@ -209,24 +218,26 @@ func docStats(filePath string, m maskedFile) (CSDocFile, bool) {
 			if prevDoc(i, func(t string) bool { return strings.HasSuffix(t, "*/") || strings.HasPrefix(t, "///") }) {
 				d.Documented++
 			} else {
-				miss(i)
+				miss(i, g[1:]...)
 			}
 		}
 	case ".swift":
 		for i, l := range m.code {
-			if !reDocSwiftDecl.MatchString(l) {
+			g := reDocSwiftDecl.FindStringSubmatch(l)
+			if g == nil {
 				continue
 			}
 			d.Public++
 			if prevDoc(i, func(t string) bool { return strings.HasPrefix(t, "///") || strings.HasSuffix(t, "*/") }) {
 				d.Documented++
 			} else {
-				miss(i)
+				miss(i, g[1:]...)
 			}
 		}
 	case ".rs":
 		for i, l := range m.code {
-			if !reDocRustDecl.MatchString(l) {
+			g := reDocRustDecl.FindStringSubmatch(l)
+			if g == nil {
 				continue
 			}
 			d.Public++
@@ -235,11 +246,24 @@ func docStats(filePath string, m maskedFile) (CSDocFile, bool) {
 			}) {
 				d.Documented++
 			} else {
-				miss(i)
+				miss(i, g[1:]...)
 			}
 		}
 	default:
 		return d, false
 	}
 	return d, true
+}
+
+var reGoRecvType = regexp.MustCompile(`^func\s+\(\s*(?:\w+\s+)?\*?\s*(\w+)`)
+
+// goMethodOnUnexported reports a method whose receiver type is unexported: it
+// can't be called from another package, so it needs no public documentation.
+func goMethodOnUnexported(line string) bool {
+	g := reGoRecvType.FindStringSubmatch(line)
+	if g == nil || g[1] == "" {
+		return false
+	}
+	c := g[1][0]
+	return c >= 'a' && c <= 'z' || c == '_'
 }

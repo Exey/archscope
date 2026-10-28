@@ -64,8 +64,9 @@ var (
 	reStrLoopPy = regexp.MustCompile(`^\s*(?:async\s+)?(?:for|while)\b.*:\s*$`)
 
 	// `s += rhs` and `s = s + rhs`.
-	reStrAppend   = regexp.MustCompile(`^\s*([A-Za-z_][\w.]*)\s*\+=\s*(.+)$`)
-	reStrSelfPlus = regexp.MustCompile(`^\s*([A-Za-z_][\w.]*)\s*=\s*([A-Za-z_][\w.]*)\s*\+\s*(.+)$`)
+	reLoopConstBound = regexp.MustCompile(`<=?\s*(?:\w+\s*\+\s*)?\d+\b`)
+	reStrAppend      = regexp.MustCompile(`^\s*([A-Za-z_][\w.]*)\s*\+=\s*(.+)$`)
+	reStrSelfPlus    = regexp.MustCompile(`^\s*([A-Za-z_][\w.]*)\s*=\s*([A-Za-z_][\w.]*)\s*\+\s*(.+)$`)
 
 	// names declared as strings anywhere in the file (stripped, so "abc" is "").
 	reStrDeclTyped = regexp.MustCompile(`\b(?:String|string|str|std::string|NSMutableString|NSString)\s+(\w+)\s*(?:=|;)`)
@@ -80,6 +81,7 @@ var (
 	// Go: go-critic ports.
 	reGoJoinSmall  = regexp.MustCompile(`strings\.Join\(\s*\[\]string\{\s*[^,{}]+(?:,\s*[^,{}]+){1,2},?\s*\}\s*,`)
 	reGoCompare    = regexp.MustCompile(`\bstrings\.Compare\(`)
+	reGoCaseSelf   = regexp.MustCompile(`\bstrings\.To(?:Lower|Upper)\(\s*([\w.\[\]]+)\s*\)\s*[!=]=\s*([\w.\[\]]+)`)
 	reGoCaseEq     = regexp.MustCompile(`\bstrings\.To(?:Lower|Upper)\([^()]*\)\s*[!=]=|[!=]=\s*strings\.To(?:Lower|Upper)\(`)
 	reGoSprintfS   = regexp.MustCompile(`\bfmt\.Sprintf\(\s*"%[sv]"\s*,`)
 	reGoErrorfVar  = regexp.MustCompile(`\bfmt\.Errorf\(\s*[A-Za-z_][\w.]*(?:\([^()]*\))?\s*\)`)
@@ -130,7 +132,7 @@ func scanStringSmells(filePath string, stripped, raw []string) []CSIssue {
 			if header < 0 || i >= len(raw) {
 				continue
 			}
-			if name, ok := csIsStringAppend(stripped[i], known); ok && !csResetInLoop(stripped, header, i, name) {
+			if name, ok := csIsStringAppend(stripped[i], known); ok && !csBoundedLoop(stripped[header]) && !csResetInLoop(stripped, header, i, name) {
 				add(i, "concat-in-loop", "String concatenation in a loop",
 					"Every iteration copies the whole string (O(n²)); collect the parts and join them once — strings.Builder (Go), StringBuilder (Java/Kotlin/C#), String.reserve + push_str (Rust), \"\".join (Python).")
 			}
@@ -152,7 +154,7 @@ func scanStringSmells(filePath string, stripped, raw []string) []CSIssue {
 				add(i, "join-small", "strings.Join on a tiny literal slice", "Use plain `a + b + c` concatenation instead of strings.Join over a 2–3 element slice literal.")
 			case hit(reGoCompare, i):
 				add(i, "strings-compare", "strings.Compare", "Use the `==`, `<`, `>` operators; strings.Compare is slower and less readable.")
-			case hit(reGoCaseEq, i):
+			case hit(reGoCaseEq, i) && !goCaseSelfCheck(line):
 				add(i, "equal-fold", "Case-insensitive compare via ToLower/ToUpper", "Use strings.EqualFold(a, b): it doesn't allocate two new strings.")
 			case reGoSprintfS.MatchString(raw[i]) && strings.Contains(line, "Sprintf"):
 				add(i, "redundant-sprintf", "Redundant fmt.Sprintf(\"%s\", x)", "Use x directly (or x.String()) instead of formatting it through Sprintf.")
@@ -319,10 +321,15 @@ func csLoopLines(stripped []string, python bool) []int {
 // loop header and line i — then each iteration starts from a fresh string and
 // the appends aren't quadratic.
 func csResetInLoop(stripped []string, header, i int, name string) bool {
-	q := regexp.QuoteMeta(name)
-	// only a fresh declaration or an empty-string reset starts a new string; a
-	// plain `name = seg.tag` inside an if still leaves the append quadratic.
-	re := regexp.MustCompile(`(?:^|[^\w.])` + q + `\s*(?:\:=|=\s*(?:""|''|` + "``" + `)\s*;?\s*$)|\b(?:var|let|val|String|string|auto|str)\s+` + q + `\b`)
+	// c.Detail += … is fresh each iteration when c itself is (re)declared in the loop.
+	root := name
+	if k := strings.IndexAny(name, ".["); k > 0 {
+		root = name[:k]
+	}
+	q := regexp.QuoteMeta(root)
+	// only a fresh declaration (also `v, ok := …`) or an empty-string reset starts a
+	// new string; a plain `name = seg.tag` inside an if still leaves the append quadratic.
+	re := rx(`(?:^|[^\w.])(?:[\w.]+\s*,\s*)*` + q + `(?:\s*,\s*[\w.]+)*\s*:=|(?:^|[^\w.])` + q + `\s*=\s*(?:""|''|` + "``" + `)\s*;?\s*$|\b(?:var|let|val|String|string|auto|str)\s+` + q + `\b`)
 	for j := header; j < i; j++ {
 		if re.MatchString(stripped[j]) {
 			return true
@@ -330,6 +337,17 @@ func csResetInLoop(stripped []string, header, i int, name string) bool {
 	}
 	return false
 }
+
+// goCaseSelfCheck: `strings.ToLower(x) != x` asks whether x has any capital — a
+// property of one string, which EqualFold(x, x) cannot express.
+func goCaseSelfCheck(line string) bool {
+	m := reGoCaseSelf.FindStringSubmatch(line)
+	return m != nil && m[1] == m[2]
+}
+
+// csBoundedLoop: the loop header caps its iterations at a small constant
+// (`j <= 3`, `end < i+8`), so appending in it cannot grow quadratically.
+func csBoundedLoop(header string) bool { return reLoopConstBound.MatchString(header) }
 
 // csGoQuotedVerb reports a printf-family call that wraps %s in quotes by hand.
 func csGoQuotedVerb(rawLine, code string) bool {

@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/exey/archscope/internal/parser"
 )
 
 // Topology groups what was found.
@@ -45,9 +47,12 @@ type TopoEntry struct {
 	Line     int
 }
 
+// Empty reports whether the topology holds no entry at all.
 func (t Topology) Empty() bool {
 	return t.Total() == 0
 }
+
+// Total counts every entry of the topology, entries from live dumps included.
 func (t Topology) Total() int {
 	n := len(t.Celery) + len(t.Transactions) + len(t.Redis) + len(t.MQ) + len(t.KeySpace) + len(t.Drift)
 	if t.Live != nil {
@@ -217,19 +222,28 @@ func scanTopology(t *Topology, filePath, e string, lines []string, seen map[stri
 		}
 		return &t.Celery
 	}
+	code := maskSource(lines, e).code
+	// inCode: the match starts on code, not inside a string or comment (a detector's
+	// own `Contains(line, "transaction.atomic(")` is not a transaction).
+	inCode := func(i, lead, at int) bool {
+		return lead+at < len(code[i]) && code[i][lead+at] != ' '
+	}
 	for i, raw := range lines {
 		tr := strings.TrimSpace(raw)
 		if tr == "" || isCommentLine(tr, e) {
 			continue
 		}
+		lead := len(raw) - len(strings.TrimLeft(raw, " \t"))
+		searching := parser.SearchesText(tr)
 		for _, rule := range topoRules {
 			if !hasExt(rule.langs, e) {
 				continue
 			}
-			g := rule.re.FindStringSubmatch(tr)
-			if g == nil {
+			loc := rule.re.FindStringSubmatchIndex(tr)
+			if loc == nil || !inCode(i, lead, loc[0]) {
 				continue
 			}
+			g := rule.re.FindStringSubmatch(tr)
 			name := ""
 			if rule.name > 0 && rule.name < len(g) {
 				name = strings.TrimSpace(g[rule.name])
@@ -241,7 +255,7 @@ func scanTopology(t *Topology, filePath, e string, lines []string, seen map[stri
 			}
 			t.add(cat(rule.cat), TopoEntry{Kind: rule.kind, Name: name, Detail: detail, FilePath: filePath, Line: i + 1}, seen)
 		}
-		if m := reRedisKey.FindStringSubmatch(tr); m != nil && (strings.Contains(m[2], ":") || strings.Contains(strings.ToLower(tr), "redis") || strings.Contains(strings.ToLower(tr), "cache")) {
+		if m := reRedisKey.FindStringSubmatch(tr); m != nil && !searching && (strings.Contains(m[2], ":") || strings.Contains(strings.ToLower(tr), "redis") || strings.Contains(strings.ToLower(tr), "cache")) {
 			cmd := strings.ToLower(m[1])
 			typ := redisCmds[cmd]
 			pat := strings.TrimSpace(reKeyHole.ReplaceAllString(m[2], "*"))
@@ -262,6 +276,9 @@ func scanTopology(t *Topology, filePath, e string, lines []string, seen map[stri
 			}
 		}
 		for _, m := range reTopoURL.FindAllStringSubmatch(tr, -1) {
+			if searching {
+				break
+			}
 			target := maskSecret(m[0])
 			switch m[1] {
 			case "redis", "rediss", "redis+sentinel":

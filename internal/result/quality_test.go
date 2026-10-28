@@ -1,24 +1,33 @@
 package result
 
-import "testing"
+import (
+	"testing"
 
-func TestHasDocComment(t *testing.T) {
-	cases := []struct {
-		lang string
-		src  []string
-		line int
-		want bool
-	}{
-		{"go", []string{"// Foo does x.", "func Foo() {}"}, 2, true},
-		{"go", []string{"", "func Foo() {}"}, 2, false},
-		{"go", []string{"/** doc */", "@Deco", "func Foo() {}"}, 3, true},
-		{"python", []string{"def f(a):", `    """Doc."""`, "    return a"}, 1, true},
-		{"python", []string{"def f(a):", "    return a"}, 1, false},
-		{"python", []string{"# explains", "def f(a):", "    return a"}, 2, true},
+	"github.com/exey/archscope/internal/modules/constructs"
+)
+
+// Review mode reads documentation through the shared docstring model: a Python
+// def with a blank line above and a docstring below its multi-line signature
+// is documented, in any language of text.
+func TestReviewDocIndexUsesDocstrings(t *testing.T) {
+	src := []string{
+		"import x", "", "",
+		"def get_unprocessed_images(",
+		"    *, created_from: datetime, untouched_since: Optional[datetime] = None",
+		"):",
+		`    """`,
+		"    Необработанные изображения с файлом.",
+		`    """`,
+		"    return []",
+		"", "",
+		"def bare(a):",
+		"    return a",
 	}
-	for i, c := range cases {
-		if got := hasDocComment(c.src, c.line, c.lang); got != c.want {
-			t.Errorf("case %d: got %v want %v", i, got, c.want)
-		}
+	idx := constructs.NewDocIndex("/x/a.py", src)
+	if !idx.Has(4) {
+		t.Error("documented function reported as undocumented")
+	}
+	if idx.Has(13) {
+		t.Error("undocumented function reported as documented")
 	}
 }

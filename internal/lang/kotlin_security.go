@@ -252,10 +252,14 @@ func kotlinZipSlipRule() security.Rule {
 	}
 }
 
+var (
+	reManifestCleartext   = regexp.MustCompile(`android:usesCleartextTraffic\s*=\s*"true"`)
+	reManifestAllowBackup = regexp.MustCompile(`android:allowBackup\s*=\s*"true"`)
+)
+
 // kotlinManifestCleartextRule scans AndroidManifest.xml for
 // android:usesCleartextTraffic="true" at the <application> level.
 func kotlinManifestCleartextRule() security.Rule {
-	reCleartext := regexp.MustCompile(`android:usesCleartextTraffic\s*=\s*"true"`)
 	return security.Rule{
 		ID:          "kotlin.manifest_cleartext_traffic",
 		Name:        "Cleartext Traffic Permitted in Manifest",
@@ -269,7 +273,7 @@ func kotlinManifestCleartextRule() security.Rule {
 			"the attribute (defaults to false on API 28+) or use a Network Security Config to " +
 			"restrict cleartext to specific domains during development only. (CWE-319)",
 		ProjectDetect: func(repoPath string) []security.Finding {
-			return manifestLineRule(repoPath, reCleartext)
+			return manifestLineRule(repoPath, reManifestCleartext)
 		},
 	}
 }
@@ -277,7 +281,6 @@ func kotlinManifestCleartextRule() security.Rule {
 // kotlinManifestAllowBackupRule scans AndroidManifest.xml for
 // android:allowBackup="true", which lets adb backup extract app data without root.
 func kotlinManifestAllowBackupRule() security.Rule {
-	reAllowBackup := regexp.MustCompile(`android:allowBackup\s*=\s*"true"`)
 	return security.Rule{
 		ID:          "kotlin.manifest_allow_backup",
 		Name:        "Android Backup Enabled",
@@ -291,7 +294,7 @@ func kotlinManifestAllowBackupRule() security.Rule {
 			"android:allowBackup=\"false\" or use android:fullBackupContent to restrict " +
 			"which files are included in backups. (CWE-530)",
 		ProjectDetect: func(repoPath string) []security.Finding {
-			return manifestLineRule(repoPath, reAllowBackup)
+			return manifestLineRule(repoPath, reManifestAllowBackup)
 		},
 	}
 }

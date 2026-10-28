@@ -29,6 +29,9 @@ func ExtractJavaTraffic(filePath string, lines []string) (inbound, outbound []En
 
 	for i, raw := range lines {
 		ln := strings.TrimSpace(raw)
+		if searchesText(ln) {
+			continue // detector code that looks for these strings is not traffic
+		}
 		if strings.HasPrefix(ln, "//") || strings.HasPrefix(ln, "*") {
 			continue
 		}

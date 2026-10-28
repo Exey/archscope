@@ -209,6 +209,17 @@ func (mf *goMutFile) shadows(fr csFuncRange, name string) bool {
 	return false
 }
 
+// isMainPkg: a `package main` entry point wires up its own process-wide state
+// (flags, config) once, single-threaded — not the shared mutable state the rule targets.
+func (mf *goMutFile) isMainPkg() bool {
+	for _, l := range mf.stripped {
+		if t := strings.TrimSpace(l); t != "" {
+			return strings.HasPrefix(t, "package main")
+		}
+	}
+	return false
+}
+
 // globalMutations finds writes to package-level variables from inside functions.
 func (p *goPackage) globalMutations() []CSIssue {
 	var globals []goGlobal
@@ -225,13 +236,13 @@ func (p *goPackage) globalMutations() []CSIssue {
 	var out []CSIssue
 	for _, g := range globals {
 		q := regexp.QuoteMeta(g.name)
-		write := regexp.MustCompile(`(?:^|[^\w.])` + q + `\s*(?:\[[^\]\n]*\]\s*)*(?:\.\w+\s*(?:\[[^\]\n]*\]\s*)*)*` + reMutAssignOps)
-		call := regexp.MustCompile(`\b(?:delete|clear)\(\s*` + q + `\b`)
+		write := rx(`(?:^|[^\w.])` + q + `\s*(?:\[[^\]\n]*\]\s*)*(?:\.\w+\s*(?:\[[^\]\n]*\]\s*)*)*` + reMutAssignOps)
+		call := rx(`\b(?:delete|clear)\(\s*` + q + `\b`)
 		for _, mf := range p.files {
 			reported := map[string]bool{}
 			for i, l := range mf.stripped {
 				fr, in := mf.enclosing(i)
-				if !in || i == fr.start || fr.name == "init" || fr.name == "TestMain" {
+				if !in || i == fr.start || fr.name == "init" || fr.name == "TestMain" || fr.name == "main" && mf.isMainPkg() {
 					continue
 				}
 				hit := false
@@ -298,7 +309,7 @@ func (p *goPackage) constFieldAssignments() []CSIssue {
 	}
 	var out []CSIssue
 	for _, cf := range fields {
-		write := regexp.MustCompile(`\.` + regexp.QuoteMeta(cf.name) + `\s*(?:\[[^\]\n]*\]\s*)*` + reMutAssignOps)
+		write := rx(`\.` + regexp.QuoteMeta(cf.name) + `\s*(?:\[[^\]\n]*\]\s*)*` + reMutAssignOps)
 		for _, mf := range p.files {
 			for i, l := range mf.stripped {
 				if !write.MatchString(l) {
@@ -332,7 +343,7 @@ func (mf *goMutFile) constParams() []CSIssue {
 		}
 		for _, name := range params {
 			q := regexp.QuoteMeta(name)
-			write := regexp.MustCompile(`(?:^|[^\w.])` + q + `\s*(?:\[[^\]\n]*\]\s*)*(?:\.\w+\s*(?:\[[^\]\n]*\]\s*)*)*` + reMutAssignOps)
+			write := rx(`(?:^|[^\w.])` + q + `\s*(?:\[[^\]\n]*\]\s*)*(?:\.\w+\s*(?:\[[^\]\n]*\]\s*)*)*` + reMutAssignOps)
 			for i := fr.start + 1; i <= fr.end && i < len(mf.stripped); i++ {
 				if loc := write.FindStringIndex(mf.stripped[i]); loc != nil && !strings.Contains(mf.stripped[i][loc[0]:loc[1]], ":=") {
 					out = append(out, mf.issue(i, security.SevMedium, "mut-const-param", "Assignment to a `+const` parameter", fr.name+"("+name+")",
@@ -345,17 +356,20 @@ func (mf *goMutFile) constParams() []CSIssue {
 	return out
 }
 
+var (
+	reGoLocalDecl   = regexp.MustCompile(`^\s*(?:var\s+)?([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*(?::=|\s+[\w*\[\]]+\s*(?:=|$))`)
+	reGoLocalAssign = regexp.MustCompile(`^\s*([A-Za-z_]\w*)\s*=[^=]`)
+)
+
 // reassignments is funky's check: a local assigned a new value after its declaration.
 func (mf *goMutFile) reassignments() []CSIssue {
 	var out []CSIssue
 	for _, fr := range mf.funcs {
 		declared := map[string]int{}
 		reported := map[string]bool{}
-		reDecl := regexp.MustCompile(`^\s*(?:var\s+)?([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*(?::=|\s+[\w*\[\]]+\s*(?:=|$))`)
-		reAssign := regexp.MustCompile(`^\s*([A-Za-z_]\w*)\s*=[^=]`)
 		for i := fr.start + 1; i <= fr.end && i < len(mf.stripped); i++ {
 			l := mf.stripped[i]
-			if g := reDecl.FindStringSubmatch(l); g != nil && (strings.Contains(l, ":=") || strings.HasPrefix(strings.TrimSpace(l), "var ")) {
+			if g := reGoLocalDecl.FindStringSubmatch(l); g != nil && (strings.Contains(l, ":=") || strings.HasPrefix(strings.TrimSpace(l), "var ")) {
 				for _, n := range splitNames(g[1]) {
 					if _, ok := declared[n]; !ok {
 						declared[n] = i
@@ -363,7 +377,7 @@ func (mf *goMutFile) reassignments() []CSIssue {
 				}
 				continue
 			}
-			if g := reAssign.FindStringSubmatch(l); g != nil {
+			if g := reGoLocalAssign.FindStringSubmatch(l); g != nil {
 				n := g[1]
 				if _, ok := declared[n]; !ok || reported[n] || n == "err" || n == "ok" || n == "_" || n == "ctx" || n == "i" || n == "j" || n == "k" {
 					continue
@@ -395,7 +409,7 @@ func scanTSMutability(filePath string, m maskedFile) []CSIssue {
 		scope := f.code[dm[1]:hi]
 		_ = lo
 		q := regexp.QuoteMeta(name)
-		reassign := regexp.MustCompile(`(?:^|[^\w$.])` + q + `\s*(?:=[^=>]|\+=|-=|\*=|/=|%=|\*\*=|\|\|=|&&=|\?\?=|<<=|>>=|>>>=|&=|\|=|\^=|\+\+|--)|(?:\+\+|--)\s*` + q + `\b|\b(?:in|of)\s+` + q + `\b|[\[{,]\s*` + q + `\s*[,\]}]\s*=[^=]|\.{3}` + q + `\s*\]\s*=`)
+		reassign := rx(`(?:^|[^\w$.])` + q + `\s*(?:=[^=>]|\+=|-=|\*=|/=|%=|\*\*=|\|\|=|&&=|\?\?=|<<=|>>=|>>>=|&=|\|=|\^=|\+\+|--)|(?:\+\+|--)\s*` + q + `\b|\b(?:in|of)\s+` + q + `\b|[\[{,]\s*` + q + `\s*[,\]}]\s*=[^=]|\.{3}` + q + `\s*\]\s*=`)
 		if reassign.MatchString(scope) {
 			continue
 		}
@@ -451,7 +465,7 @@ func scanPyMutability(filePath string, m maskedFile) []CSIssue {
 		}
 		for n := range globals {
 			q := regexp.QuoteMeta(n)
-			write := regexp.MustCompile(`^\s*` + q + `\s*(?::[^=]+)?(?:=[^=]|\+=|-=|\*=|/=)`)
+			write := rx(`^\s*` + q + `\s*(?::[^=]+)?(?:=[^=]|\+=|-=|\*=|/=)`)
 			for i := body; i <= end; i++ {
 				if write.MatchString(code[i]) {
 					add(f.start, security.SevMedium, "mut-py-global", "`global` variable reassigned", f.name+" → "+n,
@@ -465,7 +479,7 @@ func scanPyMutability(filePath string, m maskedFile) []CSIssue {
 				continue
 			}
 			q := regexp.QuoteMeta(name)
-			mut := regexp.MustCompile(`(?:^|[^\w.])` + q + `\s*(?:\.\s*(?:append|extend|insert|add|update|pop|popitem|remove|discard|clear|setdefault|sort|reverse)\s*\(|\[[^\]]*\]\s*(?:=[^=]|\+=|-=)|\s*\+=)`)
+			mut := rx(`(?:^|[^\w.])` + q + `\s*(?:\.\s*(?:append|extend|insert|add|update|pop|popitem|remove|discard|clear|setdefault|sort|reverse)\s*\(|\[[^\]]*\]\s*(?:=[^=]|\+=|-=)|\s*\+=)`)
 			for i := body; i <= end; i++ {
 				if mut.MatchString(code[i]) {
 					add(i, security.SevMedium, "mut-py-module-state", "Module-level collection mutated", f.name+" → "+name,

@@ -41,6 +41,11 @@ type DevOpsLint struct {
 }
 
 // Empty reports whether no artefacts were found at all.
+var (
+	reComposeNetworks = regexp.MustCompile(`(?m)^networks:`)
+	reRBACStarItem    = regexp.MustCompile(`(?m)-\s*\*\s*$`)
+)
+
 func (l *DevOpsLint) Empty() bool {
 	return l == nil || (l.Dockerfiles == nil && l.Compose == nil && l.Helm == nil)
 }
@@ -545,7 +550,7 @@ func lintCompose(root string, paths []string) *DevOpsArtifactLint {
 		if strings.Contains(content, "limits:") {
 			filesWithLimits++
 		}
-		if regexp.MustCompile(`(?m)^networks:`).MatchString(content) {
+		if reComposeNetworks.MatchString(content) {
 			filesWithNetworks++
 		}
 		// inBlock/blockIndent track which nested key (environment / cap_add /
@@ -784,7 +789,7 @@ func lintHelm(root string, chartDirs []string) *DevOpsArtifactLint {
 			}
 		}
 		if strings.Contains(t, "ClusterRole") &&
-			(strings.Contains(t, `"*"`) || strings.Contains(t, "'*'") || regexp.MustCompile(`(?m)-\s*\*\s*$`).MatchString(t)) {
+			(strings.Contains(t, `"*"`) || strings.Contains(t, "'*'") || reRBACStarItem.MatchString(t)) {
 			rbacWildcard++
 		}
 	}

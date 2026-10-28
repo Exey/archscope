@@ -27,7 +27,10 @@ func init() { modules.Default.Register(Module{}) }
 // Module implements spec-coverage analysis.
 type Module struct{}
 
-func (Module) ID() string    { return "speccoverage" }
+// ID is the module's stable identifier, "speccoverage", used to select and order its panel.
+func (Module) ID() string { return "speccoverage" }
+
+// Title is the heading of the module's panel, "Spec Coverage".
 func (Module) Title() string { return "Spec Coverage" }
 
 // AppliesTo runs for backend languages that own HTTP/gRPC/GraphQL routes.
@@ -68,6 +71,7 @@ func (r Result) HasData() bool { return r.HasSpec }
 
 // ─── Analyze ──────────────────────────────────────────────────────────────────
 
+// Analyze finds the project's spec files (plus any --spec files), extracts the routes the code implements, and compares the two.
 func (Module) Analyze(files []*parser.ParsedFile) any {
 	var r Result
 	if len(files) == 0 {
@@ -200,6 +204,7 @@ func detectGenerators(files []*parser.ParsedFile, specTypes []string) []string {
 
 // ─── SummaryCards ─────────────────────────────────────────────────────────────
 
+// SummaryCards returns the headline figures shown in the platform card's header for this module.
 func (Module) SummaryCards(res any) []modules.SummaryCard {
 	r, ok := res.(Result)
 	if !ok || !r.HasSpec {
@@ -219,6 +224,7 @@ func (Module) SummaryCards(res any) []modules.SummaryCard {
 
 // ─── RenderMarkdown ───────────────────────────────────────────────────────────
 
+// RenderMarkdown is RenderHTML's twin: the same panel content as Markdown.
 func (Module) RenderMarkdown(res any) string {
 	r, ok := res.(Result)
 	if !ok || !r.HasData() {
@@ -261,6 +267,7 @@ func (Module) RenderMarkdown(res any) string {
 
 // ─── RenderHTML ───────────────────────────────────────────────────────────────
 
+// RenderHTML draws the module's panel for the HTML report.
 func (Module) RenderHTML(res any) string {
 	r, ok := res.(Result)
 	if !ok || !r.HasData() {

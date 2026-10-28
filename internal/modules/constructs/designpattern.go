@@ -44,8 +44,13 @@ func init() { modules.Default.Register(DesignPatterns{}) }
 // DesignPatterns is the universal design-pattern detector.
 type DesignPatterns struct{}
 
-func (DesignPatterns) ID() string                       { return "designpattern" }
-func (DesignPatterns) Title() string                    { return "Design Patterns" }
+// ID is the module's stable identifier, "designpattern", used to select and order its panel.
+func (DesignPatterns) ID() string { return "designpattern" }
+
+// Title is the heading of the module's panel, "Design Patterns".
+func (DesignPatterns) Title() string { return "Design Patterns" }
+
+// AppliesTo reports that the module runs for every language.
 func (DesignPatterns) AppliesTo(languageID string) bool { return true } // universal
 
 // patternCategory groups GoF patterns.
@@ -415,6 +420,7 @@ func isEmptyProtocolBody(body string) bool {
 
 // Analyze scans declarations across files and attributes GoF roles.
 func (DesignPatterns) Analyze(files []*parser.ParsedFile) any {
+	files = nonTestFiles(files) // test names and fixtures spell out the very things detected
 	type agg struct {
 		category patternCategory
 		count    int

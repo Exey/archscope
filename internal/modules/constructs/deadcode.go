@@ -26,8 +26,13 @@ func init() { modules.Default.Register(DeadCode{}) }
 // DeadCode is the dead-code detector.
 type DeadCode struct{}
 
-func (DeadCode) ID() string    { return "deadcode" }
+// ID is the module's stable identifier, "deadcode", used to select and order its panel.
+func (DeadCode) ID() string { return "deadcode" }
+
+// Title is the heading of the module's panel, "Dead Code".
 func (DeadCode) Title() string { return "Dead Code" }
+
+// AppliesTo runs the module for TypeScript/JavaScript and Python, the languages whose dead code it can find.
 func (DeadCode) AppliesTo(languageID string) bool {
 	return languageID == "ts" || languageID == "python"
 }
@@ -38,8 +43,11 @@ type DeadCodeReport struct {
 	High, Medium, Low int
 }
 
+// HasData reports whether any dead code was found.
 func (r DeadCodeReport) HasData() bool { return len(r.Issues) > 0 }
-func (r DeadCodeReport) Total() int    { return len(r.Issues) }
+
+// Total is the number of dead-code issues.
+func (r DeadCodeReport) Total() int { return len(r.Issues) }
 
 // minCommentedCodeLines is react-code-audit's threshold for a commented-out block.
 const minCommentedCodeLines = 3
@@ -416,6 +424,7 @@ func looksLikeCode(s string) bool {
 	return false
 }
 
+// SummaryCards returns the headline figures shown in the platform card's header for this module.
 func (DeadCode) SummaryCards(res any) []modules.SummaryCard {
 	r, ok := res.(DeadCodeReport)
 	if !ok || !r.HasData() {
@@ -424,6 +433,7 @@ func (DeadCode) SummaryCards(res any) []modules.SummaryCard {
 	return []modules.SummaryCard{{Num: strconv.Itoa(r.Total()), Label: "dead-code issues"}}
 }
 
+// RenderMarkdown is RenderHTML's twin: the same panel content as Markdown.
 func (DeadCode) RenderMarkdown(res any) string {
 	r, ok := res.(DeadCodeReport)
 	if !ok {
@@ -434,6 +444,7 @@ func (DeadCode) RenderMarkdown(res any) string {
 	return b.String()
 }
 
+// RenderHTML draws the module's panel for the HTML report.
 func (DeadCode) RenderHTML(res any) string {
 	r, ok := res.(DeadCodeReport)
 	if !ok {

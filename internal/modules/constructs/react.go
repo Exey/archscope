@@ -182,7 +182,7 @@ func reactHookRules(f flatSrc, fn reactFunc, states []reactState, stateByName ma
 
 	callsSetter := func(body string) (string, bool) {
 		for s := range setters {
-			if regexp.MustCompile(`\b` + regexp.QuoteMeta(s) + `\s*\(`).MatchString(body) {
+			if rx(`\b` + regexp.QuoteMeta(s) + `\s*\(`).MatchString(body) {
 				return s, true
 			}
 		}
@@ -238,9 +238,9 @@ func reactHookRules(f flatSrc, fn reactFunc, states []reactState, stateByName ma
 			d := h.deps[0]
 			st, known := stateByName[d]
 			boolish := known && reStateBool.MatchString(st.init) || reTriggerName.MatchString(d)
-			guard := regexp.MustCompile(`\bif\s*\(\s*!?\s*` + regexp.QuoteMeta(d) + `\b|\b` + regexp.QuoteMeta(d) + `\s*&&`).MatchString(h.cbCode)
+			guard := rx(`\bif\s*\(\s*!?\s*` + regexp.QuoteMeta(d) + `\b|\b` + regexp.QuoteMeta(d) + `\s*&&`).MatchString(h.cbCode)
 			if boolish && guard {
-				reset := known && st.setter != "" && regexp.MustCompile(`\b`+regexp.QuoteMeta(st.setter)+`\s*\(\s*(?:false|true|!\s*`+regexp.QuoteMeta(d)+`)\s*\)`).MatchString(h.cbCode)
+				reset := known && st.setter != "" && rx(`\b`+regexp.QuoteMeta(st.setter)+`\s*\(\s*(?:false|true|!\s*`+regexp.QuoteMeta(d)+`)\s*\)`).MatchString(h.cbCode)
 				_, anySetter := callsSetter(h.cbCode)
 				if reset || (reTriggerName.MatchString(d) && anySetter) {
 					add(h.off, security.SevMedium, "react-effect-as-handler", "Effect used as an event handler",
@@ -267,7 +267,7 @@ func reactHookRules(f flatSrc, fn reactFunc, states []reactState, stateByName ma
 			if !isEffect(h.name) || !h.depsLit {
 				continue
 			}
-			if dependsOn(h.deps, src) && !strings.Contains(h.cbCode, "if") && regexp.MustCompile(`\b`+regexp.QuoteMeta(s.setter)+`\s*\(`).MatchString(h.cbCode) {
+			if dependsOn(h.deps, src) && !strings.Contains(h.cbCode, "if") && rx(`\b`+regexp.QuoteMeta(s.setter)+`\s*\(`).MatchString(h.cbCode) {
 				add(s.off, security.SevMedium, "react-derived-state", "State initialised from a prop and re-synced in an effect",
 					"`"+s.name+"` ← `"+src+"`\x00The state mirrors a prop through useState + useEffect. Use the prop directly, or key the component on it, instead of duplicating it into state.")
 				break
@@ -293,9 +293,9 @@ func reactHookRules(f flatSrc, fn reactFunc, states []reactState, stateByName ma
 	}
 	for _, s := range states {
 		q := regexp.QuoteMeta(s.name)
-		mut := regexp.MustCompile(reGuardPrefix + q + reMutator)
-		deep := regexp.MustCompile(reGuardPrefix + q + `\s*(?:(?:\.\s*[\w$]+|\[[^\]\n]*\])+)\s*(?:=[^=>]|\+=|-=|\*=|/=|\+\+|--)`)
-		direct := regexp.MustCompile(reGuardPrefix + q + `\s*(?:=[^=>]|\+=|-=)`)
+		mut := rx(reGuardPrefix + q + reMutator)
+		deep := rx(reGuardPrefix + q + `\s*(?:(?:\.\s*[\w$]+|\[[^\]\n]*\])+)\s*(?:=[^=>]|\+=|-=|\*=|/=|\+\+|--)`)
+		direct := rx(reGuardPrefix + q + `\s*(?:=[^=>]|\+=|-=)`)
 		for _, loc := range mut.FindAllStringIndex(region, -1) {
 			add(fn.open+loc[0], security.SevHigh, "react-direct-mutation", "State mutated in place",
 				"`"+s.name+"`\x00Mutating React state in place (push/splice/sort…) won't trigger a re-render and breaks memoisation. Copy first (`[...x]`, `.toSorted()`), then call the setter.")
@@ -315,7 +315,7 @@ func reactHookRules(f flatSrc, fn reactFunc, states []reactState, stateByName ma
 
 	// no-state-in-ref
 	for _, r := range refs {
-		pat := regexp.MustCompile(reGuardPrefix + regexp.QuoteMeta(r) + `\.current\b`)
+		pat := rx(reGuardPrefix + regexp.QuoteMeta(r) + `\.current\b`)
 		for _, loc := range pat.FindAllStringIndex(region, -1) {
 			off := fn.open + loc[0]
 			if jsxChildExpression(f, off+1) {

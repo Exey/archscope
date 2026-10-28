@@ -42,8 +42,13 @@ func init() { modules.Default.Register(Algorithms{}) }
 // Algorithms is the universal algorithm detector.
 type Algorithms struct{}
 
-func (Algorithms) ID() string                       { return "algorithms" }
-func (Algorithms) Title() string                    { return "Algorithms" }
+// ID is the module's stable identifier, "algorithms", used to select and order its panel.
+func (Algorithms) ID() string { return "algorithms" }
+
+// Title is the heading of the module's panel, "Algorithms".
+func (Algorithms) Title() string { return "Algorithms" }
+
+// AppliesTo reports that the module runs for every language.
 func (Algorithms) AppliesTo(languageID string) bool { return true } // universal
 
 // algoCategory groups detected algorithms by the functionality they implement,
@@ -163,7 +168,8 @@ var algoRules = []algoRule{
 	// ── Numeric & classic ───────────────────────────────────────────────────
 	{tokens: []string{"euclid", "gcd"}, name: "Euclidean GCD", category: numeric},
 	{tokens: []string{"binary", "gcd"}, name: "Binary GCD (Stein)", category: numeric},
-	{tokens: []string{"gcd"}, name: "Euclidean GCD", category: numeric},
+	// bare "gcd" is Grand Central Dispatch in Swift (gcdQueue, …), not the algorithm
+	{tokens: []string{"gcd"}, name: "Euclidean GCD", category: numeric, excludeLangs: []string{"swift"}},
 	{tokens: []string{"sieve", "eratosthenes"}, name: "Sieve of Eratosthenes", category: numeric},
 	{tokens: []string{"eratosthenes"}, name: "Sieve of Eratosthenes", category: numeric},
 	{tokens: []string{"miller", "rabin"}, name: "Miller–Rabin Primality", category: numeric},
@@ -533,6 +539,7 @@ func isCandidateKind(k parser.DeclKind) bool {
 // a name rule didn't already claim, by body shape (Phase 2 — see
 // matchStructuralRule).
 func (Algorithms) Analyze(files []*parser.ParsedFile) any {
+	files = nonTestFiles(files) // test names echo the algorithms they exercise
 	type agg struct {
 		category algoCategory
 		occ      []AlgoOccurrence

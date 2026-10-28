@@ -99,7 +99,10 @@ func (m Module) cfg() Config {
 	return c
 }
 
-func (Module) ID() string    { return "dddmodel" }
+// ID is the module's stable identifier, "dddmodel", used to select and order its panel.
+func (Module) ID() string { return "dddmodel" }
+
+// Title is the heading of the module's panel, "Domain Model".
 func (Module) Title() string { return "Domain Model" }
 
 // AppliesTo runs for backend languages only.
@@ -317,6 +320,7 @@ type dirCtx struct {
 	inServiceDir bool
 }
 
+// Analyze counts the DDD building blocks (entities, value objects, aggregates, repositories, services, events, factories) and layer directories, and blends them into the DDD score and verdict.
 func (m Module) Analyze(files []*parser.ParsedFile) any {
 	var r Result
 	cfg := m.cfg()
@@ -593,6 +597,7 @@ func (m Module) Analyze(files []*parser.ParsedFile) any {
 
 // ── SummaryCards ───────────────────────────────────────────────────────────
 
+// SummaryCards returns the headline figures shown in the platform card's header for this module.
 func (m Module) SummaryCards(res any) []modules.SummaryCard {
 	r, ok := res.(Result)
 	if !ok || !r.HasData() {
@@ -605,6 +610,7 @@ func (m Module) SummaryCards(res any) []modules.SummaryCard {
 
 // ── RenderMarkdown ─────────────────────────────────────────────────────────
 
+// RenderMarkdown is RenderHTML's twin: the same panel content as Markdown.
 func (m Module) RenderMarkdown(res any) string {
 	r, ok := res.(Result)
 	if !ok {
@@ -656,6 +662,7 @@ func mdCell(s string) string { return strings.ReplaceAll(strings.ReplaceAll(s, "
 
 // ── RenderHTML ─────────────────────────────────────────────────────────────
 
+// RenderHTML draws the module's panel for the HTML report.
 func (m Module) RenderHTML(res any) string {
 	r, ok := res.(Result)
 	if !ok {

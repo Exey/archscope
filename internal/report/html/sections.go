@@ -1256,12 +1256,14 @@ func renderK8sClusterStats(s scanner.K8sClusterStats) string {
 	if s.Services > 0 || s.Ingresses > 0 || s.NetworkPolicies > 0 {
 		var rows []k8sStatRow
 		if s.Services > 0 {
-			rows = append(rows, k8sStatRow{"Services", strconv.Itoa(s.Services), ""})
-			rows = append(rows, k8sStatRow{"Privileged ports (<1024)", strconv.Itoa(s.ServicesPrivPorts), passWarn(s.ServicesPrivPorts == 0)})
+			rows = append(rows,
+				k8sStatRow{"Services", strconv.Itoa(s.Services), ""},
+				k8sStatRow{"Privileged ports (<1024)", strconv.Itoa(s.ServicesPrivPorts), passWarn(s.ServicesPrivPorts == 0)})
 		}
 		if s.Ingresses > 0 {
-			rows = append(rows, k8sStatRow{"Ingresses", strconv.Itoa(s.Ingresses), ""})
-			rows = append(rows, k8sStatRow{"...with TLS configured", fmt.Sprintf("%d/%d", s.IngressesTLS, s.Ingresses), passWarn(s.IngressesTLS == s.Ingresses)})
+			rows = append(rows,
+				k8sStatRow{"Ingresses", strconv.Itoa(s.Ingresses), ""},
+				k8sStatRow{"...with TLS configured", fmt.Sprintf("%d/%d", s.IngressesTLS, s.Ingresses), passWarn(s.IngressesTLS == s.Ingresses)})
 		}
 		rows = append(rows, k8sStatRow{"NetworkPolicies", strconv.Itoa(s.NetworkPolicies), passWarn(s.NetworkPolicies > 0)})
 		cards = append(cards, renderK8sStatCard("🌐", "Networking & Exposure", rows))
@@ -1273,8 +1275,9 @@ func renderK8sClusterStats(s scanner.K8sClusterStats) string {
 			rows = append(rows, k8sStatRow{"ConfigMaps (custom)", strconv.Itoa(s.ConfigMaps), ""})
 		}
 		if s.PVCs > 0 {
-			rows = append(rows, k8sStatRow{"PersistentVolumeClaims", strconv.Itoa(s.PVCs), ""})
-			rows = append(rows, k8sStatRow{"...with a StorageClass", fmt.Sprintf("%d/%d", s.PVCsWithStorageClass, s.PVCs), passWarn(s.PVCsWithStorageClass == s.PVCs)})
+			rows = append(rows,
+				k8sStatRow{"PersistentVolumeClaims", strconv.Itoa(s.PVCs), ""},
+				k8sStatRow{"...with a StorageClass", fmt.Sprintf("%d/%d", s.PVCsWithStorageClass, s.PVCs), passWarn(s.PVCsWithStorageClass == s.PVCs)})
 		}
 		if s.StorageClasses > 0 {
 			rows = append(rows, k8sStatRow{"StorageClasses", strconv.Itoa(s.StorageClasses), ""})
@@ -1288,15 +1291,17 @@ func renderK8sClusterStats(s scanner.K8sClusterStats) string {
 			rows = append(rows, k8sStatRow{"ServiceAccounts (custom)", strconv.Itoa(s.ServiceAccounts), ""})
 		}
 		if s.Roles > 0 {
-			rows = append(rows, k8sStatRow{"Roles", strconv.Itoa(s.Roles), ""})
-			rows = append(rows, k8sStatRow{"...with wildcard rules", strconv.Itoa(s.RolesWildcard), passWarn(s.RolesWildcard == 0)})
+			rows = append(rows,
+				k8sStatRow{"Roles", strconv.Itoa(s.Roles), ""},
+				k8sStatRow{"...with wildcard rules", strconv.Itoa(s.RolesWildcard), passWarn(s.RolesWildcard == 0)})
 		}
 		if s.RoleBindings > 0 {
 			rows = append(rows, k8sStatRow{"RoleBindings", strconv.Itoa(s.RoleBindings), ""})
 		}
 		if s.ClusterRoles > 0 {
-			rows = append(rows, k8sStatRow{"ClusterRoles", strconv.Itoa(s.ClusterRoles), ""})
-			rows = append(rows, k8sStatRow{"...with wildcard rules", strconv.Itoa(s.ClusterRolesWildcard), passWarn(s.ClusterRolesWildcard == 0)})
+			rows = append(rows,
+				k8sStatRow{"ClusterRoles", strconv.Itoa(s.ClusterRoles), ""},
+				k8sStatRow{"...with wildcard rules", strconv.Itoa(s.ClusterRolesWildcard), passWarn(s.ClusterRolesWildcard == 0)})
 		}
 		if s.ClusterRoleBindings > 0 {
 			rows = append(rows, k8sStatRow{"ClusterRoleBindings", strconv.Itoa(s.ClusterRoleBindings), ""})

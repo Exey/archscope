@@ -51,6 +51,12 @@ func UniversalReDOS() security.Rule {
 			"hang the process. Rewrite with possessive quantifiers, atomic groups, or an RE2-safe " +
 			"equivalent pattern.",
 		Detect: func(filePath string, lines []string) []security.Finding {
+			// Go's regexp and Rust's regex crate are RE2-style automata: they match
+			// in linear time and cannot backtrack catastrophically, so a nested
+			// quantifier there is at worst slow, never a denial of service.
+			if ext := strings.ToLower(filepath.Ext(filePath)); ext == ".go" || ext == ".rs" {
+				return nil
+			}
 			var out []security.Finding
 			for i, line := range lines {
 				if security.IsComment(line) {

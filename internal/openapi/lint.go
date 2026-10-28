@@ -370,7 +370,7 @@ func (l *linter) operations2(ops []operation) {
 
 func (l *linter) hasBodyParam(o operation) bool {
 	for _, pn := range o.op.Get("parameters").Items() {
-		if pn = l.resolve(pn); pn != nil && pn.Get("in").Str() == "body" {
+		if pn := l.resolve(pn); pn != nil && pn.Get("in").Str() == "body" {
 			return true
 		}
 	}
@@ -708,7 +708,7 @@ func (l *linter) limits(ops []operation) {
 		var roots []*Node
 		for _, src := range []*Node{o.item.Get("parameters"), o.op.Get("parameters")} {
 			for _, pn := range src.Items() {
-				if pn = l.resolve(pn); pn != nil && (pn.Get("in").Str() == "query" || pn.Get("in").Str() == "header") {
+				if pn := l.resolve(pn); pn != nil && (pn.Get("in").Str() == "query" || pn.Get("in").Str() == "header") {
 					if s := pn.Get("schema"); s != nil {
 						roots = append(roots, s)
 					} else {

@@ -129,3 +129,25 @@ func TestCouplingCohesionAnalyzeNoGoData(t *testing.T) {
 		t.Fatalf("want no Cohesion entries, got %+v", res.Cohesion)
 	}
 }
+
+// A type with no fields (a report module, an emitter) has nothing for its
+// methods to share: it must not be reported as "no cohesion".
+func TestCohesionSkipsFieldlessTypes(t *testing.T) {
+	f := &parser.ParsedFile{
+		FilePath: "/x/m.go",
+		Extra: map[string]any{"members": []parser.TypeMembers{
+			{TypeName: "Module", Methods: []parser.MethodMembers{{Name: "ID"}, {Name: "Title"}, {Name: "Analyze"}}},
+			{TypeName: "Real", Fields: []string{"a", "b"}, Methods: []parser.MethodMembers{
+				{Name: "A", FieldRefs: []string{"a"}}, {Name: "B", FieldRefs: []string{"b"}}}},
+		}},
+	}
+	r := (CouplingCohesion{}).Analyze([]*parser.ParsedFile{f}).(CouplingCohesionResult)
+	for _, c := range r.Cohesion {
+		if c.TypeName == "Module" {
+			t.Errorf("field-less type reported: %+v", c)
+		}
+	}
+	if len(r.Cohesion) != 1 || r.Cohesion[0].TypeName != "Real" {
+		t.Errorf("want only the real type, got %+v", r.Cohesion)
+	}
+}

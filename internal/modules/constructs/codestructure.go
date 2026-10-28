@@ -50,8 +50,13 @@ const MaxNestDepth = csMaxNestDepth
 // CodeStructure is the universal low-level code-shape detector.
 type CodeStructure struct{}
 
-func (CodeStructure) ID() string                       { return "codestructure" }
-func (CodeStructure) Title() string                    { return "Code Structure" }
+// ID is the module's stable identifier, "codestructure", used to select and order its panel.
+func (CodeStructure) ID() string { return "codestructure" }
+
+// Title is the heading of the module's panel, "Code Structure".
+func (CodeStructure) Title() string { return "Code Structure" }
+
+// AppliesTo reports that the module runs for every language.
 func (CodeStructure) AppliesTo(languageID string) bool { return true } // universal
 
 // CSFuncOffender is one function that crossed a parameter-count or
@@ -99,6 +104,9 @@ var csTSExtensions = map[string]bool{
 // csMaxAnyListShown caps the loose-type file list.
 const csMaxAnyListShown = 15
 
+// csMaxDocNames caps how many undocumented symbols one file row names.
+const csMaxDocNames = 12
+
 // CodeStructureReport is the module output.
 type CodeStructureReport struct {
 	HighParamFuncs []CSFuncOffender // params > csMaxParams
@@ -121,6 +129,7 @@ type CodeStructureReport struct {
 	ReactIssues  []CSIssue // 🧩 React components (TS/JS): size, props, JSX depth, prop drilling
 	MarkerIssues []CSIssue // 🔀 Merge conflict markers and pasted diff headers (all languages)
 	MutIssues    []CSIssue // 🧊 Mutability: +const fields/params, mutated globals, reassignments, let→const, Python shared state
+	StyleIssues  []CSIssue // 🧹 Style & design: change-referential comments, lazy suppressions, stringly-typed, stateless classes, LBYL, unwrap/clone/blocking (Python · Go · Rust)
 
 	PyFuncs, PyTyped int            // Python functions / fully annotated ones
 	PyAny            int            // `Any` uses in Python annotations
@@ -143,14 +152,14 @@ func (r CodeStructureReport) HasData() bool { return r.scanned }
 // ReviewIssueCount is the number of suspicious-code, duplicate-code and React
 // findings — everything this card surfaces as a review item.
 func (r CodeStructureReport) ReviewIssueCount() int {
-	return len(r.BugIssues) + len(r.DupIssues) + len(r.HookIssues) + len(r.ReactIssues) + len(r.ShapeIssues) + len(r.HighComplexity) + len(r.MarkerIssues) + len(reviewable(r.MutIssues))
+	return len(r.BugIssues) + len(r.DupIssues) + len(r.HookIssues) + len(r.ReactIssues) + len(r.ShapeIssues) + len(r.HighComplexity) + len(r.MarkerIssues) + len(reviewable(r.MutIssues)) + len(reviewable(r.StyleIssues))
 }
 
 // IssuePoints weighs those findings for the Code Quality score: HIGH 5, MEDIUM
 // 2, LOW 0.5 (unscored advice such as "use isEmpty" must not drown real bugs).
 func (r CodeStructureReport) IssuePoints() float64 {
 	var pts float64
-	for _, set := range [][]CSIssue{r.BugIssues, r.DupIssues, r.HookIssues, r.ReactIssues, r.ShapeIssues, r.MarkerIssues, reviewable(r.MutIssues)} {
+	for _, set := range [][]CSIssue{r.BugIssues, r.DupIssues, r.HookIssues, r.ReactIssues, r.ShapeIssues, r.MarkerIssues, reviewable(r.MutIssues), reviewable(r.StyleIssues)} {
 		h, m, l := issueSevCounts(set)
 		pts += float64(h)*5 + float64(m)*2 + float64(l)*0.5
 	}
@@ -361,7 +370,7 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 		nHP, nDN, nCC := len(rep.HighParamFuncs), len(rep.DeepNestFuncs), len(rep.HighComplexity)
 		nShape, nBug, nDup := len(rep.ShapeIssues), len(rep.BugIssues), len(rep.DupIssues)
 		nHook, nReact, nMark := len(rep.HookIssues), len(rep.ReactIssues), len(rep.MarkerIssues)
-		nMut := len(rep.MutIssues)
+		nMut, nStyle := len(rep.MutIssues), len(rep.StyleIssues)
 		rep.MarkerIssues = append(rep.MarkerIssues, scanMarkers(f.FilePath, raw)...)
 
 		for i, s := range stripped {
@@ -394,7 +403,7 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 		if lang != csStrNone {
 			masked := maskSource(raw, fe)
 			rep.ShapeIssues = append(rep.ShapeIssues, moduleSizeIssue(f.FilePath, raw)...)
-			rep.TypeIgnores += countTypeIgnores(raw)
+			rep.TypeIgnores += countTypeIgnores(masked, fe)
 			if ds, ok := docStats(f.FilePath, masked); ok && ds.Public > 0 {
 				rep.DocPublic += ds.Public
 				rep.DocDocumented += ds.Documented
@@ -409,13 +418,14 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 					rep.PyTyped += ts.Typed
 					rep.PyAny += ts.AnyCount
 					if ts.Typed < ts.Funcs || ts.AnyCount > 0 {
-						ts.Ignores = countTypeIgnores(raw)
+						ts.Ignores = countTypeIgnores(masked, fe)
 						rep.TypingFiles = append(rep.TypingFiles, ts)
 					}
 				}
 				rep.BugIssues = append(rep.BugIssues, scanPyBugs(f.FilePath, masked)...)
 			}
 			rep.BugIssues = append(rep.BugIssues, scanBugSmells(f.FilePath, masked)...)
+			rep.StyleIssues = append(rep.StyleIssues, scanStyle(f.FilePath, fe, masked)...)
 			rep.DupIssues = append(rep.DupIssues, scanDuplicateCode(f.FilePath, masked)...)
 			if lang == csStrPython {
 				rep.MutIssues = append(rep.MutIssues, scanPyMutability(f.FilePath, masked)...)
@@ -457,6 +467,7 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 			rep.ReactIssues = append(rep.ReactIssues[:nReact], suppressIssues(sup, rep.ReactIssues[nReact:])...)
 			rep.MarkerIssues = append(rep.MarkerIssues[:nMark], suppressIssues(sup, rep.MarkerIssues[nMark:])...)
 			rep.MutIssues = append(rep.MutIssues[:nMut], suppressIssues(sup, rep.MutIssues[nMut:])...)
+			rep.StyleIssues = append(rep.StyleIssues[:nStyle], suppressStyle(sup, rep.StyleIssues[nStyle:])...)
 		}
 	}
 
@@ -472,6 +483,7 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 	rep.DupIssues = append(rep.DupIssues, scanClones(files, cache)...)
 	rep.MutIssues = append(rep.MutIssues, scanGoMutability(files, cache)...)
 	sortIssues(rep.MutIssues)
+	sortIssues(rep.StyleIssues)
 	sortIssues(rep.BugIssues)
 	sortIssues(rep.DupIssues)
 	sortIssues(rep.HookIssues)
@@ -693,13 +705,24 @@ func (CodeStructure) RenderMarkdown(res any) string {
 	}
 	if len(r.DocFiles) > 0 {
 		mdSubOpen(&b, "📝", fmt.Sprintf("Documentation — %d of %d public symbols documented", r.DocDocumented, r.DocPublic), len(r.DocFiles), docsHint)
-		b.WriteString("| File | Public | Documented | First missing |\n|------|-------:|-----------:|---------------|\n")
+		b.WriteString("| File | Public | Documented | Undocumented |\n|------|-------:|-----------:|--------------|\n")
 		for i, f := range r.DocFiles {
 			if i == csMaxAnyListShown {
 				fmt.Fprintf(&b, "| | | | … and %d more |\n", len(r.DocFiles)-csMaxAnyListShown)
 				break
 			}
-			fmt.Fprintf(&b, "| %s | %d | %d%% | %s:%d |\n", baseName(f.FilePath), f.Public, f.Documented*100/max(f.Public, 1), baseName(f.FilePath), f.FirstMissing)
+			var at []string
+			for j, m := range f.Missing {
+				if j == csMaxDocNames {
+					at = append(at, fmt.Sprintf("+%d more", len(f.Missing)-csMaxDocNames))
+					break
+				}
+				at = append(at, fmt.Sprintf("%s:%d", m.Name, m.Line))
+			}
+			if len(at) == 0 {
+				at = append(at, fmt.Sprintf("%s:%d", baseName(f.FilePath), f.FirstMissing))
+			}
+			fmt.Fprintf(&b, "| %s | %d | %d%% | %s |\n", shortPath(f.FilePath), f.Public, f.Documented*100/max(f.Public, 1), strings.Join(at, "<br>"))
 		}
 		b.WriteString("\n")
 	}
@@ -746,6 +769,7 @@ type issueSubcard struct {
 func (r CodeStructureReport) issueSubcards() []issueSubcard {
 	return []issueSubcard{
 		{"mut", "🧊", "Mutability", "Shared and changing state, from constlint / go-immutable / funky: assignments to `// +const` fields and parameters, package-level variables mutated from functions, reassigned locals (advisory), `let` that should be `const`, Python `global` state and shared class attributes.", r.MutIssues},
+		{"style", "🧹", "Style & design", "Ported from thai-lint, with Go and Rust counterparts: comments and docstrings that describe a change instead of the code, linter suppressions with no reason, stringly-typed comparisons (advisory), Python stateless classes, getters that should be properties, look-before-you-leap checks, filtering inside loops, command/query mixing (advisory), print() and fmt.Print in libraries, Manager/Helper god types, Go Get-prefixed getters, Rust unwrap/expect, clone() in loops and blocking calls in async fns.", r.StyleIssues},
 		{"markers", "🔀", "Merge & diff markers", "Unresolved merge-conflict markers and pasted diff headers left in source (ported from dodgy).", r.MarkerIssues},
 		{"bug", "🐛", "Suspicious code", "Bug-class patterns from go-critic (Go) and pylint/pyflakes (Python): identical operands, impossible conditions, off-by-one, mutable default arguments, bare/swallowed except, bad locks…", r.BugIssues},
 		{"dup", "👯", "Duplicate code", "Code copied between places (blocks of 15+ identical lines across or within files), neighbouring if/else branches with the same body, and repeated case labels.", r.DupIssues},
@@ -897,15 +921,25 @@ func writeCSDocSubcard(b *strings.Builder, files []CSDocFile, public, documented
 		return
 	}
 	writeSubOpen(b, "docs", "📝", fmt.Sprintf("Documentation — %d of %d public symbols documented", documented, public), len(files), docsHint)
-	b.WriteString(`<table class="as-table as-cs__table"><thead><tr><th>File</th><th>Public</th><th>Documented</th><th>First missing</th></tr></thead><tbody>`)
+	b.WriteString(`<table class="as-table as-cs__table"><thead><tr><th>File</th><th>Public</th><th>Documented</th><th class="as-cs__th-where">Undocumented</th></tr></thead><tbody>`)
 	for i, f := range files {
 		if i == csMaxAnyListShown {
 			fmt.Fprintf(b, `<tr><td colspan="4" class="as-cs__more">… and %d more</td></tr>`, len(files)-csMaxAnyListShown)
 			break
 		}
-		loc := occurrenceLink(fmt.Sprintf("%s:%d", baseName(f.FilePath), f.FirstMissing), f.FilePath, f.FirstMissing)
+		var links []string
+		for j, m := range f.Missing {
+			if j == csMaxDocNames {
+				links = append(links, fmt.Sprintf(`<span class="as-cx__more">+%d more</span>`, len(f.Missing)-csMaxDocNames))
+				break
+			}
+			links = append(links, occurrenceLink(fmt.Sprintf("%s:%d", m.Name, m.Line), f.FilePath, m.Line))
+		}
+		if len(links) == 0 {
+			links = append(links, occurrenceLink(fmt.Sprintf("%s:%d", baseName(f.FilePath), f.FirstMissing), f.FilePath, f.FirstMissing))
+		}
 		fmt.Fprintf(b, `<tr><td class="mono">%s</td><td class="mono">%d</td><td class="mono">%d%%</td><td class="mono">%s</td></tr>`,
-			html.EscapeString(baseName(f.FilePath)), f.Public, f.Documented*100/max(f.Public, 1), loc)
+			html.EscapeString(shortPath(f.FilePath)), f.Public, f.Documented*100/max(f.Public, 1), strings.Join(links, "<br>"))
 	}
 	b.WriteString(`</tbody></table>`)
 	writeSubClose(b)
@@ -980,6 +1014,7 @@ func writeCSHeader(b *strings.Builder, r CodeStructureReport) {
 	}
 	sums := []sum{
 		{"mut", "🧊", "mutability", r.MutIssues},
+		{"style", "🧹", "style & design", r.StyleIssues},
 		{"markers", "🔀", "merge / diff markers", r.MarkerIssues},
 		{"bug", "🐛", "suspicious code", r.BugIssues},
 		{"dup", "👯", "duplicate code", r.DupIssues},
@@ -1034,4 +1069,29 @@ func writeCSOffenders(b *strings.Builder, key, icon, title, valLabel string, off
 	}
 	b.WriteString(`</tbody></table>`)
 	writeSubClose(b)
+}
+
+// suppressStyle is suppressIssues for the style rules, except that the findings
+// about suppressions themselves can't be silenced by the very comment they flag.
+func suppressStyle(sup *security.Suppressor, issues []CSIssue) []CSIssue {
+	var lazy, rest []CSIssue
+	for _, is := range issues {
+		if strings.HasPrefix(is.RuleID, "lazy-ignore") {
+			lazy = append(lazy, is)
+		} else {
+			rest = append(rest, is)
+		}
+	}
+	return append(suppressIssues(sup, rest), lazy...)
+}
+
+// shortPath is the last two path segments ("html/emitter.go"): enough to tell
+// the three emitter.go files of a repository apart, short enough for a table.
+func shortPath(p string) string {
+	p = strings.ReplaceAll(p, "\\", "/")
+	parts := strings.Split(p, "/")
+	if len(parts) > 2 {
+		parts = parts[len(parts)-2:]
+	}
+	return strings.Join(parts, "/")
 }

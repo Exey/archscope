@@ -31,8 +31,13 @@ func init() { modules.Default.Register(Complexity{}) }
 // rather than a false reading.
 type Complexity struct{}
 
-func (Complexity) ID() string                       { return "complexity" }
-func (Complexity) Title() string                    { return "Complexity" }
+// ID is the module's stable identifier, "complexity", used to select and order its panel.
+func (Complexity) ID() string { return "complexity" }
+
+// Title is the heading of the module's panel, "Complexity".
+func (Complexity) Title() string { return "Complexity" }
+
+// AppliesTo reports that the module runs for every language.
 func (Complexity) AppliesTo(languageID string) bool { return true } // universal
 
 // CollectionUsage counts how often the classic collections appear in source.
@@ -44,7 +49,10 @@ type CollectionUsage struct {
 	Lazy       int // .lazy modifier, not its own collection
 }
 
+// Total is the number of collection uses counted; the .lazy modifier is not its own collection.
 func (u CollectionUsage) Total() int { return u.Array + u.Dictionary + u.Set + u.Sequence }
+
+// IsEmpty reports whether no collection use of any kind was seen.
 func (u CollectionUsage) IsEmpty() bool {
 	return u.Total() == 0 && u.Lazy == 0
 }
@@ -167,6 +175,13 @@ type cxFrame struct {
 	isLoop  bool
 	name    string
 	hasName bool
+	// elem is the element variable a collection loop binds ("tm" in
+	// `for _, tm := range tms`), src the collection it walks ("tms"); descends marks
+	// a loop over a part of an enclosing loop's element — together they walk one data
+	// hierarchy once, so the nest is linear in the data's total size, not a product,
+	// and adds no loop depth.
+	elem, src string
+	descends  bool
 }
 
 // analyzeComplexity walks braces in one file's stripped lines, tracking loop
@@ -180,11 +195,21 @@ func analyzeComplexity(lines []string, filePath string, usage *CollectionUsage,
 	loopDepth := func() int {
 		d := 0
 		for _, f := range stack {
-			if f.isLoop {
+			if f.isLoop && !f.descends {
 				d++
 			}
 		}
 		return d
+	}
+	// partOfEnclosing: expr is derived from an enclosing loop's element (and not from
+	// the collection that loop walks, which would make it a product).
+	partOfEnclosing := func(expr string) bool {
+		for _, f := range stack {
+			if f.isLoop && f.elem != "" && hasIdent(expr, f.elem) && !hasIdent(expr, f.src) {
+				return true
+			}
+		}
+		return false
 	}
 	currentSymbol := func() string {
 		for i := len(stack) - 1; i >= 0; i-- {
@@ -223,15 +248,23 @@ func analyzeComplexity(lines []string, filePath string, usage *CollectionUsage,
 				}
 				pending = ""
 				isLoop, label, name, hasName := classifyBrace(segText)
+				fr := cxFrame{isLoop: isLoop, name: name, hasName: hasName}
 				if isLoop {
 					iterationScopes[filePath+"\x01"+currentSymbol()] = true
+					var expr string
+					fr.elem, expr = rangeHeader(segText)
+					fr.src = leadingIdent(expr)
+					fr.descends = expr != "" && partOfEnclosing(expr)
 					newDepth := loopDepth() + 1
+					if fr.descends {
+						newDepth = loopDepth()
+					}
 					if newDepth >= 2 {
 						*time = append(*time, Violation{currentSymbol(), filePath, li + 1,
 							newDepth, label})
 					}
 				}
-				stack = append(stack, cxFrame{isLoop: isLoop, name: name, hasName: hasName})
+				stack = append(stack, fr)
 				segStart = i + 1
 			case '}':
 				if len(stack) > 0 {
@@ -267,12 +300,47 @@ var (
 	reLoopKw    = regexp.MustCompile(`(^|[^\w.])(for|while|repeat|loop|foreach)\b`)
 	reControlKw = regexp.MustCompile(`(^|[^\w.])(if|guard|switch|else|do|catch|when)\b`)
 	reHOF       = regexp.MustCompile(`\.(map|filter|forEach|compactMap|flatMap|reduce|sorted|first|firstIndex|last|contains|allSatisfy|min|max|drop|dropFirst|dropLast|prefix|suffix|partition|split|reversed)\b[^{}]*$`)
-	reFunc      = regexp.MustCompile(`(^|[^\w.])(?:func|fn|fun|function)\s+(\w+)`)
+	// reFunc also takes Go's receiver clause ("func (r *Foo) Bar(", "func (Foo) Bar("),
+	// or every method would fall back to "(top level)" and merge into one entry.
+	reFunc      = regexp.MustCompile(`(^|[^\w.])(?:func(?:\s*\([^)]*\))?|fn|fun|function)\s+(\w+)`)
 	reType      = regexp.MustCompile(`(^|[^\w.])(?:class|struct|enum|actor|extension|interface|trait|object|impl)\s+(\w+)`)
 	reInit      = regexp.MustCompile(`(^|[^\w.])init[?!]?\s*[(<]`)
 	reSubscript = regexp.MustCompile(`(^|[^\w.])subscript\s*[(<]`)
 	reComputed  = regexp.MustCompile(`(^|[^\w.])(?:var|val)\s+(\w+)\s*:\s*[^={]+$`)
 )
+
+var (
+	reGoRange   = regexp.MustCompile(`(?:^|[^\w.])for\s+(?:(\w+)\s*,\s*)?(\w+)\s*:?=\s*range\s+(.+?)\s*$`)
+	reForInOver = regexp.MustCompile(`(?:^|[^\w.])for\s*\(?\s*(?:(?:const|let|var|val|mut)\s+)?(\w+)\s+(?:in|of)\s+(.+?)\s*\)?\s*$`)
+	reLeadIdent = regexp.MustCompile(`^[A-Za-z_]\w*`)
+)
+
+// rangeHeader reads a collection loop header: elem is the variable bound to each
+// element ("" when the loop binds none or only an index), expr the iterated
+// expression. `for i := range n` and `for k := range m` bind an index/key, never an
+// element — those are not recorded.
+func rangeHeader(seg string) (elem, expr string) {
+	if m := reGoRange.FindStringSubmatch(seg); m != nil {
+		if m[1] == "" || m[2] == "_" { // one variable: the index/key
+			return "", m[3]
+		}
+		return m[2], m[3]
+	}
+	if m := reForInOver.FindStringSubmatch(seg); m != nil {
+		return m[1], m[2]
+	}
+	return "", ""
+}
+
+func leadingIdent(expr string) string { return reLeadIdent.FindString(expr) }
+
+// hasIdent reports whether expr mentions name as a whole identifier.
+func hasIdent(expr, name string) bool {
+	if name == "" {
+		return false
+	}
+	return rx(`(?:^|[^\w.])` + regexp.QuoteMeta(name) + `\b`).MatchString(expr)
+}
 
 // classifyBrace classifies the brace whose preceding segment text is seg.
 func classifyBrace(seg string) (isLoop bool, label, name string, hasName bool) {

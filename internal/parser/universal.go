@@ -210,7 +210,7 @@ func ParseUniversal(filePath string, lines []string, spec *langspec.LanguageSpec
 
 		// ── TODO / FIXME ──
 		for _, marker := range spec.Patterns.TodoMarkers {
-			if strings.Contains(raw, marker) {
+			if markerInComment(raw, marker) {
 				pf.TodoCount++
 				pf.Todos = append(pf.Todos, TodoItem{
 					FilePath: filePath, Line: lineNo, Kind: "TODO",
@@ -220,7 +220,7 @@ func ParseUniversal(filePath string, lines []string, spec *langspec.LanguageSpec
 			}
 		}
 		for _, marker := range spec.Patterns.FixmeMarkers {
-			if strings.Contains(raw, marker) {
+			if markerInComment(raw, marker) {
 				pf.FixmeCount++
 				pf.Todos = append(pf.Todos, TodoItem{
 					FilePath: filePath, Line: lineNo, Kind: "FIXME",
@@ -312,4 +312,50 @@ func extractTodoText(raw string) string {
 		s = s[:120] + "…"
 	}
 	return s
+}
+
+// markerInComment reports whether a TODO/FIXME marker (e.g. "// TODO", "# FIXME")
+// really starts a comment on the line: it must sit outside any string literal
+// (a language spec that lists `"// FIXME"` as a marker is not itself a FIXME) and
+// be followed by something other than more identifier text or a "/" — so
+// "TODO/FIXME backlog density…" in prose is a mention, not an item.
+func markerInComment(line, marker string) bool {
+	for from := 0; ; {
+		i := strings.Index(line[from:], marker)
+		if i < 0 {
+			return false
+		}
+		i += from
+		if !insideString(line[:i]) {
+			rest := line[i+len(marker):]
+			if rest == "" {
+				return true
+			}
+			switch c := rest[0]; {
+			case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_', c == '/':
+				// "TODO/FIXME", "TODOS": prose, not a marker
+			default:
+				return true
+			}
+		}
+		from = i + len(marker)
+	}
+}
+
+// insideString reports whether the end of prefix lies inside a "…", '…' or `…`
+// literal on that line (escapes respected).
+func insideString(prefix string) bool {
+	var quote byte
+	for i := 0; i < len(prefix); i++ {
+		c := prefix[i]
+		switch {
+		case quote == 0 && (c == '"' || c == '\'' || c == '`'):
+			quote = c
+		case quote != 0 && c == '\\' && quote != '`':
+			i++
+		case quote != 0 && c == quote:
+			quote = 0
+		}
+	}
+	return quote != 0
 }

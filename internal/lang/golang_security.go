@@ -13,9 +13,13 @@ import (
 var goLangs = []string{"go"}
 
 var (
-	reGoWeakCrypto   = regexp.MustCompile(`"crypto/(md5|sha1|des|rc4)"|\b(md5|sha1)\.New\s*\(|\bdes\.NewCipher\s*\(`)
-	reGoInsecureTLS  = regexp.MustCompile(`InsecureSkipVerify\s*:\s*true`)
-	reGoCmdInjection = regexp.MustCompile(`exec\.Command(Context)?\s*\(.*(fmt\.Sprintf|"\s*\+|\+\s*")`)
+	reGoWeakCrypto  = regexp.MustCompile(`"crypto/(md5|sha1|des|rc4)"|\b(md5|sha1)\.New\s*\(|\bdes\.NewCipher\s*\(`)
+	reGoInsecureTLS = regexp.MustCompile(`InsecureSkipVerify\s*:\s*true`)
+	// reGoCmdInjection: a shell invoked with a built-up command string, or a
+	// program name that is itself formatted/concatenated. An argument built with
+	// "+" for a fixed program ("git", "show", rev+":"+path) is not shell
+	// injection — no shell parses it.
+	reGoCmdInjection = regexp.MustCompile(`exec\.(?:Command\s*\(|CommandContext\s*\(\s*[\w.]+\s*,)\s*(?:"(?:sh|bash|zsh|dash|cmd|cmd\.exe|powershell|pwsh)"\s*,\s*"(?:-c|/c|-Command)"\s*,.*(?:fmt\.Sprintf|"\s*\+|\+\s*")|fmt\.Sprintf|[A-Za-z_][\w.]*\s*\+|"[^"]*"\s*\+)`)
 	reGoHTTPNoTLS    = regexp.MustCompile(`\bhttp\.ListenAndServe\s*\(`)
 	// reGoMathRand matches actual rand.* function calls (not just the import)
 	// so the rule can be gated on sensitive context via twoReRule.
@@ -58,8 +62,8 @@ var (
 	reGoZipSink  = regexp.MustCompile(`\bzip\.(NewReader|OpenReader)\s*\(`)
 	reGoZipGuard = regexp.MustCompile(`(?i)(filepath\.Clean|filepath\.Abs|strings\.HasPrefix|path\.Clean)`)
 	// CWE-362: TOCTOU race condition helpers
-	reTOCTOUCheck = regexp.MustCompile(`\bos\.(Stat|Lstat)\s*\(`)
-	reTOCTOUUse   = regexp.MustCompile(`\bos\.(Create|Mkdir|MkdirAll)\s*\(`)
+	reTOCTOUCheck = regexp.MustCompile(`\bos\.(?:Stat|Lstat)\s*\(\s*([^()]+?)\s*\)`)
+	reTOCTOUUse   = regexp.MustCompile(`\bos\.(?:Create|Mkdir)\s*\(\s*([^,()]+?)\s*[,)]`)
 	reTOCTOUGuard = regexp.MustCompile(`O_EXCL|sync\.(Mutex|RWMutex|Once)\b`)
 	// CWE-321: hardcoded AES/HMAC key material in a byte-slice literal
 	reGoByteArrayKey = regexp.MustCompile(`(?i)\b(key|aesKey|secretKey|cipherKey|encKey|hmacKey)\b.*\[\]byte\s*\{`)
@@ -84,12 +88,7 @@ func init() {
 		"InsecureSkipVerify: true disables certificate validation, defeating TLS and enabling "+
 			"man-in-the-middle attacks. Verify certificates; pin or supply a proper RootCAs pool if needed.",
 	).WithCWE("295").WithSkipTests())
-	security.Default.RegisterRule(reRule(
-		"go.command_injection", "Command Injection Risk", "injection", security.SevHigh, goLangs,
-		reGoCmdInjection,
-		"Building an exec.Command argument by formatting or concatenating strings can let input "+
-			"alter the command. Pass fixed args as separate parameters and never interpolate user input.",
-	).WithCWE("78").WithSkipTests())
+	security.Default.RegisterRule(goCommandInjectionRule().WithCWE("78").WithSkipTests())
 	security.Default.RegisterRule(goHTTPNoTLSRule())
 	security.Default.RegisterRule(goSQLFmtRule())
 	security.Default.RegisterRule(twoReRule(
@@ -556,7 +555,9 @@ func goHTTPNoTLSRule() security.Rule {
 				if security.IsComment(line) {
 					continue
 				}
-				if !reGoHTTPNoTLS.MatchString(line) {
+				// strings are blanked: a rule definition or detector that merely
+				// mentions "http.ListenAndServe(" is not a server
+				if !reGoHTTPNoTLS.MatchString(security.StripStringsAndComments(line)) {
 					continue
 				}
 				// Skip localhost-only listeners: health checks, pprof, dev servers.
@@ -626,27 +627,73 @@ func goTOCTOURule() security.Rule {
 			"race conditions. Use os.OpenFile with os.O_CREATE|os.O_EXCL for atomic file " +
 			"creation, or os.MkdirAll which is inherently idempotent. (CWE-362)",
 		Detect: func(filePath string, lines []string) []security.Finding {
-			statLine := -1
-			hasCreate := false
+			// A check-then-create race needs the same path: os.Stat(p) followed, a
+			// few lines later, by os.Create(p) / os.Mkdir(p). A Stat whose result is
+			// only read (or a file that creates unrelated paths) is not one.
+			// MkdirAll is idempotent and excluded.
 			hasGuard := false
+			for _, line := range lines {
+				if !security.IsComment(line) && reTOCTOUGuard.MatchString(line) {
+					hasGuard = true
+					break
+				}
+			}
+			if hasGuard {
+				return nil
+			}
+			var out []security.Finding
 			for i, line := range lines {
 				if security.IsComment(line) {
 					continue
 				}
-				if reTOCTOUCheck.MatchString(line) && statLine == -1 {
-					statLine = i
+				g := reTOCTOUCheck.FindStringSubmatch(security.StripStringsAndComments(line))
+				if g == nil {
+					// a path given as a literal is blanked by stripping; use the raw line
+					g = reTOCTOUCheck.FindStringSubmatch(line)
 				}
-				if reTOCTOUUse.MatchString(line) {
-					hasCreate = true
+				if g == nil {
+					continue
 				}
-				if reTOCTOUGuard.MatchString(line) {
-					hasGuard = true
+				path := strings.TrimSpace(g[1])
+				for j := i; j < len(lines) && j <= i+12; j++ {
+					if security.IsComment(lines[j]) {
+						continue
+					}
+					if u := reTOCTOUUse.FindStringSubmatch(lines[j]); u != nil && strings.TrimSpace(u[1]) == path {
+						out = append(out, security.NewFinding(filePath, i, lines))
+						break
+					}
 				}
 			}
-			if statLine >= 0 && hasCreate && !hasGuard {
-				return []security.Finding{security.NewFinding(filePath, statLine, lines)}
+			return out
+		},
+	}
+}
+
+// goCommandInjectionRule flags exec.Command calls where a shell is handed a
+// built-up command string, or the program name itself is formatted. The call
+// must exist in code (strings blanked) so a detector that merely quotes it is
+// ignored; the shape is read from the raw line, where the literals are.
+func goCommandInjectionRule() security.Rule {
+	return security.Rule{
+		ID:        "go.command_injection",
+		Name:      "Command Injection Risk",
+		Severity:  security.SevHigh,
+		Category:  "injection",
+		Languages: goLangs,
+		Description: "Building an exec.Command argument by formatting or concatenating strings can let input " +
+			"alter the command. Pass fixed args as separate parameters and never interpolate user input.",
+		Detect: func(filePath string, lines []string) []security.Finding {
+			var out []security.Finding
+			for i, line := range lines {
+				if security.IsComment(line) || !strings.Contains(security.StripStringsAndComments(line), "exec.Command") {
+					continue
+				}
+				if reGoCmdInjection.MatchString(line) {
+					out = append(out, security.NewFinding(filePath, i, lines))
+				}
 			}
-			return nil
+			return out
 		},
 	}
 }

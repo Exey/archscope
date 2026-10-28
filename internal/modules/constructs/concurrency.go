@@ -25,8 +25,13 @@ func init() { modules.Default.Register(Concurrency{}) }
 // Concurrency is the concurrency / API-misuse detector.
 type Concurrency struct{}
 
-func (Concurrency) ID() string    { return "concurrency" }
+// ID is the module's stable identifier, "concurrency", used to select and order its panel.
+func (Concurrency) ID() string { return "concurrency" }
+
+// Title is the heading of the module's panel, "Concurrency".
 func (Concurrency) Title() string { return "Concurrency" }
+
+// AppliesTo runs the module for the languages whose issues or topology it can read: Go, Python, TypeScript/JavaScript, Java and Kotlin.
 func (Concurrency) AppliesTo(languageID string) bool {
 	switch languageID {
 	case "go", "python", "ts", "typescript", "javascript", "java", "kotlin":
@@ -40,13 +45,16 @@ type ConcurrencyReport struct {
 	Issues            []CSIssue
 	High, Medium, Low int
 	Topology          Topology
-	// Scored is true when Go files were checked: only then do the issue checks
-	// ran, so only then does the card feed ⚡ Performance (and may say "none found").
+	// Scored is true when Go files were checked: only then did the issue checks
+	// run, so only then does the card feed ⚡ Performance (and may say "none found").
 	Scored bool
 }
 
+// HasData reports whether the card has anything to show: an issue or a topology entry.
 func (r ConcurrencyReport) HasData() bool { return len(r.Issues) > 0 || !r.Topology.Empty() }
-func (r ConcurrencyReport) Total() int    { return len(r.Issues) }
+
+// Total is the number of concurrency / API issues.
+func (r ConcurrencyReport) Total() int { return len(r.Issues) }
 
 var (
 	reSyncMapLoad  = regexp.MustCompile(`^\s*(?:\w+|_)\s*,\s*\w+\s*:?=\s*(` + goOperand + `)\.Load\(\s*(.+?)\s*\)\s*$`)
@@ -188,6 +196,7 @@ func scanConcurrency(filePath string, m maskedFile) []CSIssue {
 	return out
 }
 
+// SummaryCards returns the headline figures shown in the platform card's header for this module.
 func (Concurrency) SummaryCards(res any) []modules.SummaryCard {
 	r, ok := res.(ConcurrencyReport)
 	if !ok || !r.HasData() {
@@ -203,6 +212,7 @@ func (Concurrency) SummaryCards(res any) []modules.SummaryCard {
 	return cards
 }
 
+// RenderMarkdown is RenderHTML's twin: the same panel content as Markdown.
 func (Concurrency) RenderMarkdown(res any) string {
 	r, ok := res.(ConcurrencyReport)
 	if !ok {
@@ -216,6 +226,7 @@ func (Concurrency) RenderMarkdown(res any) string {
 	return b.String()
 }
 
+// RenderHTML draws the module's panel for the HTML report.
 func (Concurrency) RenderHTML(res any) string {
 	r, ok := res.(ConcurrencyReport)
 	if !ok {

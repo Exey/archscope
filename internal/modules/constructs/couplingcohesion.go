@@ -41,8 +41,13 @@ func init() { modules.Default.Register(CouplingCohesion{}) }
 // CouplingCohesion is the universal coupling/cohesion analyzer.
 type CouplingCohesion struct{}
 
-func (CouplingCohesion) ID() string                       { return "couplingcohesion" }
-func (CouplingCohesion) Title() string                    { return "Coupling & Cohesion" }
+// ID is the module's stable identifier, "couplingcohesion", used to select and order its panel.
+func (CouplingCohesion) ID() string { return "couplingcohesion" }
+
+// Title is the heading of the module's panel, "Coupling & Cohesion".
+func (CouplingCohesion) Title() string { return "Coupling & Cohesion" }
+
+// AppliesTo reports that the module runs for every language.
 func (CouplingCohesion) AppliesTo(languageID string) bool { return true } // universal
 
 // ModuleCoupling is one package/module's Martin-metric reading.
@@ -84,6 +89,7 @@ type CouplingCohesionResult struct {
 // HasData reports whether there's anything to render.
 func (r CouplingCohesionResult) HasData() bool { return len(r.Modules) > 0 }
 
+// Analyze measures module coupling (Ca, Ce, instability) and, per type, CBO, LCOM, LCOM4 and CAM from the parsed files.
 func (CouplingCohesion) Analyze(files []*parser.ParsedFile) any {
 	g := depgraph.New()
 	g.Build(files)
@@ -128,7 +134,10 @@ func (CouplingCohesion) Analyze(files []*parser.ParsedFile) any {
 				types = append(types, TypeCoupling{TypeName: tm.TypeName, FilePath: f.FilePath, Line: line, CBO: len(ext)})
 			}
 
-			if n := len(tm.Methods); n > 1 {
+			// LCOM measures how methods share fields; a type with no fields (a module
+			// or emitter that only implements an interface) has nothing to share, so
+			// every pair of its methods would look "unrelated" — a measurement artefact.
+			if n := len(tm.Methods); n > 1 && len(tm.Fields) > 0 {
 				lcom, lcom4 := lcomStats(tm.Methods)
 				cohesion = append(cohesion, TypeCohesion{
 					TypeName: tm.TypeName, FilePath: f.FilePath, Line: line, Methods: n,
@@ -323,6 +332,7 @@ var cohesionGlossary = []struct{ term, desc string }{
 	{"CAM", "parameter-type overlap across a type's methods"},
 }
 
+// RenderHTML draws the module's panel for the HTML report.
 func (CouplingCohesion) RenderHTML(res any) string {
 	r, ok := res.(CouplingCohesionResult)
 	if !ok || !r.HasData() {
@@ -447,6 +457,7 @@ func writeCohesionOffenders(b *strings.Builder, types []TypeCohesion) {
 	b.WriteString(`</tbody></table>`)
 }
 
+// SummaryCards returns the headline figures shown in the platform card's header for this module.
 func (CouplingCohesion) SummaryCards(res any) []modules.SummaryCard {
 	r, ok := res.(CouplingCohesionResult)
 	if !ok || !r.HasData() {
@@ -459,6 +470,7 @@ func (CouplingCohesion) SummaryCards(res any) []modules.SummaryCard {
 	return cards
 }
 
+// RenderMarkdown is RenderHTML's twin: the same panel content as Markdown.
 func (CouplingCohesion) RenderMarkdown(res any) string {
 	r, ok := res.(CouplingCohesionResult)
 	if !ok || !r.HasData() {

@@ -34,8 +34,13 @@ func init() { modules.Default.Register(Module{}) }
 // Module is the self-registering traffic analyser.
 type Module struct{}
 
-func (Module) ID() string    { return "traffic" }
+// ID is the module's stable identifier, "traffic", used to select and order its panel.
+func (Module) ID() string { return "traffic" }
+
+// Title is the heading of the module's panel, "Traffic".
 func (Module) Title() string { return "Traffic" }
+
+// AppliesTo runs the module for the languages that have a traffic extractor: Go, Python, Java, Swift, Kotlin, TypeScript, C and C++.
 func (Module) AppliesTo(l string) bool {
 	switch l {
 	case "go", "python", "java", "swift", "kotlin", "ts", "c", "cpp":
@@ -71,8 +76,10 @@ type Result struct {
 	Outbound []Entry
 }
 
+// HasData reports whether any inbound or outbound connection signal was found.
 func (r Result) HasData() bool { return len(r.Inbound) > 0 || len(r.Outbound) > 0 }
 
+// Analyze gathers the inbound and outbound connection signals each language extractor stored on the parsed files, de-duplicated and sorted.
 func (Module) Analyze(files []*parser.ParsedFile) any {
 	var r Result
 	// Maps a (URI, Protocol) key to its index in r.Inbound/r.Outbound — a
@@ -130,6 +137,7 @@ func sortEntries(ee []Entry) {
 	})
 }
 
+// SummaryCards returns the headline figures shown in the platform card's header for this module.
 func (Module) SummaryCards(res any) []modules.SummaryCard {
 	r, ok := res.(Result)
 	if !ok || !r.HasData() {
@@ -352,3 +360,6 @@ func fileCellMD(e Entry) string {
 }
 
 func esc(s string) string { return html.EscapeString(s) }
+
+// searchesText reports whether ln looks a literal up in text rather than using it.
+func searchesText(ln string) bool { return parser.SearchesText(ln) }

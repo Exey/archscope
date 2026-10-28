@@ -31,8 +31,13 @@ func init() { modules.Default.Register(MagicConstants{}) }
 // to every language ArchScope parses.
 type MagicConstants struct{}
 
-func (MagicConstants) ID() string                       { return "magicconstants" }
-func (MagicConstants) Title() string                    { return "Magic Constants" }
+// ID is the module's stable identifier, "magicconstants", used to select and order its panel.
+func (MagicConstants) ID() string { return "magicconstants" }
+
+// Title is the heading of the module's panel, "Magic Constants".
+func (MagicConstants) Title() string { return "Magic Constants" }
+
+// AppliesTo reports that the module runs for every language.
 func (MagicConstants) AppliesTo(languageID string) bool { return true } // universal
 
 // mcCategory groups detected constants by the algorithm family they belong to.
@@ -184,11 +189,13 @@ type MagicConstantResult struct {
 	Matches []mcMatch
 }
 
+// HasDetection reports whether any magic constant matched.
 func (r MagicConstantResult) HasDetection() bool { return len(r.Matches) > 0 }
 
 // Analyze scans each file's stripped source and string literals for magic
 // constants, attributing each hit to its enclosing function.
 func (MagicConstants) Analyze(files []*parser.ParsedFile) any {
+	files = nonTestFiles(files) // test names and fixtures spell out the very things detected
 	cache := newSourceCache()
 	found := map[string]*mcMatch{}
 
@@ -433,6 +440,7 @@ func mcCategoryRank(c mcCategory) int {
 
 // ── rendering ────────────────────────────────────────────────────────────────
 
+// SummaryCards returns the headline figures shown in the platform card's header for this module.
 func (MagicConstants) SummaryCards(res any) []modules.SummaryCard {
 	r, ok := res.(MagicConstantResult)
 	if !ok || !r.HasDetection() {
@@ -443,6 +451,7 @@ func (MagicConstants) SummaryCards(res any) []modules.SummaryCard {
 	}
 }
 
+// RenderMarkdown is RenderHTML's twin: the same panel content as Markdown.
 func (MagicConstants) RenderMarkdown(res any) string {
 	r, ok := res.(MagicConstantResult)
 	if !ok || !r.HasDetection() {
@@ -468,6 +477,7 @@ func (MagicConstants) RenderMarkdown(res any) string {
 
 const mcMaxLinks = 12
 
+// RenderHTML draws the module's panel for the HTML report.
 func (MagicConstants) RenderHTML(res any) string {
 	r, ok := res.(MagicConstantResult)
 	if !ok || !r.HasDetection() {

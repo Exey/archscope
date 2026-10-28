@@ -37,8 +37,8 @@ func TestNestedLoopsAreQuadratic(t *testing.T) {
 		t.Fatalf("want 1 time violation, got %d: %+v", len(r.TimeViolations), r.TimeViolations)
 	}
 	v := r.TimeViolations[0]
-	if v.Order != 2 || v.bigO() != "O(N²)" {
-		t.Errorf("want O(N²), got %s (order %d)", v.bigO(), v.Order)
+	if v.Order != 2 || v.bigO() != "𝒪(n²)" {
+		t.Errorf("want 𝒪(n²), got %s (order %d)", v.bigO(), v.Order)
 	}
 	if v.Symbol != "crossJoin" {
 		t.Errorf("want symbol crossJoin, got %q", v.Symbol)
@@ -190,7 +190,7 @@ func TestRenderHasHealthAndViolations(t *testing.T) {
 }
 `
 	out := (Complexity{}).RenderHTML(report(cxFile(t, ".go", src)))
-	for _, want := range []string{"Time O-Health", "Space O-Health", "O(N²)", "crossJoin", "vscode://file"} {
+	for _, want := range []string{"Time O-Health", "Space O-Health", "𝒪(n²)", "crossJoin", "vscode://file"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing %q:\n%s", want, out)
 		}

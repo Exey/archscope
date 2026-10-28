@@ -101,3 +101,17 @@ func TestMutabilitySuppression(t *testing.T) {
 		t.Errorf("only Dec should be reported: %+v", rep.MutIssues)
 	}
 }
+
+func TestGoMainWiresGlobals(t *testing.T) {
+	src := "package main\n\nvar verbose bool\n\nfunc main() {\n\tverbose = true\n}\n\nfunc setup() {\n\tverbose = false\n}\n"
+	rep := csAnalyze([]*parser.ParsedFile{writeFile(t, ".go", src)})
+	var in []string
+	for _, is := range rep.MutIssues {
+		if is.RuleID == "mut-global" {
+			in = append(in, is.Detail)
+		}
+	}
+	if len(in) != 1 || in[0] != "setup → verbose" { // main() wires state once; other functions still count
+		t.Errorf("mut-global = %v, want only setup → verbose", in)
+	}
+}

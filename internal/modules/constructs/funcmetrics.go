@@ -14,6 +14,8 @@ import (
 	"github.com/exey/archscope/internal/security"
 )
 
+var reSelfAttrAssign = regexp.MustCompile(`\bself\.([A-Za-z_]\w*)\s*(?::[^=]+)?=(?:[^=]|$)`)
+
 // Thresholds: McCabe's "moderate risk" starts above 10; the shape limits are
 // pylint's defaults (max-returns 6, max-branches 12, max-locals 15,
 // max-attributes 7, max-public-methods 20, max-module-lines 1000).
@@ -67,18 +69,55 @@ func bodyStats(lang csStrLang, fe string, body []string, paramNames []string) fu
 	case lang == csStrRust:
 		ccRe = reCCRust
 	}
-	for _, l := range body {
+	inner := funcLiteralLines(lang, body)
+	for i, l := range body {
 		t := strings.TrimSpace(l)
 		if t == "" || (lang != csStrPython && strings.HasPrefix(t, "#")) {
 			continue
 		}
+		// complexity of a closure is part of the function that contains it...
 		st.cc += len(ccRe.FindAllStringIndex(l, -1))
+		if inner[i] {
+			continue
+		}
+		// ...but its exits, branches and variables are its own: `init()` that
+		// registers twenty one-line callbacks does not have twenty returns.
 		st.returns += len(reReturnWord.FindAllStringIndex(l, -1))
 		st.branches += len(reBranchWord.FindAllStringIndex(l, -1)) - len(reElseIf.FindAllStringIndex(l, -1))
 		collectLocals(lang, l, names)
 	}
 	st.locals = len(names)
 	return st
+}
+
+var (
+	reGoFuncLit = regexp.MustCompile(`\bfunc\s*\([^()]*\)\s*(?:[\w.*\[\]]+|\([^()]*\))?\s*\{\s*$`)
+	reJSFuncLit = regexp.MustCompile(`(?:\bfunction\s*\*?\s*\w*\s*\([^()]*\)|=>)\s*\{\s*$`)
+)
+
+// funcLiteralLines marks the lines inside function literals (closures) nested in
+// a body — the lines after the one that opens the literal, through its close.
+func funcLiteralLines(lang csStrLang, body []string) []bool {
+	inner := make([]bool, len(body))
+	var re *regexp.Regexp
+	switch lang {
+	case csStrGo:
+		re = reGoFuncLit
+	case csStrJS:
+		re = reJSFuncLit
+	default:
+		return inner
+	}
+	for i := 1; i < len(body); i++ { // line 0 is the function's own header
+		if inner[i] || !re.MatchString(body[i]) {
+			continue
+		}
+		end := matchBraceEnd(body, i)
+		for j := i + 1; j <= end && j < len(body); j++ {
+			inner[j] = true
+		}
+	}
+	return inner
 }
 
 func collectLocals(lang csStrLang, l string, names map[string]bool) {
@@ -186,11 +225,10 @@ func pyClassShape(filePath string, m maskedFile, classes []pyClass, funcs []pyFu
 		}
 		out = append(out, CSIssue{RuleID: id, Rule: rule, Message: msg, Detail: detail, Severity: sev, FilePath: filePath, Line: c.start + 1, Snippet: snip})
 	}
-	reSelfAttr := regexp.MustCompile(`\bself\.([A-Za-z_]\w*)\s*(?::[^=]+)?=(?:[^=]|$)`)
 	for _, c := range classes {
 		attrs := map[string]bool{}
 		for i := c.start; i <= c.end && i < len(m.code); i++ {
-			for _, g := range reSelfAttr.FindAllStringSubmatch(m.code[i], -1) {
+			for _, g := range reSelfAttrAssign.FindAllStringSubmatch(m.code[i], -1) {
 				attrs[g[1]] = true
 			}
 		}

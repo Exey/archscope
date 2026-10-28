@@ -40,8 +40,13 @@ func init() { modules.Default.Register(MemoryLeaks{}) }
 // MemoryLeaks is the resource-lifecycle / leak detector.
 type MemoryLeaks struct{}
 
-func (MemoryLeaks) ID() string    { return "memoryleaks" }
+// ID is the module's stable identifier, "memoryleaks", used to select and order its panel.
+func (MemoryLeaks) ID() string { return "memoryleaks" }
+
+// Title is the heading of the module's panel, "Memory Leaks".
 func (MemoryLeaks) Title() string { return "Memory Leaks" }
+
+// AppliesTo runs the module for every language that has leak rules, and for Swift.
 func (MemoryLeaks) AppliesTo(languageID string) bool {
 	return len(mlRulesByLang[languageID]) > 0 || languageID == "swift"
 }
@@ -64,8 +69,11 @@ type MemoryLeaksReport struct {
 	Low      int
 }
 
+// HasData reports whether any potential leak was found.
 func (r MemoryLeaksReport) HasData() bool { return len(r.Findings) > 0 }
-func (r MemoryLeaksReport) Total() int    { return len(r.Findings) }
+
+// Total is the number of potential leaks.
+func (r MemoryLeaksReport) Total() int { return len(r.Findings) }
 
 // mlRule is one acquire/release resource-lifecycle check, in the style of
 // ultimate_bug_scanner's per-language regex-fallback table: an "acquire" call
@@ -711,6 +719,7 @@ func mlSevClass(s security.Severity) string {
 	}
 }
 
+// SummaryCards returns the headline figures shown in the platform card's header for this module.
 func (MemoryLeaks) SummaryCards(res any) []modules.SummaryCard {
 	r, ok := res.(MemoryLeaksReport)
 	if !ok || !r.HasData() {

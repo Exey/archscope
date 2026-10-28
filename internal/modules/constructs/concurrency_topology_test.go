@@ -119,3 +119,26 @@ func TestInspectJSON(t *testing.T) {
 		t.Errorf("scheduled %+v", l.Scheduled)
 	}
 }
+
+// A tool that reads source mentions these constructs in strings; none of it is topology.
+func TestScanTopologySkipsStringsAndTextSearches(t *testing.T) {
+	src := strings.Split(`HINT = "with transaction.atomic(): ..."
+if strings.Contains(line, "redis://localhost:6379/0") {
+	r.get("session:{sid}")
+}
+`, "\n")
+	var tp Topology
+	scanTopology(&tp, "/x/detect.go", ".go", src, map[string]bool{})
+	tp.sort()
+	if n := len(tp.Transactions) + len(tp.Redis) + len(tp.MQ) + len(tp.Celery) + len(tp.keys); n != 0 {
+		t.Errorf("expected nothing, got tx=%v redis=%v mq=%v keys=%d", tp.Transactions, tp.Redis, tp.MQ, len(tp.keys))
+	}
+	py := strings.Split(`with transaction.atomic():
+    pass
+`, "\n")
+	var tp2 Topology
+	scanTopology(&tp2, "/x/a.py", ".py", py, map[string]bool{})
+	if len(tp2.Transactions) != 1 {
+		t.Errorf("real atomic block lost: %v", tp2.Transactions)
+	}
+}

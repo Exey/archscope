@@ -188,7 +188,10 @@ func (g *DependencyGraph) Edges() [][2]string {
 // InDegree returns how many modules depend on the named module.
 func (g *DependencyGraph) InDegree(module string) int { return len(g.in[module]) }
 
+// NodeCount is the number of modules in the graph.
 func (g *DependencyGraph) NodeCount() int { return len(g.nodes) }
+
+// EdgeCount is the number of dependency edges, module to module.
 func (g *DependencyGraph) EdgeCount() int {
 	n := 0
 	for _, outs := range g.out {

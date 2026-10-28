@@ -23,7 +23,10 @@ func init() { modules.Default.Register(Module{}) }
 // Module is the Swift OOP-vs-POP analyzer.
 type Module struct{}
 
-func (Module) ID() string    { return "oopvspop" }
+// ID is the module's stable identifier, "oopvspop", used to select and order its panel.
+func (Module) ID() string { return "oopvspop" }
+
+// Title is the heading of the module's panel, "OOP vs POP".
 func (Module) Title() string { return "OOP vs POP" }
 
 // AppliesTo restricts this module to Swift.

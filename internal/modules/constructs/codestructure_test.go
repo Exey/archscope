@@ -641,3 +641,32 @@ func TestCodeStructureMinicardsTargetExistingSubcards(t *testing.T) {
 		t.Error("offender tables should be subcards, not bare viol-title blocks")
 	}
 }
+
+// Appends that cannot go quadratic: a loop capped by a small constant, a string
+// declared fresh in each iteration (also via `v, ok :=`), a field of the loop's own element.
+func TestConcatInLoopNotQuadratic(t *testing.T) {
+	for name, src := range map[string]string{
+		"bounded":      "package p\n\nfunc f(lines []string, i int) string {\n\twin := lines[i]\n\tfor j := 1; j <= 3 && i+j < len(lines); j++ {\n\t\twin += \" \" + lines[i+j]\n\t}\n\treturn win\n}\n",
+		"multi-assign": "package p\n\nfunc f(keys []string, m map[string]string) {\n\tfor _, k := range keys {\n\t\tv, ok := m[k]\n\t\tif ok {\n\t\t\tv += \"s\"\n\t\t}\n\t}\n}\n",
+		"loop element": "package p\n\ntype T struct{ Detail string }\n\nfunc f(ts []T) {\n\tfor _, c := range ts {\n\t\tc.Detail += \" — more\"\n\t}\n}\n",
+	} {
+		if ids := strIssues(t, ".go", src); hasRule(ids, "concat-in-loop") {
+			t.Errorf("%s: flagged, got %v", name, ids)
+		}
+	}
+	growing := "package p\n\nfunc f(parts []string) string {\n\tout := \"\"\n\tfor _, p := range parts {\n\t\tout += \",\" + p\n\t}\n\treturn out\n}\n"
+	if ids := strIssues(t, ".go", growing); !hasRule(ids, "concat-in-loop") {
+		t.Errorf("an unbounded accumulation must still be flagged, got %v", ids)
+	}
+}
+
+func TestEqualFoldNotForSelfCheck(t *testing.T) {
+	self := "package p\n\nimport \"strings\"\n\nfunc F(s string) bool { return strings.ToLower(s) != s }\n"
+	if ids := strIssues(t, ".go", self); hasRule(ids, "equal-fold") {
+		t.Errorf("ToLower(s) != s is not an EqualFold case: %v", ids)
+	}
+	two := "package p\n\nimport \"strings\"\n\nfunc F(a, b string) bool { return strings.ToLower(a) == strings.ToLower(b) }\n"
+	if ids := strIssues(t, ".go", two); !hasRule(ids, "equal-fold") {
+		t.Errorf("two-sided compare must still be flagged: %v", ids)
+	}
+}

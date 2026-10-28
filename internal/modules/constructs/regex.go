@@ -26,8 +26,13 @@ func init() { modules.Default.Register(Regex{}) }
 // Regex is the regular-expression and Go-performance-idiom detector.
 type Regex struct{}
 
-func (Regex) ID() string    { return "regex" }
+// ID is the module's stable identifier, "regex", used to select and order its panel.
+func (Regex) ID() string { return "regex" }
+
+// Title is the heading of the module's panel, "Strings & Regex".
 func (Regex) Title() string { return "Strings & Regex" }
+
+// AppliesTo runs the module for the languages whose regex and string idioms it checks.
 func (Regex) AppliesTo(languageID string) bool {
 	switch languageID {
 	case "go", "java", "kotlin", "swift", "python", "ts", "js", "typescript", "javascript", "rust", "csharp", "c", "cpp", "objc":
@@ -42,8 +47,11 @@ type RegexReport struct {
 	High, Medium, Low int
 }
 
+// HasData reports whether any string or regex issue was found.
 func (r RegexReport) HasData() bool { return len(r.Issues) > 0 }
-func (r RegexReport) Total() int    { return len(r.Issues) }
+
+// Total is the number of string and regex issues.
+func (r RegexReport) Total() int { return len(r.Issues) }
 
 const (
 	stringsGroup = "Strings"
@@ -181,7 +189,12 @@ func scanRegex(filePath string, lang csStrLang, stripped, raw []string) []CSIssu
 		compiles := head != nil && head.MatchString(line)
 		javaHelper := lang == csStrJava && reJavaStringRegex.MatchString(line)
 
-		if (compiles || javaHelper) && loop[i] >= 0 {
+		// regexp.Compile on a non-constant pattern is how a program checks a pattern it
+		// was handed, one per iteration; only constant or Must-compiled ones can be hoisted.
+		_, litPat := regexLiteralPattern(raw[i])
+		validates := lang == csStrGo && reGoCompile.MatchString(line) && !litPat
+
+		if (compiles || javaHelper) && loop[i] >= 0 && !validates {
 			add(i, security.SevMedium, regexGroup, "regex-in-loop", "Regex compiled inside a loop",
 				"Building a regex is far costlier than running it; compile it once outside the loop (package-level var / static final / lazy) and reuse it.")
 		} else if compiles && !javaHelper {
@@ -326,6 +339,7 @@ func prevSig(code []string, i int) int {
 	return -1
 }
 
+// SummaryCards returns the headline figures shown in the platform card's header for this module.
 func (Regex) SummaryCards(res any) []modules.SummaryCard {
 	r, ok := res.(RegexReport)
 	if !ok || !r.HasData() {
@@ -334,6 +348,7 @@ func (Regex) SummaryCards(res any) []modules.SummaryCard {
 	return []modules.SummaryCard{{Num: strconv.Itoa(r.Total()), Label: "string & regex issues"}}
 }
 
+// RenderMarkdown is RenderHTML's twin: the same panel content as Markdown.
 func (Regex) RenderMarkdown(res any) string {
 	r, ok := res.(RegexReport)
 	if !ok {
@@ -344,6 +359,7 @@ func (Regex) RenderMarkdown(res any) string {
 	return b.String()
 }
 
+// RenderHTML draws the module's panel for the HTML report.
 func (Regex) RenderHTML(res any) string {
 	r, ok := res.(RegexReport)
 	if !ok {

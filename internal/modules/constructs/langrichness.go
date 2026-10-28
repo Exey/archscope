@@ -141,7 +141,7 @@ func buildLanguageKeywordRegex() map[string]map[string]*regexp.Regexp {
 			if !isIdentifierToken(kw) {
 				continue
 			}
-			m[kw] = regexp.MustCompile(`\b` + regexp.QuoteMeta(kw) + `\b`)
+			m[kw] = rx(`\b` + regexp.QuoteMeta(kw) + `\b`)
 		}
 		out[lang] = m
 	}
@@ -179,7 +179,10 @@ func isIdentifierToken(s string) bool {
 // LanguageRichness is the universal keyword-coverage detector.
 type LanguageRichness struct{}
 
-func (LanguageRichness) ID() string    { return "langrichness" }
+// ID is the module's stable identifier, "langrichness", used to select and order its panel.
+func (LanguageRichness) ID() string { return "langrichness" }
+
+// Title is the heading of the module's panel, "Language Richness".
 func (LanguageRichness) Title() string { return "Language Richness" }
 
 // AppliesTo runs only for languages with a known keyword list.
@@ -204,6 +207,7 @@ type LanguageRichnessReport struct {
 	Entries []LangRichness
 }
 
+// HasData reports whether any language was measured.
 func (r LanguageRichnessReport) HasData() bool { return len(r.Entries) > 0 }
 
 // Analyze scans each file's comment/string-stripped source for whichever of

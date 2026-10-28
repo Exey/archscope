@@ -24,7 +24,7 @@ type suppressSpan struct {
 	names    map[string]bool
 }
 
-var suppressMarkers = []string{"noqa", "nosec", "nolint", "eslint-disable", "NOSONAR", "pylint:", "SuppressWarnings", "@Suppress", "swiftlint:", "NOLINT", "pylint :"}
+var suppressMarkers = []string{"noqa", "nosec", "nolint", "eslint-disable", "NOSONAR", "pylint:", "SuppressWarnings", "@Suppress", "swiftlint:", "NOLINT", "pylint :", "thailint:"}
 
 var (
 	reSupFileNoqa  = regexp.MustCompile(`(?i)#\s*(?:flake8|ruff)\s*:\s*noqa\b(?:\s*:\s*([\w\s,.-]+))?`)
@@ -33,6 +33,7 @@ var (
 	reSupNosec     = regexp.MustCompile(`(?i)(?:#|//)\s*#?nosec\b(?:\s+([\w,\s]*\w))?`)
 	reSupNolint    = regexp.MustCompile(`(?:#|//)\s*nolint\b(?:\s*:\s*([\w,-]+))?`)
 	reSupEslint    = regexp.MustCompile(`(?://|/\*)\s*eslint-(disable-next-line|disable-line|disable|enable)\b([^*\n]*)`)
+	reSupThai      = regexp.MustCompile(`(?://|#)\s*thailint:\s*ignore(?:-next-line)?\b(?:\[([^\]]*)\])?`)
 	reSupSonar     = regexp.MustCompile(`(?i)(?://|#)\s*NOSONAR\b`)
 	reSupClangTidy = regexp.MustCompile(`//\s*NOLINT(NEXTLINE)?\b(?:\(([\w\s,.*-]+)\))?`)
 	reSupJava      = regexp.MustCompile(`@SuppressWarnings\s*\(\s*(?:\{([^}]*)\}|("[^"]*"))|@Suppress\s*\(([^)]*)\)`)
@@ -167,6 +168,17 @@ func (s *Suppressor) parseLine(raw []string, i int) {
 			s.add(n, n, names)
 		}
 		return
+	}
+	if g := reSupThai.FindStringSubmatchIndex(line); g != nil {
+		names := map[string]bool{}
+		if g[2] >= 0 {
+			names = nameSet(line[g[2]:g[3]])
+		}
+		if strings.Contains(line[g[0]:g[1]], "next-line") || standalone(line, g[0]) {
+			s.add(n+1, n+1, names)
+		} else {
+			s.add(n, n, names)
+		}
 	}
 	if g := reSupNoqa.FindStringSubmatchIndex(line); g != nil {
 		names := map[string]bool{}
@@ -360,6 +372,31 @@ var RuleAliases = map[string][]string{
 	"shape-class-methods":       {"too-many-public-methods", "R0904"},
 	"shape-class-bases":         {"too-many-ancestors", "R0901"},
 	"shape-module-lines":        {"too-many-lines", "C0302", "max-lines"},
+	"comment-change-ref":        {"change-ref", "comment-antecedents"},
+	"doc-temporal":              {"atemporal", "temporal"},
+	"lazy-ignore":               {"lazy-ignores", "PGH003", "PGH004", "nolintlint"},
+	"lazy-ignore-blanket":       {"lazy-ignores", "PGH003", "PGH004", "nolintlint"},
+	"stringly-typed":            {"stringly-typed"},
+	"py-stateless-class":        {"stateless-class", "R0903", "too-few-public-methods"},
+	"py-method-property":        {"method-property"},
+	"py-lbyl-key":               {"lbyl", "SIM401"},
+	"py-lbyl-hasattr":           {"lbyl"},
+	"py-lbyl-file":              {"lbyl"},
+	"py-lbyl-len":               {"lbyl"},
+	"py-lbyl-parse":             {"lbyl"},
+	"py-lbyl-zero":              {"lbyl"},
+	"go-lbyl-map":               {"lbyl"},
+	"go-lbyl-file":              {"lbyl"},
+	"py-loop-filter":            {"collection-pipeline", "PERF401"},
+	"py-cqs":                    {"cqs"},
+	"smell-srp-name":            {"srp"},
+	"py-print":                  {"print-statements", "T201", "improper-logging"},
+	"go-print":                  {"print-statements", "forbidigo", "improper-logging"},
+	"go-getter-prefix":          {"getter-prefix", "ST1003", "revive:get-return"},
+	"rs-unwrap":                 {"unwrap-abuse", "unwrap_used", "clippy::unwrap_used"},
+	"rs-expect":                 {"unwrap-abuse", "expect_used", "clippy::expect_used"},
+	"rs-clone-loop":             {"clone-abuse", "clippy::clone_on_copy"},
+	"rs-blocking-async":         {"blocking-async"},
 	"cyclomatic":                {"cyclomatic-complexity", "C901", "too-complex", "cyclomatic-complexity", "gocyclo", "complexity", "cyclop"},
 	"params":                    {"too-many-arguments", "R0913", "PLR0913", "max-params", "function-parameter-count", "funlen"},
 	"nesting":                   {"nesting", "max-depth", "nestif", "R1702", "too-many-nested-blocks"},

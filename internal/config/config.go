@@ -128,7 +128,7 @@ func Load(path string) Config {
 }
 
 // CreateDefault writes the default config to path (or DefaultConfigPath),
-// giving users a starting point to edit.
+// giving users a starting point to edit. It is silent; the caller reports success.
 func CreateDefault(path string) error {
 	if path == "" {
 		path = DefaultConfigPath
@@ -140,6 +140,5 @@ func CreateDefault(path string) error {
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return err
 	}
-	fmt.Printf("Created default config at %s\n", path)
 	return nil
 }

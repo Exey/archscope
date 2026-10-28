@@ -430,6 +430,7 @@ func (c Comparison) ThenScores() []Score {
 	return out
 }
 
+// NowScores lists the scores of the current tree, one per row that has one.
 func (c Comparison) NowScores() []Score {
 	var out []Score
 	for _, r := range c.Rows {

@@ -174,7 +174,7 @@ func (d *differ) paramMap(l *linter, o operation) map[paramID]*Node {
 	m := map[paramID]*Node{}
 	for _, src := range []*Node{o.item.Get("parameters"), o.op.Get("parameters")} {
 		for _, p := range src.Items() {
-			if p = l.resolve(p); p != nil && p.Kind == Map {
+			if p := l.resolve(p); p != nil && p.Kind == Map {
 				m[paramID{p.Get("name").Str(), p.Get("in").Str()}] = p
 			}
 		}

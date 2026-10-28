@@ -93,8 +93,7 @@ type ParsedFile struct {
 	Extra map[string]any `json:"extra,omitempty"`
 }
 
-// TypeMembers records one type's fields and methods — currently populated
-// for Go only (internal/lang/golang_members.go, via go/ast in the same
+// TypeMembers records one type's fields and methods — populated for Go only (internal/lang/golang_members.go, via go/ast in the same
 // parse pass) and stored under ParsedFile.Extra["members"] as []TypeMembers.
 // Consumers (coupling/cohesion analysis) type-assert it and treat absence as
 // "not supported for this language yet" rather than an error. When another

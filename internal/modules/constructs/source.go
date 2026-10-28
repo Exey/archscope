@@ -11,6 +11,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/exey/archscope/internal/parser"
+	"github.com/exey/archscope/internal/security"
 )
 
 // maxSourceBytes bounds a single source read so a stray huge/minified file
@@ -391,4 +394,17 @@ func occurrenceLink(symbol, filePath string, line int) string {
 	}
 	return fmt.Sprintf(`<a class="as-vs" href="%s" title="%s:%d">%s</a>`,
 		html.EscapeString(href), html.EscapeString(baseName(filePath)), line, html.EscapeString(symbol))
+}
+
+// nonTestFiles drops test, benchmark and fixture files: modules that read names
+// and literals (algorithms, patterns, data structures, magic constants) would
+// otherwise "find" what a test is merely named after.
+func nonTestFiles(files []*parser.ParsedFile) []*parser.ParsedFile {
+	out := make([]*parser.ParsedFile, 0, len(files))
+	for _, f := range files {
+		if !security.IsTestOrBenchPath(f.FilePath) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
