@@ -380,7 +380,7 @@ HTML  → output/myproject.html
 The **☁️ DevOps → ☸️ Kubernetes** sub-card lints Kubernetes workloads it finds anywhere in the scanned directory — either plain manifest files (`k8s/*.yaml`, `deploy/*.yaml`, ...) or a full `kubectl get ... -o yaml` cluster dump. To lint a live cluster, drop a dump anywhere inside the path you're about to scan:
 
 ```bash
-kubectl get $(kubectl api-resources --verbs=list -o name | tr '\n' ',' | sed 's/,$//') \
+export KUBECONFIG=kubeconfig.yaml && kubectl get $(kubectl api-resources --verbs=list -o name | tr '\n' ',' | sed 's/,$//') \
   --all-namespaces -o yaml > ~/code/full-cluster-dump.yaml
 
 go run ./cmd/archscope ~/code --open
