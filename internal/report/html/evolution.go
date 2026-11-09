@@ -3,6 +3,7 @@ package html
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/exey/archscope/internal/evolution"
 	"github.com/exey/archscope/internal/result"
@@ -68,7 +69,7 @@ func renderEvolution(res *result.AnalysisResult) string {
 		title = "📈 Evolution (Review mode)"
 	}
 	var b strings.Builder
-	b.WriteString(`<div class="as-evo" id="as-evo"><div class="as-evo__bar"><span class="as-evo__title">` + title + `</span><div class="as-evo__tabs">`)
+	b.WriteString(`<div class="as-evo" id="as-evo"><div class="as-evo__bar"><span class="as-evo__title">` + title + `</span>` + reviewHeadline(res.Review) + `<div class="as-evo__tabs">`)
 	for i, p := range panes {
 		on := ""
 		if i == 0 {
@@ -273,4 +274,20 @@ func slug(s string) string {
 		}
 	}
 	return strings.TrimRight(b.String(), "-")
+}
+
+// reviewHeadline is the one-line identity of the merge request, as its page shows
+// it: "PHARMZAKAZ-1186 into dev · 2 hours ago · 12 files +1,314 −234".
+func reviewHeadline(rv *evolution.Review) string {
+	if rv == nil {
+		return ""
+	}
+	into := strings.TrimPrefix(reviewAgainst(rv), "origin/")
+	parts := []string{fmt.Sprintf(`<strong>%s</strong> into <strong>%s</strong>`, esc(reviewSubject(rv)), esc(into))}
+	if ago := evolution.Ago(rv.HeadDate, time.Now()); ago != "" {
+		parts = append(parts, esc("last commit "+ago))
+	}
+	parts = append(parts, fmt.Sprintf(`%d %s <span class="as-evo__d as-evo__d--up">+%s</span> <span class="as-evo__d as-evo__d--down">−%s</span>`,
+		len(rv.Files), plural(len(rv.Files), "file", "files"), fmtNum(rv.Adds), fmtNum(rv.Dels)))
+	return `<span class="as-evo__mr">` + strings.Join(parts, " · ") + `</span>`
 }

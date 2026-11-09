@@ -28,12 +28,13 @@ type Review struct {
 	Ref      string // what the user passed to --review
 	BaseSHA  string // merge-base the comparison starts from
 	HeadSHA  string
-	Branch   string // current branch ("" when detached)
-	MRIID    int    // 0 = no merge request found
-	Host     string // https://gitlab.example.com ("" = unknown)
-	Project  string // group/subgroup/project
-	MRSource string // "local refs" | "ls-remote" | ""
-	Provider string // "gitlab" | "github": which host's links the report builds
+	HeadDate time.Time // commit time of the reviewed tip
+	Branch   string    // current branch ("" when detached)
+	MRIID    int       // 0 = no merge request found
+	Host     string    // https://gitlab.example.com ("" = unknown)
+	Project  string    // group/subgroup/project
+	MRSource string    // "local refs" | "ls-remote" | ""
+	Provider string    // "gitlab" | "github": which host's links the report builds
 
 	// Quality is how well the code this change adds is documented and tested.
 	Quality *Quality
@@ -344,7 +345,12 @@ func ReviewInfo(repo, ref string, base Ref) Review {
 		if b, err := git(repo, "rev-parse", "--abbrev-ref", "HEAD"); err == nil && b != "HEAD" {
 			r.Branch = b
 		}
-		r.Against = base.Target
+		if r.Against = base.Against; r.Against == "" {
+			r.Against = base.Target // `--review <target>`: the ref is what the branch is compared with
+		}
+	}
+	if out, err := git(repo, "log", "-1", "--format=%cI", r.HeadSHA); err == nil {
+		r.HeadDate, _ = time.Parse(time.RFC3339, out)
 	}
 	r.Host, r.Project = RemoteHostProject(repo)
 	r.MRIID, r.MRSource = DetectMR(repo, base.SHA, r.HeadSHA)
@@ -601,4 +607,32 @@ func fenceLang(path string) string {
 		return "csharp"
 	}
 	return ""
+}
+
+// Ago renders how long before now t was, the way a merge request page does:
+// "just now", "5 minutes ago", "2 hours ago", "3 days ago", "2 months ago".
+func Ago(t, now time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := now.Sub(t)
+	unit := func(n int, w string) string {
+		if n == 1 {
+			return "1 " + w + " ago"
+		}
+		return fmt.Sprintf("%d %ss ago", n, w)
+	}
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return unit(int(d/time.Minute), "minute")
+	case d < 24*time.Hour:
+		return unit(int(d/time.Hour), "hour")
+	case d < 30*24*time.Hour:
+		return unit(int(d/(24*time.Hour)), "day")
+	case d < 365*24*time.Hour:
+		return unit(int(d/(30*24*time.Hour)), "month")
+	}
+	return unit(int(d/(365*24*time.Hour)), "year")
 }

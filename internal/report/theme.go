@@ -250,6 +250,7 @@ code,.mono{font-family:var(--mono)}
 .as-evo--hint{display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 12px; padding:10px 14px; background:transparent; border-style:dashed}
 .as-evo__hintxt{color:var(--text-dim); font-size:12.5px}
 .as-evo__hintxt code{font-family:var(--mono); font-size:11.5px}
+.as-evo__mr{font-size:13px; opacity:.85}
 .as-evo__bar{display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px; margin-bottom:10px}
 .as-evo__title{font-size:14px; font-weight:650}
 .as-evo__tabs{display:flex; flex-wrap:wrap; gap:6px; flex:1}

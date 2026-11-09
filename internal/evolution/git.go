@@ -203,6 +203,37 @@ func resolveCommit(repo, name string) string {
 	return ""
 }
 
+// preferFresh returns "origin/<name>" (or another remote's) when name is a local
+// branch that is strictly behind its remote-tracking counterpart. A merge request
+// targets the remote branch, so a stale local copy would count everything the
+// target gained since as part of the change.
+func preferFresh(repo, name string) string {
+	if name == "" || name == "HEAD" || strings.HasPrefix(name, "HEAD~") {
+		return name
+	}
+	if _, err := git(repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+name+"^{commit}"); err != nil {
+		return name
+	}
+	remotes, err := git(repo, "remote")
+	if err != nil {
+		return name
+	}
+	for _, r := range strings.Fields(remotes) {
+		remote := "refs/remotes/" + r + "/" + name
+		if _, err := git(repo, "rev-parse", "--verify", "--quiet", remote+"^{commit}"); err != nil {
+			continue
+		}
+		if exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", "refs/heads/"+name, remote).Run() == nil {
+			if a, _ := git(repo, "rev-parse", "refs/heads/"+name); a != "" {
+				if b, _ := git(repo, "rev-parse", remote); b != a {
+					return r + "/" + name
+				}
+			}
+		}
+	}
+	return name
+}
+
 // resolvedName is the name to show/use for a commit-ish after resolveCommit:
 // the name as typed when it resolves directly, else its remote-tracking form.
 func resolvedName(repo, name string) string {
@@ -282,6 +313,11 @@ func resolveReview(repo, spec string, ref *Ref) error {
 
 	case against == "" && (auto || isDefaultBranchName(repo, target) || isAnc(tip, head) && tip != head):
 		// ref is the target: where the current branch left it.
+		fresh := preferFresh(repo, target)
+		if fresh != target {
+			target, tip = fresh, resolveCommit(repo, fresh)
+			ref.Target = target
+		}
 		ref.SHA = tip
 		if mb, err := git(repo, "merge-base", "HEAD", tip); err == nil && mb != "" {
 			ref.SHA = mb
@@ -294,7 +330,11 @@ func resolveReview(repo, spec string, ref *Ref) error {
 		baseName := against
 		if baseName == "" {
 			if tip == head {
-				baseName = DefaultBranch(repo) // reviewing the current branch itself
+				// reviewing the current branch itself: the branch it was cut from and is
+				// closest to (where the merge request goes), else the repository default
+				if baseName = GuessTargetBranch(repo, head); baseName == "" {
+					baseName = DefaultBranch(repo)
+				}
 			} else {
 				baseName = "HEAD"
 			}
@@ -306,7 +346,8 @@ func resolveReview(repo, spec string, ref *Ref) error {
 		if baseSHA == "" {
 			return fmt.Errorf("--against %q is not a commit or branch in this repository", baseName)
 		}
-		baseName = resolvedName(repo, baseName)
+		baseName = preferFresh(repo, resolvedName(repo, baseName))
+		baseSHA = resolveCommit(repo, baseName)
 		ref.SHA = baseSHA
 		if mb, err := git(repo, "merge-base", tip, baseSHA); err == nil && mb != "" {
 			ref.SHA = mb

@@ -340,3 +340,46 @@ func TestReviewMarkdownQuotesCode(t *testing.T) {
 		t.Errorf("statement context:\n%s", md)
 	}
 }
+
+// A merge request targets the remote branch: a local copy that fell behind must not
+// become the base, or everything the target gained since counts as part of the change.
+func TestReviewPrefersFreshRemoteTarget(t *testing.T) {
+	repo, _, _ := reviewRepo(t)
+	run := func(args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run("checkout", "-q", "main")
+	os.WriteFile(filepath.Join(repo, "b.txt"), []byte("target moved\n"), 0o644)
+	run("add", "-A")
+	run("commit", "-q", "-m", "target moves on")
+	moved := run("rev-parse", "HEAD")
+	run("update-ref", "refs/remotes/origin/main", moved)
+	run("remote", "add", "origin", "https://example.com/g/p.git")
+	run("reset", "-q", "--hard", "HEAD~1") // local main is now stale
+	run("checkout", "-q", "feature")
+	run("merge", "-q", "--no-edit", "origin/main")
+
+	ref, err := Resolve(repo, ReviewPrefix+"feature@@main", time.Now())
+	if err != nil || ref.SHA != moved || ref.Against != "origin/main" {
+		t.Errorf("--against main with a stale local main: %+v %v (want base %s)", ref, err, moved)
+	}
+	info := ReviewInfo(repo, "feature", ref)
+	if info.Against != "origin/main" {
+		t.Errorf("Review.Against = %q, want origin/main (not the reviewed branch)", info.Against)
+	}
+}
+
+func TestAgo(t *testing.T) {
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	for d, want := range map[time.Duration]string{30 * time.Second: "just now", time.Minute: "1 minute ago", 2 * time.Hour: "2 hours ago", 72 * time.Hour: "3 days ago", 70 * 24 * time.Hour: "2 months ago"} {
+		if got := Ago(now.Add(-d), now); got != want {
+			t.Errorf("Ago(-%v) = %q, want %q", d, got, want)
+		}
+	}
+}
