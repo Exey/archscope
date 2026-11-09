@@ -28,3 +28,14 @@ func TestBodyStatsClosuresAreTheirOwn(t *testing.T) {
 		t.Errorf("method returns = %d", m.returns)
 	}
 }
+
+func TestFuncLengths(t *testing.T) {
+	g := FuncLengths("a.go", strings.Split("package p\n\nfunc big() {\n\ta()\n\tb()\n}\n\nfunc small() {}\n", "\n"))
+	if g[3] != 4 || g[8] != 1 {
+		t.Errorf("go lengths = %v", g)
+	}
+	p := FuncLengths("a.py", strings.Split("def f():\n    a()\n    b()\n\ndef g():\n    pass\n", "\n"))
+	if p[1] != 3 || p[5] != 2 {
+		t.Errorf("py lengths = %v", p)
+	}
+}

@@ -157,6 +157,8 @@ func RunReview(res *AnalysisResult, cfg config.Config, ref, against string, extr
 	info.AttachFiles(repo, comps[idx])
 	attachSpecFindings(res, repo, &info)
 	attachQuality(res, repo, &info)
+	attachSummary(repo, &info)
+	attachTriage(res, repo, &info)
 	res.Review = &info
 	if progress != nil {
 		progress(info.String())

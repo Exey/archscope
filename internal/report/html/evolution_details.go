@@ -242,12 +242,48 @@ func writeQuality(b *strings.Builder, q *evolution.Quality) {
 	}
 	b.WriteString(`<div class="as-rv__q"><div class="as-evo__dtitle">Quality of the added code</div><div>`)
 	chip("📝", "documented", q.Documented, q.Funcs, "New functions with a doc comment directly above (or a Python docstring)")
-	chip("🧪", "referenced by tests", q.Tested, q.Funcs, "New functions whose name a test file mentions — a heuristic, not line coverage")
+	chip("🧪", "referenced by tests", q.Tested, q.Testable, "Testable new functions (SQL / query-builder functions excluded) whose name a test file mentions — a heuristic, not line coverage")
 	chip("🌀", "complex documented", q.ComplexDocumented, q.Complex, "New functions with cyclomatic complexity over 10 or 50+ lines")
+	chip("🧫", "testable functions tested", q.Tested, q.Funcs, "New testable functions a test mentions; the rest are listed below")
 	fmt.Fprintf(b, `<span class="as-evo__info">+%s source · +%s test lines</span></div>`, fmtNum(q.AddedSrc), fmtNum(q.AddedTest))
 	if len(q.Undocumented) > 0 {
 		fmt.Fprintf(b, `<ul class="as-evo__items">`)
 		for _, it := range q.Undocumented {
+			fmt.Fprintf(b, `<li>%s</li>`, itemHTML(it, "", true))
+		}
+		b.WriteString(`</ul>`)
+	}
+	if len(q.Untested) > 0 {
+		fmt.Fprintf(b, `<details class="as-rv__untested"><summary>🧫 %d testable new functions without tests</summary><ul class="as-evo__items">`, len(q.Untested))
+		for i, it := range q.Untested {
+			if i == 15 {
+				fmt.Fprintf(b, `<li>…and %d more</li>`, len(q.Untested)-15)
+				break
+			}
+			fmt.Fprintf(b, `<li>%s</li>`, itemHTML(it, "", true))
+		}
+		b.WriteString(`</ul></details>`)
+	}
+	b.WriteString(`</div>`)
+}
+
+// writeTriage is the top of a review: the files to read first, then the flags
+// (no test change, new dependency, risky migration), each with its MR link.
+func writeTriage(b *strings.Builder, t *evolution.Triage) {
+	if t.Empty() {
+		return
+	}
+	b.WriteString(`<div class="as-rv__q">`)
+	if len(t.ReadFirst) > 0 {
+		b.WriteString(`<div class="as-evo__dtitle">📌 Read these first</div><p class="as-evo__meta">The changed files that need the most review, ranked by their issues (HIGH, security, complexity) and the size of the change.</p><ol class="as-evo__items">`)
+		for _, r := range t.ReadFirst {
+			fmt.Fprintf(b, `<li><span class="mono">%s</span> <span class="as-evo__info">%s</span></li>`, esc(r.Path), esc(strings.Join(r.Reasons, " · ")))
+		}
+		b.WriteString(`</ol>`)
+	}
+	if len(t.Flags) > 0 {
+		b.WriteString(`<div class="as-evo__dtitle">🚩 Flags</div><p class="as-evo__meta">Things the change may have forgotten or that carry risk: production code with no test change, a new dependency, a risky database migration.</p><ul class="as-evo__items">`)
+		for _, it := range t.Flags {
 			fmt.Fprintf(b, `<li>%s</li>`, itemHTML(it, "", true))
 		}
 		b.WriteString(`</ul>`)

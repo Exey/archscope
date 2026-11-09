@@ -195,6 +195,7 @@ func writeComparisonBody(b *strings.Builder, c evolution.Comparison, rv *evoluti
 	// Step 4 — how well the added code is documented and tested, then what got
 	// worse and where it was added.
 	if rv != nil && c.IsReview() {
+		writeTriage(b, rv.Triage)
 		writeQuality(b, rv.Quality)
 	}
 	writeDetails(b, c, rv != nil)

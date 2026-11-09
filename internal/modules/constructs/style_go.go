@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/exey/archscope/internal/security"
 )
@@ -16,6 +17,9 @@ var (
 	reGoMapCheck = regexp.MustCompile(`^\s*(?:\}\s*else\s+)?if\s+_\s*,\s*(\w+)\s*:?=\s*([A-Za-z_][\w.]*)\[([^\]]+)\]\s*;\s*(\w+)\s*\{`)
 	reGoStat     = regexp.MustCompile(`\bos\.L?[Ss]tat\(\s*([^)]+?)\s*\)`)
 	reGoPkg      = regexp.MustCompile(`^package\s+(\w+)`)
+	reGoFuncSig  = regexp.MustCompile(`^func\s*(\([^)]*\)\s*)?(\w+)\s*(?:\[[^\]]*\])?\(([^)]*)\)\s*([^{]*)`)
+	reGoAnyType  = regexp.MustCompile(`(?:^|[^\w.\]])(?:any|interface\s*\{\s*\})(?:[^\w]|$)`)
+	reGoAnyParam = regexp.MustCompile(`(?:^|,)\s*\w+\s+(?:any|interface\s*\{\s*\})\s*(?:,|$)`)
 	reGoPrint    = regexp.MustCompile(`\bfmt\.(?:Print|Printf|Println)\(`)
 	reGoTypeName = regexp.MustCompile(`^type\s+(\w+)\s+struct\b\s*(\{\s*\})?`)
 	reGoMethodOn = regexp.MustCompile(`^func\s+\((?:\w+\s+)?\*?(\w+)\)\s+\w+\(`)
@@ -89,6 +93,18 @@ func (c *styleCtx) scanGo() {
 				}
 			}
 		}
+		// any / interface{} in a signature says nothing about what comes back
+		if g := reGoFuncSig.FindStringSubmatch(l); g != nil && !security.IsTestOrBenchPath(c.path) && !goAnyIdiom(g[2]) &&
+			!(g[1] != "" && g[2] != "" && unicode.IsUpper(rune(g[2][0]))) { // an exported method usually satisfies an interface
+			switch {
+			case reGoAnyType.MatchString(g[4]):
+				c.add(i, security.SevLow, "go-any-return", "any in a return type",
+					"Callers must type-assert to use the result. Return the concrete type, a small interface, or a generic type parameter; if the value really is open-ended (JSON, SQL NULL), name that with a type.", g[2], false)
+			case reGoAnyParam.MatchString(g[3]):
+				c.add(i, security.SevLow, "go-any-param", "any as a parameter type",
+					"The compiler cannot check what is passed in. Take the concrete type, a small interface, or a type parameter (`func F[T Number](x T)`).", g[2], true)
+			}
+		}
 		// fmt.Print in a library package
 		if !isProgram && reGoPrint.MatchString(l) {
 			c.add(i, security.SevLow, "go-print", "fmt.Print in library code",
@@ -121,4 +137,14 @@ func statInfoUsed(line string, code []string, i int) bool {
 		}
 	}
 	return false
+}
+
+// goAnyIdiom: signatures where an open type is the contract (fmt.Stringer-style
+// and encoding hooks, sql.Scanner, testing entry points).
+func goAnyIdiom(name string) bool {
+	switch name {
+	case "Scan", "Value", "MarshalJSON", "UnmarshalJSON", "Format", "Errorf", "Printf", "Println", "Print":
+		return true
+	}
+	return strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Benchmark") || strings.HasPrefix(name, "Fuzz") || strings.HasPrefix(name, "Example")
 }

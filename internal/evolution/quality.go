@@ -13,8 +13,10 @@ import (
 type Quality struct {
 	AddedSrc, AddedTest int // added lines in source files / in test files
 
-	Funcs, Documented int // new functions, and those with a doc comment
-	Tested            int // new functions a test file refers to by name
+	Funcs, Documented int    // new functions, and those with a doc comment
+	Testable          int    // new functions a unit test could cover (SQL / query builders excluded)
+	Tested            int    // testable new functions a test file refers to by name
+	Untested          []Item // the testable new functions no test mentions
 
 	Complex, ComplexDocumented int    // new complex functions (cyclomatic > 10 or 50+ lines), documented ones
 	Undocumented               []Item // the complex ones without a doc comment
@@ -70,9 +72,21 @@ func RenderQualityMarkdown(q *Quality) string {
 	var b strings.Builder
 	b.WriteString("**Quality of the added code**\n\n| Metric | Result |\n|--------|--------|\n")
 	fmt.Fprintf(&b, "| 📝 New functions with a doc comment | %d of %d (%d%%) |\n", q.Documented, q.Funcs, Pct(q.Documented, q.Funcs))
-	fmt.Fprintf(&b, "| 🧪 New functions referenced by a test | %d of %d (%d%%) |\n", q.Tested, q.Funcs, Pct(q.Tested, q.Funcs))
+	fmt.Fprintf(&b, "| 🧪 Testable new functions referenced by a test | %d of %d (%d%%) |\n", q.Tested, q.Testable, Pct(q.Tested, q.Testable))
+	fmt.Fprintf(&b, "| 🧫 Testable new functions without tests | %d |\n", len(q.Untested))
 	fmt.Fprintf(&b, "| 🌀 Complex new functions with a doc comment | %d of %d (%d%%) |\n", q.ComplexDocumented, q.Complex, Pct(q.ComplexDocumented, q.Complex))
 	fmt.Fprintf(&b, "| ➕ Added lines | %s source · %s test |\n\n", commaInt(q.AddedSrc), commaInt(q.AddedTest))
+	if len(q.Untested) > 0 {
+		b.WriteString("Testable functions without tests:\n\n")
+		for i, it := range q.Untested {
+			if i == 15 {
+				fmt.Fprintf(&b, "- …and %d more\n", len(q.Untested)-15)
+				break
+			}
+			fmt.Fprintf(&b, "- %s\n", itemMD(it))
+		}
+		b.WriteString("\n")
+	}
 	if len(q.Undocumented) > 0 {
 		b.WriteString("Complex functions that need a doc comment:\n\n")
 		for _, it := range q.Undocumented {

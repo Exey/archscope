@@ -339,3 +339,71 @@ func TestStyleStatSizeGuardAndQuotedPhrases(t *testing.T) {
 		t.Errorf("a real time-bound doc must still be flagged, got %d", n)
 	}
 }
+
+func TestStyleGoAnySignature(t *testing.T) {
+	src := "package p\n\nfunc nullIfZero(n int32) any {\n\treturn nil\n}\n\nfunc Set(key string, v any) {}\n\nfunc Log(format string, args ...any) {}\n\nfunc Map[T any](xs []T) []T { return xs }\n\nfunc (x X) Scan(src any) error { return nil }\n"
+	got := styleIDs("/x/a.go", src)
+	if got["go-any-return"] != 1 || got["go-any-param"] != 1 {
+		t.Errorf("want 1 return + 1 param, got %v", got)
+	}
+}
+
+func TestStyleErrorHandling(t *testing.T) {
+	bad := `package svc
+
+import (
+	"errors"
+	"net/http"
+	"os"
+
+	"google.golang.org/grpc"
+)
+
+func Fetch(u string) error {
+	resp, err := http.Get(u)
+	if err != nil {
+		return err
+	}
+	_ = resp
+	os.Remove("/tmp/x")
+	return nil
+}
+
+func (s *Srv) Get(ctx context.Context, req *Req) (*Res, error) {
+	return nil, errors.New("nope")
+}
+
+func stop() { os.Exit(1) }
+`
+	got := styleIDs("/x/svc/a.go", bad)
+	for _, id := range []string{"err-http-status", "err-http-body", "err-http-timeout", "err-os-ignored", "err-grpc-plain", "err-os-exit"} {
+		if got[id] != 1 {
+			t.Errorf("%s = %d, want 1 (%v)", id, got[id], got)
+		}
+	}
+	good := `package svc
+
+import "net/http"
+
+var client = &http.Client{Timeout: 5}
+
+func Fetch(u string) error {
+	resp, err := client.Do(nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil
+	}
+	return nil
+}
+`
+	if got := styleIDs("/x/svc/a.go", good); got["err-http-status"]+got["err-http-body"]+got["err-http-timeout"] != 0 {
+		t.Errorf("handled call flagged: %v", got)
+	}
+	py := "import requests\n\ndef f(u):\n    r = requests.get(u)\n    return r.text\n\ndef g(u):\n    r = requests.get(u, timeout=3)\n    r.raise_for_status()\n"
+	if got := styleIDs("/x/a.py", py); got["err-http-timeout"] != 1 || got["err-http-status"] != 1 {
+		t.Errorf("python http = %v", got)
+	}
+}

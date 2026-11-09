@@ -53,3 +53,27 @@ func (p *Parser) Parse(filePath, moduleName, projectType string) (*ParsedFile, e
 	}
 	return pf, nil
 }
+
+// ParseLines is Parse for text already in memory (a file as of another commit):
+// the universal scan and the language hook, without touching the disk.
+func (p *Parser) ParseLines(filePath string, lines []string) *ParsedFile {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	spec := p.Reg.Lookup(ext)
+	if spec == nil {
+		return nil
+	}
+	if p.Reg.IsShared(ext) {
+		if resolved := p.Reg.ResolveShared(ext, lines); resolved != nil {
+			spec = resolved
+		}
+	}
+	c := p.Reg.Compiled(spec.ID)
+	if c == nil {
+		return nil
+	}
+	pf := ParseUniversal(filePath, lines, spec, c)
+	if spec.ParseHook != nil {
+		spec.ParseHook(filePath, lines, pf)
+	}
+	return pf
+}

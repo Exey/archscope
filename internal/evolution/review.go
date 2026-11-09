@@ -37,6 +37,12 @@ type Review struct {
 
 	// Quality is how well the code this change adds is documented and tested.
 	Quality *Quality
+
+	// Triage ranks the files to read first and flags what the change forgot.
+	Triage *Triage
+
+	// Summary counts what the change does to the code's declarations.
+	Summary *ChangeSummary
 }
 
 // mrRefRe matches GitLab's refs/merge-requests/N/head and GitHub's
@@ -416,6 +422,8 @@ func RenderReviewMarkdown(rv *Review) string {
 		b.WriteString("_No changed files between the merge-base and the reviewed branch._\n\n")
 		return b.String()
 	}
+	b.WriteString(RenderSummaryMarkdown(rv.Summary))
+	b.WriteString(RenderTriageMarkdown(rv.Triage))
 	files := append([]ReviewFile(nil), rv.Files...)
 	sort.SliceStable(files, func(i, j int) bool { return len(files[i].Issues) > len(files[j].Issues) })
 	for _, f := range files {

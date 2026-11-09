@@ -56,6 +56,7 @@ func scanStyle(path, fe string, m maskedFile) []CSIssue {
 	c := &styleCtx{path: path, fe: fe, m: m}
 	c.scanComments()
 	c.scanStringly()
+	c.scanErrors()
 	switch fe {
 	case ".py":
 		c.scanPython()

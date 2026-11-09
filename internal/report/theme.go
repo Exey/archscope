@@ -305,6 +305,14 @@ code,.mono{font-family:var(--mono)}
 .as-gl{margin-bottom:14px; padding:12px 14px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-elev)}
 .as-gl__title{font-size:13px; font-weight:650; margin-bottom:4px}
 .as-rv{margin-bottom:14px}
+.as-sum{display:grid; grid-template-columns:repeat(8,minmax(0,1fr)); gap:8px; margin:8px 0 12px}
+.as-sum__c{border:1px solid var(--border,#d0d7de); border-radius:8px; padding:6px 8px; min-width:0}
+.as-sum__n{font-size:15px; font-weight:600; white-space:nowrap}
+.as-sum__l{font-size:11px; opacity:.75; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.as-sum__c--up .as-sum__n{color:#1a7f37}
+.as-sum__c--down .as-sum__n{color:#cf222e}
+.as-sum__c--zero{opacity:.55}
+@media (max-width:900px){.as-sum{grid-template-columns:repeat(4,minmax(0,1fr))}}
 .as-rv__head{display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; font-size:13px; margin-bottom:8px}
 .as-rv__files{border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-elev); overflow:hidden}
 .as-rv__file{display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; padding:6px 12px; border-top:1px solid var(--border); font-size:12.5px}

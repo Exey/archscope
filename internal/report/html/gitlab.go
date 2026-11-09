@@ -58,6 +58,7 @@ func renderGitLabCard(res *result.AnalysisResult) string {
 	b.WriteString(`</div>`)
 	b.WriteString(mrNote)
 	b.WriteString(`</div>`)
+	writeChangeSummary(&b, rv.Summary)
 	return b.String()
 }
 
@@ -127,4 +128,29 @@ func shortSHA(s string) string {
 		return s[:7]
 	}
 	return s
+}
+
+// writeChangeSummary is a row of small tiles under the MR card: how many functions
+// the change adds, updates and deletes, and the other declarations it adds.
+func writeChangeSummary(b *strings.Builder, s *evolution.ChangeSummary) {
+	if s.Empty() {
+		return
+	}
+	b.WriteString(`<div class="as-sum">`)
+	for _, c := range s.Cards() {
+		tone := c.Tone
+		if c.N == 0 {
+			tone = "zero"
+		}
+		tip := c.Label
+		if len(c.Names) > 0 {
+			n := append([]string(nil), c.Names...)
+			if len(n) > 12 {
+				n = append(n[:12], fmt.Sprintf("+%d more", len(c.Names)-12))
+			}
+			tip = c.Label + ": " + strings.Join(n, ", ")
+		}
+		fmt.Fprintf(b, `<div class="as-sum__c as-sum__c--%s" title="%s"><div class="as-sum__n">%s %d</div><div class="as-sum__l">%s</div></div>`, tone, esc(tip), c.Icon, c.N, esc(c.Label))
+	}
+	b.WriteString(`</div>`)
 }

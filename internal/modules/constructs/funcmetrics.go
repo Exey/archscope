@@ -291,3 +291,23 @@ func isGeneratedHeader(raw []string) bool {
 	}
 	return false
 }
+
+// FuncLengths maps the 1-based declaration line of every function in a source
+// file to its length in lines (signature to closing brace / last body line).
+// Functions the lexical scan cannot bound are absent.
+func FuncLengths(path string, lines []string) map[int]int {
+	fe := ext(path)
+	m := maskSource(lines, fe)
+	out := map[int]int{}
+	if fe == ".py" || fe == ".pyi" {
+		funcs, _ := pyParse(m)
+		for _, f := range funcs {
+			out[f.start+1] = f.end - f.start + 1
+		}
+		return out
+	}
+	for _, f := range csFuncRanges(m.code) {
+		out[f.start+1] = f.end - f.start + 1
+	}
+	return out
+}
