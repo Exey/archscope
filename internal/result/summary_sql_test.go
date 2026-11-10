@@ -13,10 +13,10 @@ func TestIsSQLFunc(t *testing.T) {
 		"\treturn a + b",
 		"}",
 	}
-	if !isSQLFunc(src, 1, 5) {
+	if untestableTech("a.go", src, 1, 5) == "" {
 		t.Error("query builder must be excluded")
 	}
-	if isSQLFunc(src, 6, 3) {
+	if untestableTech("a.go", src, 6, 3) != "" {
 		t.Error("plain function is testable")
 	}
 }

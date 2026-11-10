@@ -2,6 +2,7 @@ package html
 
 import (
 	"fmt"
+	"github.com/exey/archscope/internal/langprofile"
 	"html"
 	"math"
 	"path/filepath"
@@ -4759,13 +4760,11 @@ func isTestFile(path string) bool {
 // isGeneratedFile returns true for Go files that are machine-generated:
 // protobuf outputs (*.pb.go) and controller-gen outputs (zz_generated*.go).
 func isGeneratedFile(path string) bool {
-	base := filepath.Base(path)
-	if strings.HasSuffix(base, ".pb.go") ||
-		strings.HasSuffix(base, ".pb.gw.go") ||
-		strings.HasPrefix(base, "zz_generated") {
+	if langprofile.IsGeneratedName(path) {
 		return true
 	}
 	// Django migrations: digit-prefixed .py files inside a migrations/ directory.
+	base := filepath.Base(path)
 	if strings.HasSuffix(base, ".py") && len(base) > 0 && base[0] >= '0' && base[0] <= '9' {
 		if filepath.Base(filepath.Dir(path)) == "migrations" {
 			return true

@@ -13,6 +13,7 @@
 package constructs
 
 import (
+	"github.com/exey/archscope/internal/langprofile"
 	"regexp"
 	"strings"
 
@@ -106,10 +107,8 @@ func scanStringSmells(filePath string, stripped, raw []string) []CSIssue {
 	if lang == csStrNone {
 		return nil
 	}
-	for i := 0; i < len(raw) && i < 5; i++ {
-		if strings.Contains(raw[i], "Code generated") || strings.Contains(raw[i], "DO NOT EDIT") {
-			return nil // generated code isn't hand-fixable
-		}
+	if langprofile.IsGenerated(filePath, raw) {
+		return nil // generated code isn't hand-fixable
 	}
 	var out []CSIssue
 	add := func(i int, id, rule, msg string) {

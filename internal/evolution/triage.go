@@ -2,6 +2,7 @@ package evolution
 
 import (
 	"fmt"
+	"github.com/exey/archscope/internal/langprofile"
 	"math"
 	"path"
 	"regexp"
@@ -88,13 +89,7 @@ func RankFiles(files []ReviewFile) []ReadFirst {
 }
 
 // IsTestPath reports whether p looks like a test file (any language).
-func IsTestPath(p string) bool {
-	l := strings.ToLower(p)
-	b := path.Base(l)
-	return strings.HasSuffix(b, "_test.go") || strings.HasPrefix(b, "test_") || strings.Contains(b, "_test.") || strings.Contains(b, ".test.") ||
-		strings.Contains(b, ".spec.") || strings.HasSuffix(b, "tests.swift") || strings.HasSuffix(b, "test.java") || strings.HasSuffix(b, "test.kt") ||
-		strings.Contains(l, "/tests/") || strings.Contains(l, "/test/") || strings.Contains(l, "/__tests__/") || strings.HasPrefix(l, "tests/") || strings.HasPrefix(l, "test/")
-}
+func IsTestPath(p string) bool { return langprofile.IsTest(p) }
 
 // UntestedChanges lists the changed production source files that got real new
 // code but no changed test file next to them (same directory or same stem).
@@ -108,7 +103,7 @@ func UntestedChanges(files []ReviewFile, isSource func(string) bool) []ReviewFil
 	}
 	var out []ReviewFile
 	for _, f := range files {
-		if f.Binary || f.Add < 10 || IsTestPath(f.Path) || !isSource(f.Path) {
+		if f.Binary || f.Add < 10 || IsTestPath(f.Path) || langprofile.IsGeneratedPath(f.Path) || !isSource(f.Path) {
 			continue
 		}
 		if testDirs[path.Dir(f.Path)] || testStems[stem(f.Path)] {

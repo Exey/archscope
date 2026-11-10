@@ -8,14 +8,14 @@ import (
 	"github.com/exey/archscope/internal/langspec"
 )
 
-// defaultBigFunctionMinLines is the threshold for flagging a "big" function
+// DefaultBigFunctionMinLines is the threshold for flagging a "big" function
 // when a spec doesn't override it.
-const defaultBigFunctionMinLines = 25
+const DefaultBigFunctionMinLines = 25
 
-// defaultBigTypeMinLines is the threshold for flagging a "big" type when a
+// DefaultBigTypeMinLines is the threshold for flagging a "big" type when a
 // spec doesn't override it. Types run larger than functions before becoming
 // unwieldy, hence the higher default.
-const defaultBigTypeMinLines = 300
+const DefaultBigTypeMinLines = 300
 
 // SourceLoader reads a file into lines once. It is the single I/O choke point
 // reused by the parser and (later) by security rules, so a file is read at most
@@ -64,11 +64,11 @@ func ParseUniversal(filePath string, lines []string, spec *langspec.LanguageSpec
 
 	bigMin := spec.Patterns.BigFunctionMinLines
 	if bigMin <= 0 {
-		bigMin = defaultBigFunctionMinLines
+		bigMin = DefaultBigFunctionMinLines
 	}
 	bigTypeMin := spec.Patterns.BigTypeMinLines
 	if bigTypeMin <= 0 {
-		bigTypeMin = defaultBigTypeMinLines
+		bigTypeMin = DefaultBigTypeMinLines
 	}
 
 	var (

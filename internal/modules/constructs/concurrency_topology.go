@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/exey/archscope/internal/langprofile"
 	"github.com/exey/archscope/internal/parser"
 )
 
@@ -199,12 +200,7 @@ func hasExt(exts, e string) bool {
 
 func maskSecret(s string) string { return reURLSecret.ReplaceAllString(s, "://$1:***@") }
 
-func isCommentLine(t, e string) bool {
-	if e == ".py" {
-		return strings.HasPrefix(t, "#")
-	}
-	return strings.HasPrefix(t, "//") || strings.HasPrefix(t, "*") || strings.HasPrefix(t, "/*")
-}
+func isCommentLine(t, e string) bool { return langprofile.IsCommentLine(e, t) }
 
 // scanTopology reads one file's raw lines into t.
 func scanTopology(t *Topology, filePath, e string, lines []string, seen map[string]bool) {

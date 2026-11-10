@@ -2,6 +2,7 @@ package result
 
 import (
 	"fmt"
+	"github.com/exey/archscope/internal/langprofile"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -98,8 +99,8 @@ func attachQuality(res *AnalysisResult, repo string, rv *evolution.Review) {
 			}
 			continue
 		}
-		if pf == nil {
-			continue // not a source file ArchScope reads
+		if pf == nil || langprofile.IsGenerated(f.Path, nil) {
+			continue // not a source file ArchScope reads, or machine-written
 		}
 		q.AddedSrc += f.Add
 		added := evolution.AddedLines(repo, rv.BaseSHA, head, f.Path)
@@ -114,13 +115,18 @@ func attachQuality(res *AnalysisResult, repo string, rv *evolution.Review) {
 			rel = filepath.ToSlash(r)
 		}
 		for _, d := range pf.Declarations {
-			if d.Kind == parser.DeclFunc && added[d.Line] && measurableFunc(d.Name) {
+			if d.Kind == parser.DeclFunc && added[d.Line] && !langprofile.IgnoredFunc(f.Path, d.Name) {
 				q.Funcs++
 				if docs.Has(d.Line) {
 					q.Documented++
 				}
-				if isSQLFunc(read(f.Path), d.Line, lengths[d.Line]) {
-					continue // needs a database, not a unit test
+				if tech := untestableTech(f.Path, read(f.Path), d.Line, lengths[d.Line]); tech != "" {
+					// needs a database / network / filesystem, not a unit test
+					if q.Integration == nil {
+						q.Integration = map[string]int{}
+					}
+					q.Integration[tech]++
+					continue
 				}
 				q.Testable++
 				if testIdents[d.Name] {
@@ -166,15 +172,6 @@ func attachQuality(res *AnalysisResult, repo string, rv *evolution.Review) {
 	}
 }
 
-// measurableFunc skips names that say nothing about documentation or tests.
-func measurableFunc(name string) bool {
-	switch name {
-	case "main", "init", "__init__", "constructor", "":
-		return false
-	}
-	return len(name) > 2
-}
-
 // untestedNote labels an untested function with its size, so the biggest stand out.
 func untestedNote(loc int) string {
 	if loc <= 0 {
@@ -183,20 +180,19 @@ func untestedNote(loc int) string {
 	return fmt.Sprintf("%d LOC · no test file mentions it", loc)
 }
 
-var reSQLFunc = regexp.MustCompile(`(?is)\bselect\b.{0,300}?\bfrom\b|\binsert\s+into\b|\bupdate\s+\w+\s+set\b|\bdelete\s+from\b|\bunion\s+all\b|\b(?:create|alter|drop)\s+table\b|\bsquirrel\.|\bsq\.(?:Select|Insert|Update|Delete)\b|\.(?:QueryRow|QueryContext|ExecContext|QueryRowContext|Queryx|Getx|NamedExec)\(|\bcursor\.execute\(|\bsession\.(?:query|execute)\(`)
-
-// isSQLFunc: the function (declared on 1-based line, loc lines long; 0 = unknown, then
-// 12 lines) builds or runs SQL — covering it takes a database, so it is not "testable".
-func isSQLFunc(lines []string, line, loc int) bool {
+// untestableTech names the technology (SQL, network, FTP, filesystem, …) the
+// function declared on 1-based line (loc lines long; 0 = unknown, then 12) uses,
+// which makes it an integration-test subject rather than a unit-test one; "" = testable.
+func untestableTech(path string, lines []string, line, loc int) string {
 	if loc <= 0 {
 		loc = 12
 	}
-	end := line - 1 + loc
 	if line < 1 || line > len(lines) {
-		return false
+		return ""
 	}
+	end := line - 1 + loc
 	if end > len(lines) {
 		end = len(lines)
 	}
-	return reSQLFunc.MatchString(strings.Join(lines[line-1:end], "\n"))
+	return langprofile.Untestable(path, strings.Join(lines[line-1:end], "\n"))
 }

@@ -277,7 +277,7 @@ func slug(s string) string {
 }
 
 // reviewHeadline is the one-line identity of the merge request, as its page shows
-// it: "PHARMZAKAZ-1186 into dev · 2 hours ago · 12 files +1,314 −234".
+// it: "PHARMZAKAZ-1186 into dev · last commit 2 hours ago".
 func reviewHeadline(rv *evolution.Review) string {
 	if rv == nil {
 		return ""
@@ -287,7 +287,5 @@ func reviewHeadline(rv *evolution.Review) string {
 	if ago := evolution.Ago(rv.HeadDate, time.Now()); ago != "" {
 		parts = append(parts, esc("last commit "+ago))
 	}
-	parts = append(parts, fmt.Sprintf(`%d %s <span class="as-evo__d as-evo__d--up">+%s</span> <span class="as-evo__d as-evo__d--down">−%s</span>`,
-		len(rv.Files), plural(len(rv.Files), "file", "files"), fmtNum(rv.Adds), fmtNum(rv.Dels)))
 	return `<span class="as-evo__mr">` + strings.Join(parts, " · ") + `</span>`
 }

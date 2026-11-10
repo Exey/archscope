@@ -1,6 +1,10 @@
 package constructs
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // TestTripleQuoteSpansLines verifies a Python/Swift docstring's contents are
 // blanked on every line it spans, not just its first — the exact bug ported
@@ -89,5 +93,20 @@ func TestBlockCommentDoesNotNestInGo(t *testing.T) {
 	stripped, _ := readSource(`/* outer /* inner */ still commented */ code_after`, ".go")
 	if want := ` still commented */ code_after`; stripped[0] != want {
 		t.Fatalf("stripped = %q, want %q", stripped[0], want)
+	}
+}
+
+func TestSourceCacheSkipsGeneratedCode(t *testing.T) {
+	dir := t.TempDir()
+	gen := filepath.Join(dir, "activity-pb.gw.go")
+	hand := filepath.Join(dir, "service.go")
+	os.WriteFile(gen, []byte("package v1\n\nfunc request_X_0() {}\n"), 0o644)
+	os.WriteFile(hand, []byte("package v1\n\nfunc Handle() {}\n"), 0o644)
+	c := newSourceCache()
+	if c.lines(gen) != nil {
+		t.Error("a generated file must not reach any construct module")
+	}
+	if c.lines(hand) == nil {
+		t.Error("a hand-written file must be read")
 	}
 }

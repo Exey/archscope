@@ -1,6 +1,7 @@
 package security
 
 import (
+	"github.com/exey/archscope/internal/langprofile"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -147,6 +148,9 @@ func (e *Engine) Run(files []SourceFile, loader LineLoader, repoPath string, onC
 				lines, err := loader.Load(files[i].Path)
 				if err != nil {
 					lines = nil
+				}
+				if langprofile.IsGeneratedName(files[i].Path) || langprofile.IsGeneratedHeader(lines) {
+					lines = nil // machine-written (protobuf stubs, mocks): not the author's to fix
 				}
 				all[i].path = files[i].Path
 				all[i].languageID = files[i].LanguageID

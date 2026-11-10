@@ -1,6 +1,7 @@
 package result
 
 import (
+	"github.com/exey/archscope/internal/langprofile"
 	"os"
 	"path/filepath"
 	"sort"
@@ -53,10 +54,13 @@ func attachSummary(repo string, rv *evolution.Review) {
 		default:
 			sum.FilesChanged++
 		}
+		if langprofile.IsGenerated(f.Path, nil) {
+			continue // generated stubs are not the change's own declarations
+		}
 		isTest := security.IsTestOrBenchPath(f.Path)
 		at := " (" + filepath.Base(f.Path) + ")" // the same name recurs across files
 		after, before := decls(ps, f.Path, now, haveNow), decls(ps, f.Path, base, haveBase)
-		if len(after.funcs)+len(after.other)+len(before.funcs)+len(before.other) == 0 {
+		if len(after.funcs)+len(after.other)+len(after.values)+len(before.funcs)+len(before.other)+len(before.values) == 0 {
 			continue
 		}
 		added := evolution.AddedLines(repo, rv.BaseSHA, head, f.Path)
@@ -80,21 +84,23 @@ func attachSummary(repo string, rv *evolution.Review) {
 			}
 		}
 		for k, kind := range after.other {
-			if _, ok := before.other[k]; !ok {
-				if typeKinds[kind] {
-					sum.TypesNew = append(sum.TypesNew, k+at)
-				} else {
-					sum.ValuesNew = append(sum.ValuesNew, k+at)
-				}
+			if _, ok := before.other[k]; !ok && typeKinds[kind] {
+				sum.TypesNew = append(sum.TypesNew, k+at)
 			}
 		}
 		for k, kind := range before.other {
-			if _, ok := after.other[k]; !ok {
-				if typeKinds[kind] {
-					sum.TypesDeleted = append(sum.TypesDeleted, k+at)
-				} else {
-					sum.ValuesDeleted = append(sum.ValuesDeleted, k+at)
-				}
+			if _, ok := after.other[k]; !ok && typeKinds[kind] {
+				sum.TypesDeleted = append(sum.TypesDeleted, k+at)
+			}
+		}
+		for k := range after.values {
+			if _, ok := before.values[k]; !ok {
+				sum.ValuesNew = append(sum.ValuesNew, k+at)
+			}
+		}
+		for k := range before.values {
+			if _, ok := after.values[k]; !ok {
+				sum.ValuesDeleted = append(sum.ValuesDeleted, k+at)
 			}
 		}
 	}
@@ -108,15 +114,19 @@ func attachSummary(repo string, rv *evolution.Review) {
 
 // fileDecls: a file's functions (name → [start, end] 1-based) and other declarations.
 type fileDecls struct {
-	funcs map[string][2]int
-	other map[string]parser.DeclKind
+	funcs  map[string][2]int
+	other  map[string]parser.DeclKind // types and the like
+	values map[string]string          // named constants and variables → "const" | "var"
 }
 
 // decls parses lines as path; the zero value (empty maps) when the file is absent or unknown.
 func decls(ps *parser.Parser, path string, lines []string, ok bool) *fileDecls {
-	d := &fileDecls{funcs: map[string][2]int{}, other: map[string]parser.DeclKind{}}
+	d := &fileDecls{funcs: map[string][2]int{}, other: map[string]parser.DeclKind{}, values: map[string]string{}}
 	if !ok {
 		return d
+	}
+	for _, v := range langprofile.ScanValues(path, lines) {
+		d.values[v.Name] = v.Kind
 	}
 	pf := ps.ParseLines(path, lines)
 	if pf == nil {
@@ -132,7 +142,9 @@ func decls(ps *parser.Parser, path string, lines []string, ok bool) *fileDecls {
 			}
 			continue
 		}
-		d.other[x.Name] = x.Kind
+		if x.Kind != parser.DeclConst && x.Kind != parser.DeclVar { // values come from the language profile
+			d.other[x.Name] = x.Kind
+		}
 	}
 	return d
 }

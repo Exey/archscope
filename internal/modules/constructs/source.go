@@ -7,6 +7,7 @@ package constructs
 
 import (
 	"fmt"
+	"github.com/exey/archscope/internal/langprofile"
 	"html"
 	"os"
 	"strconv"
@@ -54,8 +55,12 @@ func (c *sourceCache) get(filePath string) *fileSource {
 	if err == nil && fi.Size() <= maxSourceBytes {
 		if data, err := os.ReadFile(filePath); err == nil {
 			s.raw = strings.Split(string(data), "\n")
-			s.stripped, s.strings = readSource(string(data), ext(filePath))
-			s.ok = true
+			// Generated code (protobuf / gRPC stubs, mocks, …) is nobody's to fix: no
+			// construct module reads it, so none can report on it.
+			if !langprofile.IsGenerated(filePath, s.raw) {
+				s.stripped, s.strings = readSource(string(data), ext(filePath))
+				s.ok = true
+			}
 		}
 	}
 	c.files[filePath] = s

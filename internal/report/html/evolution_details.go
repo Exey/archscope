@@ -244,7 +244,6 @@ func writeQuality(b *strings.Builder, q *evolution.Quality) {
 	chip("📝", "documented", q.Documented, q.Funcs, "New functions with a doc comment directly above (or a Python docstring)")
 	chip("🧪", "referenced by tests", q.Tested, q.Testable, "Testable new functions (SQL / query-builder functions excluded) whose name a test file mentions — a heuristic, not line coverage")
 	chip("🌀", "complex documented", q.ComplexDocumented, q.Complex, "New functions with cyclomatic complexity over 10 or 50+ lines")
-	chip("🧫", "testable functions tested", q.Tested, q.Funcs, "New testable functions a test mentions; the rest are listed below")
 	fmt.Fprintf(b, `<span class="as-evo__info">+%s source · +%s test lines</span></div>`, fmtNum(q.AddedSrc), fmtNum(q.AddedTest))
 	if len(q.Undocumented) > 0 {
 		fmt.Fprintf(b, `<ul class="as-evo__items">`)
@@ -252,6 +251,9 @@ func writeQuality(b *strings.Builder, q *evolution.Quality) {
 			fmt.Fprintf(b, `<li>%s</li>`, itemHTML(it, "", true))
 		}
 		b.WriteString(`</ul>`)
+	}
+	if note := q.IntegrationNote(); note != "" {
+		fmt.Fprintf(b, `<p class="as-evo__meta">🔌 %s.</p>`, esc(note))
 	}
 	if len(q.Untested) > 0 {
 		fmt.Fprintf(b, `<details class="as-rv__untested"><summary>🧫 %d testable new functions without tests</summary><ul class="as-evo__items">`, len(q.Untested))

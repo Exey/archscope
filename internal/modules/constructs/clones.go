@@ -9,6 +9,7 @@ package constructs
 
 import (
 	"fmt"
+	"github.com/exey/archscope/internal/langprofile"
 	"sort"
 	"strings"
 
@@ -186,17 +187,4 @@ func scanClones(files []*parser.ParsedFile, cache *sourceCache) []CSIssue {
 
 // isGeneratedPath reports files that are produced, not written: ORM migrations,
 // protobuf/gRPC stubs, declaration files, minified bundles, storybook stories.
-func isGeneratedPath(path string) bool {
-	p := strings.ToLower(strings.ReplaceAll(path, "\\", "/"))
-	for _, seg := range []string{"/migrations/", "/generated/", "/__generated__/", "/gen/", "/vendor/", "/node_modules/", "/third_party/"} {
-		if strings.Contains(p, seg) {
-			return true
-		}
-	}
-	for _, suf := range []string{".d.ts", ".pb.go", "_pb2.py", "_pb2_grpc.py", ".pb.swift", ".min.js", ".g.dart", ".designer.cs", ".stories.tsx", ".stories.ts", ".stories.js", ".generated.ts", ".gen.go"} {
-		if strings.HasSuffix(p, suf) {
-			return true
-		}
-	}
-	return false
-}
+func isGeneratedPath(path string) bool { return langprofile.IsGeneratedPath(path) }
