@@ -335,8 +335,8 @@ func resolveReview(repo, spec string, ref *Ref) error {
 				if baseName = GuessTargetBranch(repo, head); baseName == "" {
 					baseName = DefaultBranch(repo)
 				}
-			} else {
-				baseName = "HEAD"
+			} else if baseName = GuessTargetBranch(repo, tip); baseName == "" {
+				baseName = "HEAD" // no integration branch found: compare with where you are
 			}
 		}
 		if baseName == "" {

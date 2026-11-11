@@ -23,8 +23,8 @@ type SyncResult struct {
 // every update is fast-forward only, and failures are reported through log and
 // then ignored (the review still runs on what is local).
 //
-// When it switches away from the branch you were on and no --against was given,
-// that branch becomes the base (as it was before the switch), returned in Against.
+// When no --against is given, the branch the merge request goes into is inferred
+// (GuessTargetBranch) and returned in Against.
 func SyncForReview(repo, reviewRef, against string, log func(string)) SyncResult {
 	say := func(m string) {
 		if log != nil {
@@ -71,9 +71,8 @@ func SyncForReview(repo, reviewRef, against string, log func(string)) SyncResult
 				} else {
 					say("git: " + name + " is up to date")
 				}
-				if against == "" && current != "" && current != name {
-					res.Against = current // keep the base the review had before the switch
-				}
+				// The branch you were on before is NOT the base: a merge request goes into an
+				// integration branch (step 1b infers it), whatever you happened to have checked out.
 			}
 		}
 	} else if name := strings.TrimPrefix(reviewRef, "origin/"); current != "" && name == current && !dirtyTracked(repo) {

@@ -54,8 +54,12 @@ func renderEvolution(res *result.AnalysisResult) string {
 	}
 	for _, c := range res.Evolution {
 		c := c
+		label := c.Ref.Label
+		if rv := reviewFor(res, c); rv != nil {
+			label = reviewTabLabel(rv) // the branch names are already in the headline
+		}
 		panes = append(panes, evoPane{
-			label: c.Ref.Label, title: c.Ref.Title + " · " + c.Ref.Short(),
+			label: label, title: c.Ref.Title + " · " + c.Ref.Short(),
 			file: "evolution-" + slug(c.Ref.Label) + ".md",
 			md:   "# Programming Culture evolution — " + c.Ref.Title + "\n\n" + evolution.RenderReviewMarkdown(reviewFor(res, c)) + evolution.RenderMarkdown(c),
 			body: func(b *strings.Builder) {
@@ -288,4 +292,15 @@ func reviewHeadline(rv *evolution.Review) string {
 		parts = append(parts, esc("last commit "+ago))
 	}
 	return `<span class="as-evo__mr">` + strings.Join(parts, " · ") + `</span>`
+}
+
+// reviewTabLabel names the review tab by its request number ("MR !15", "PR #7"), or "Review".
+func reviewTabLabel(rv *evolution.Review) string {
+	switch {
+	case rv.MRIID > 0 && rv.Provider == "github":
+		return fmt.Sprintf("PR #%d", rv.MRIID)
+	case rv.MRIID > 0:
+		return fmt.Sprintf("MR !%d", rv.MRIID)
+	}
+	return "Review"
 }

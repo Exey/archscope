@@ -383,3 +383,26 @@ func TestAgo(t *testing.T) {
 		}
 	}
 }
+
+// Reviewing another branch compares it with the integration branch it goes into,
+// not with whichever branch happens to be checked out.
+func TestReviewOtherBranchGoesIntoIntegrationBranch(t *testing.T) {
+	repo, mainSHA, _ := reviewRepo(t) // checked out on feature
+	run := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("checkout", "-q", "-b", "other", "main")
+	os.WriteFile(filepath.Join(repo, "c.txt"), []byte("other\n"), 0o644)
+	run("add", "-A")
+	run("commit", "-q", "-m", "other work")
+	run("checkout", "-q", "feature")
+
+	ref, err := Resolve(repo, ReviewPrefix+"other", time.Now())
+	if err != nil || ref.Against != "main" || ref.SHA != mainSHA || ref.HeadSHA == "" {
+		t.Errorf("--review other from feature: %+v %v (want against main, base %s)", ref, err, mainSHA)
+	}
+}
