@@ -65,7 +65,7 @@ func renderGitLabCard(res *result.AnalysisResult) string {
 // reviewSubject / reviewAgainst are the two sides to name in the UI.
 func reviewSubject(rv *evolution.Review) string {
 	if rv.Branch != "" {
-		return rv.Branch
+		return strings.TrimPrefix(rv.Branch, "origin/")
 	}
 	return shortSHA(rv.HeadSHA)
 }

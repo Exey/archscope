@@ -65,6 +65,7 @@ type Config struct {
 	OnlyPlatforms []string `json:"-"`
 	NoSpecScan    bool     `json:"-"` // baseline trees skip the OpenAPI scan
 	InspectPaths  []string `json:"-"` // --inspect: celery inspect / rabbitmqctl dumps
+	CoveragePaths []string `json:"-"` // --coverage: test-coverage artifacts for the CRAP risk card
 	SpecPaths     []string `json:"-"` // --spec: OpenAPI documents to analyse the code against, wherever they live
 }
 

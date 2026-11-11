@@ -53,6 +53,7 @@ var (
 type funcStat struct {
 	name                          string
 	line                          int // 1-based
+	end                           int // 1-based, last line of the function
 	cc, returns, branches, locals int
 }
 

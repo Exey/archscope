@@ -47,6 +47,7 @@ func attachQuality(res *AnalysisResult, repo string, rv *evolution.Review) {
 		line  int
 		cc    int
 		lines int
+		risk  float64 // crapkit risk (ccn × churn), 0 = not a risk-based entry
 	}
 	complexByFile := map[string][]cx{}
 	for _, p := range res.ModulePanels {
@@ -54,6 +55,10 @@ func attachQuality(res *AnalysisResult, repo string, rv *evolution.Review) {
 			for _, o := range r.HighComplexity {
 				k := filepath.Clean(o.FilePath)
 				complexByFile[k] = append(complexByFile[k], cx{name: o.Symbol, line: o.Line, cc: o.Value})
+			}
+			for _, o := range r.Crap.Risky { // complexity × recent churn, from 🧨 CRAP risk
+				k := filepath.Clean(o.FilePath)
+				complexByFile[k] = append(complexByFile[k], cx{name: o.Symbol, line: o.Line, cc: o.CCN, risk: o.Risk})
 			}
 		}
 	}
@@ -155,6 +160,9 @@ func attachQuality(res *AnalysisResult, repo string, rv *evolution.Review) {
 			why := fmt.Sprintf("%d lines", c.lines)
 			if c.cc > 0 {
 				why = fmt.Sprintf("complexity %d", c.cc)
+			}
+			if c.risk > 0 {
+				why = fmt.Sprintf("risk %.1f (complexity %d × recent churn)", c.risk, c.cc)
 			}
 			pos := -1
 			if p, ok := oldPos[c.line]; ok {

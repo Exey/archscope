@@ -8,6 +8,7 @@
 //
 //	--open          open the report in the default browser when done
 //	--spec <file>   OpenAPI spec (repeatable, comma-separated) the code is analysed against, in addition to specs found in the tree
+//	--coverage <file> test-coverage artifact (coverage.py xml/json, Go cover profile, lcov, istanbul) for the 🧨 CRAP risk card (repeatable; found automatically when absent)
 //	--inspect <file> saved celery inspect / rabbitmqctl output for the 🧵 Concurrency card (repeatable)
 //	--browser <name> open the report in that browser (chrome | firefox | safari | edge | brave | opera | <app>); implies --open
 //	--output, -o    output directory (default: from config, usually "output")
@@ -20,7 +21,7 @@
 //	--lang-platforms  group all files of a language into one platform tab (shorthand for --group-by=language)
 //	--group-by      how to group platform tabs: language | folder | gitrepo (default: auto-detected)
 //	--scan-all-files  also scan git-submodule (third-party/vendored) directories, skipped by default
-//	--review        review mode: Evolution since <commit|branch> with GitLab MR-line buttons
+//	--review        review mode: Evolution since <commit|branch|MR link> with GitLab MR-line buttons
 //	--evolution     compare Programming Culture now vs. git history: 2w,1m,last-tag,<date>,<commit> or auto (e.g. --evolution 1m 2w)
 package main
 
@@ -100,6 +101,7 @@ func splitArgs(rawArgs []string) (target string, flagArgs []string, err error) {
 		"browser":  true,
 		"spec":     true,
 		"inspect":  true,
+		"coverage": true,
 	}
 	for i := 0; i < len(rawArgs); i++ {
 		a := rawArgs[i]
@@ -181,11 +183,13 @@ func main() {
 		browserFlag   string
 		specFlag      listFlag
 		inspectFlag   listFlag
+		coverageFlag  listFlag
 		langPlatforms bool
 	)
 
 	fs.BoolVar(&o.open, "open", false, "open the HTML report in the browser when done")
 	fs.Var(&specFlag, "spec", "OpenAPI/Swagger spec file(s) to analyse the code against — comma-separated or repeated; used for 📜 OpenAPI lint and 🧱 Spec Coverage in addition to specs found in the tree")
+	fs.Var(&coverageFlag, "coverage", "test-coverage file(s) for the 🧨 CRAP risk card — coverage.py xml/json, Go cover profile, lcov or istanbul coverage-final.json (comma-separated or repeated); coverage.xml, cover.out, lcov.info … in the repository are found automatically")
 	fs.Var(&inspectFlag, "inspect", "saved output of `celery inspect registered|scheduled` or `rabbitmqctl list_queues|list_exchanges|list_bindings` (comma-separated or repeated) — shown in the 🧵 Concurrency card and compared with the tasks found in code")
 	fs.StringVar(&browserFlag, "browser", "", "open the report in this browser (chrome, firefox, safari, edge, brave or an app name); implies --open")
 	fs.StringVar(&o.outputDir, "output", "", "output directory (overrides config)")
@@ -203,7 +207,7 @@ func main() {
 
 	fs.StringVar(&o.evolutionSpec, "evolution", "", "compare Programming Culture now vs. git history, comma- or space-separated: 2w | 1m | 3m | last-tag | YYYY-MM-DD | <commit> | auto (= 2w,1m,last-tag)")
 
-	fs.StringVar(&o.reviewRef, "review", "", "review mode: Evolution since a commit or branch (merge-base, like a merge request diff) with per-issue GitLab \"MR with line\" buttons; bare --review (or auto) = the local default branch (origin/HEAD, main, master, develop); \"last-commit\" = HEAD~1")
+	fs.StringVar(&o.reviewRef, "review", "", "review mode: Evolution since a commit, a branch or a merge/pull request link such as https://gitlab.example.com/group/proj/-/merge_requests/13 (merge-base, like a merge request diff) with per-issue GitLab \"MR with line\" buttons; bare --review (or auto) = the local default branch (origin/HEAD, main, master, develop); \"last-commit\" = HEAD~1")
 
 	fs.StringVar(&o.againstRef, "against", "", "review mode: compare the branch under review with this branch instead of the one you are on (e.g. --review feat/x --against main)")
 
@@ -214,6 +218,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	if _, isLink := evolution.ParseMRLink(o.reviewRef); target == "" && isLink {
+		target, o.target = ".", "." // `archscope --review <MR link>` inside the clone
+	}
 	if target == "" {
 		printUsage()
 		os.Exit(1)
@@ -240,6 +247,7 @@ func main() {
 	browserName = browserFlag
 	specPaths = splitSpecs(strings.Join(specFlag, ","))
 	inspectPaths = splitSpecs(strings.Join(inspectFlag, ","))
+	coveragePaths = splitSpecs(strings.Join(coverageFlag, ","))
 	if browserFlag != "" {
 		o.open = true
 	}
@@ -293,6 +301,7 @@ func run(o runOptions) error {
 	cfg := config.Load(o.cfgPath)
 	cfg.SpecPaths = specPaths
 	cfg.InspectPaths = inspectPaths
+	cfg.CoveragePaths = coveragePaths
 	if o.outputDir == "" {
 		o.outputDir = cfg.Output.Dir
 	}
@@ -319,6 +328,20 @@ func run(o runOptions) error {
 		return fmt.Errorf("archscope: %w", err)
 	}
 	defer resolved.Cleanup() //nolint:errcheck // best-effort removal of the clone's temp dir
+
+	// --review takes the merge/pull request's web address as well as a ref: fetch the
+	// request's head, learn its source and target branch, and review that.
+	if link, ok := evolution.ParseMRLink(o.reviewRef); ok {
+		info, err := evolution.ResolveMRLink(resolved.Path, link, func(m string) { fmt.Println(" → " + m) })
+		if err != nil {
+			return fmt.Errorf("archscope: %w", err)
+		}
+		o.reviewRef = info.Ref
+		if o.againstRef == "" {
+			o.againstRef = info.Target
+		}
+		o.noGitPull = true // origin and the request's refs were fetched just now; do not switch branches
+	}
 
 	// Review mode needs the ref to exist: check it before scanning anything, so a
 	// typo'd branch or MR name fails in seconds instead of after a full analysis.
@@ -518,6 +541,7 @@ func printUsage() {
 Flags:
   --open              open the HTML report in the browser when done
   --spec <file>       OpenAPI spec to analyse the code against (comma-separated or repeated); added to the specs found in the tree
+  --coverage <file>   test-coverage file for the 🧨 CRAP risk card: coverage.py xml/json, Go cover profile, lcov, istanbul (comma-separated or repeated; found automatically when absent)
   --inspect <file>    saved "celery inspect registered|scheduled" / "rabbitmqctl list_queues|list_exchanges|list_bindings" output (comma-separated or repeated)
   --browser <name>    open it in that browser instead of the default (chrome | firefox | safari | edge | brave | opera | <app>); implies --open
   --format <fmt>      html | sarif | md (comma-separated for multiple; default: from config)
@@ -531,7 +555,7 @@ Flags:
                       (default: auto — one git repo groups by language, 2+ prompts interactively)
   --render-modules    include the Modules & Microservices section (and its CDN-loaded graphs); omitted by default
   --scan-all-files    also scan git-submodule (third-party/vendored) directories, skipped by default
-  --review [<ref>]    review mode (bare = against the local default branch: origin/HEAD, main, master, develop): Evolution since a commit/branch (merge-base, like an MR diff) plus GitLab
+  --review [<ref>]    review mode; <ref> may be a merge/pull request link (the request is fetched; GITLAB_TOKEN / GITHUB_TOKEN let it read the target branch from the host) (bare = against the local default branch: origin/HEAD, main, master, develop): Evolution since a commit/branch (merge-base, like an MR diff) plus GitLab
                       "MR with line" buttons on every introduced issue; "last-commit" = HEAD~1
   --no-git-pull       review mode: don't fetch, switch to the reviewed branch or fast-forward branches (default: do)
   --against <ref>     with --review <branch>: compare that branch with <ref> (default: the branch you are on)
@@ -547,6 +571,9 @@ type listFlag []string
 
 func (l *listFlag) String() string     { return strings.Join(*l, ",") }
 func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
+
+// coveragePaths are the --coverage files (absolute).
+var coveragePaths []string
 
 // inspectPaths are the --inspect dumps (absolute).
 var inspectPaths []string

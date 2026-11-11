@@ -180,8 +180,8 @@ func TestRenderHTMLIncludesOffendersAndFolderSmells(t *testing.T) {
 	if !strings.Contains(out, "Sum") {
 		t.Errorf("render missing offending function name: %s", out)
 	}
-	if !strings.Contains(out, "comments") {
-		t.Errorf("render missing comment-percentage stat: %s", out)
+	if !strings.Contains(out, "need a doc comment") || !strings.Contains(out, "CRAP risk") {
+		t.Errorf("render missing the doc-comment tile or the CRAP risk subcard: %s", out)
 	}
 }
 

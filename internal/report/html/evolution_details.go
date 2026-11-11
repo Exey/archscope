@@ -243,7 +243,7 @@ func writeQuality(b *strings.Builder, q *evolution.Quality) {
 	b.WriteString(`<div class="as-rv__q"><div class="as-evo__dtitle">Quality of the added code</div><div>`)
 	chip("📝", "documented", q.Documented, q.Funcs, "New functions with a doc comment directly above (or a Python docstring)")
 	chip("🧪", "referenced by tests", q.Tested, q.Testable, "Testable new functions (SQL / query-builder functions excluded) whose name a test file mentions — a heuristic, not line coverage")
-	chip("🌀", "complex documented", q.ComplexDocumented, q.Complex, "New functions with cyclomatic complexity over 10 or 50+ lines")
+	chip("🌀", "complex documented", q.ComplexDocumented, q.Complex, "New functions with cyclomatic complexity over 10, 50+ lines, or a CRAP risk (complexity × recent churn) of 5.5+")
 	fmt.Fprintf(b, `<span class="as-evo__info">+%s source · +%s test lines</span></div>`, fmtNum(q.AddedSrc), fmtNum(q.AddedTest))
 	if len(q.Undocumented) > 0 {
 		fmt.Fprintf(b, `<ul class="as-evo__items">`)

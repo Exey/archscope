@@ -143,7 +143,11 @@ type CodeStructureReport struct {
 	EmptyFolders       []string       // container-only folders (no files of their own)
 	SingleFileFolders  []string       // one-file folders, only set when > csManySingleFileDirs
 
-	scanned bool
+	Crap CrapReport // 🧨 CRAP risk: every function's risk, the top 20, the ones that need a doc comment
+
+	crapRaw  []crapRaw
+	crapDocs map[string]*DocIndex
+	scanned  bool
 }
 
 // HasData reports whether any file was successfully read for this platform.
@@ -439,7 +443,7 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 		for _, fr := range csFuncRanges(stripped) {
 			if lang != csStrNone && lang != csStrPython {
 				st := bodyStats(lang, fe, stripped[fr.start:min(fr.end+1, len(stripped))], nil)
-				st.name, st.line = fr.name, fr.start+1
+				st.name, st.line, st.end = fr.name, fr.start+1, fr.end+1
 				rep.recordFunc(f.FilePath, raw, st)
 			}
 			nest := nestDepthOf(stripped, fr.start, fr.end)
@@ -497,6 +501,8 @@ func (CodeStructure) Analyze(files []*parser.ParsedFile) any {
 		return rep.DocFiles[i].Public-rep.DocFiles[i].Documented > rep.DocFiles[j].Public-rep.DocFiles[j].Documented
 	})
 	analyzeFolderLayout(files, &rep)
+	rep.Crap = buildCrap(rep.crapRaw)
+	rep.crapRaw, rep.crapDocs = nil, nil
 	return rep
 }
 
@@ -509,6 +515,23 @@ func (r *CodeStructureReport) recordFunc(filePath string, raw []string, st funcS
 		r.HighComplexity = append(r.HighComplexity, CSFuncOffender{Symbol: st.name, FilePath: filePath, Line: st.line, Value: st.cc})
 	}
 	r.ShapeIssues = append(r.ShapeIssues, funcShapeIssues(filePath, raw, st)...)
+	r.collectCrap(filePath, raw, st)
+}
+
+// collectCrap files a function for the 🧨 CRAP risk card (churn and coverage join later).
+func (r *CodeStructureReport) collectCrap(filePath string, raw []string, st funcStat) {
+	if st.end < st.line || st.name == "" {
+		return
+	}
+	if r.crapDocs == nil {
+		r.crapDocs = map[string]*DocIndex{}
+	}
+	d := r.crapDocs[filePath]
+	if d == nil {
+		d = NewDocIndex(filePath, raw)
+		r.crapDocs[filePath] = d
+	}
+	r.crapRaw = append(r.crapRaw, crapRaw{symbol: st.name, path: filePath, line: st.line, end: st.end, ccn: st.cc, doc: d.Has(st.line)})
 }
 
 // analyzePython measures every def of a Python file (the brace-based pass can't
@@ -537,7 +560,7 @@ func (r *CodeStructureReport) analyzePython(filePath string, m maskedFile) {
 			end = len(m.code)
 		}
 		st := bodyStats(csStrPython, ".py", m.code[f.bodyStart:max(f.bodyStart, end)], pyParamNames(f.params))
-		st.name, st.line = sym, f.start+1
+		st.name, st.line, st.end = sym, f.start+1, f.end+1
 		r.recordFunc(filePath, m.raw, st)
 	}
 	r.ShapeIssues = append(r.ShapeIssues, pyClassShape(filePath, m, classes, funcs)...)
@@ -604,8 +627,10 @@ func (CodeStructure) SummaryCards(res any) []modules.SummaryCard {
 	if !ok || !r.HasData() {
 		return nil
 	}
-	cards := []modules.SummaryCard{
-		{Num: strconv.Itoa(r.CommentPercent) + "%", Label: "comments"},
+	cards := []modules.SummaryCard{{Num: strconv.Itoa(r.CommentPercent) + "%", Label: "comments"}}
+	if r.Crap.HasData() {
+		num, _, _ := r.Crap.crapMini()
+		cards = []modules.SummaryCard{{Num: num, Label: "risky functions without a doc comment"}}
 	}
 	if r.WorstNest.Value > 0 {
 		cards = append(cards, modules.SummaryCard{Num: strconv.Itoa(r.WorstNest.Value), Label: "max nesting"})
@@ -629,7 +654,11 @@ func (CodeStructure) RenderMarkdown(res any) string {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "**Comments:** %d%% of all lines", r.CommentPercent)
+	if r.Crap.HasData() {
+		fmt.Fprintf(&b, "**Functions needing a doc comment:** %d of %d (risk ≥ %.1f, no doc)", r.Crap.UndocRisky, r.Crap.Total, CrapRiskThreshold)
+	} else {
+		fmt.Fprintf(&b, "**Comments:** %d%% of all lines", r.CommentPercent)
+	}
 	if r.WorstNest.Value > 0 {
 		fmt.Fprintf(&b, " · **Worst nesting:** %d (%s)", r.WorstNest.Value, r.WorstNest.Symbol)
 	}
@@ -674,6 +703,7 @@ func (CodeStructure) RenderMarkdown(res any) string {
 	writeOffenders("🔢", fmt.Sprintf("Functions with too many parameters (%d+)", csMaxParams+1), "Params", r.HighParamFuncs)
 	writeOffenders("🌀", fmt.Sprintf("Cyclomatic complexity (> %d)", csMaxCyclomatic), "CC", r.HighComplexity)
 	writeOffenders("🪆", fmt.Sprintf("Deeply nested functions (> %d levels)", csMaxNestDepth), "Depth", r.DeepNestFuncs)
+	writeCrapMarkdown(&b, r.Crap)
 
 	if len(r.LooseTypeFiles) > 0 {
 		mdSubOpen(&b, "🕳️", fmt.Sprintf("Loose `any` / `object` types in %d files", len(r.LooseTypeFiles)), r.LooseTypeTotal, "")
@@ -797,6 +827,7 @@ func (CodeStructure) RenderHTML(res any) string {
 	writeCSOffenders(&b, "params", "🔢", fmt.Sprintf("Functions with too many parameters (%d+)", csMaxParams+1), "PARAMS", r.HighParamFuncs)
 	writeCSOffenders(&b, "cyclo", "🌀", fmt.Sprintf("Cyclomatic complexity (&gt; %d)", csMaxCyclomatic), "CC", r.HighComplexity)
 	writeCSOffenders(&b, "nest", "🪆", fmt.Sprintf("Deeply nested functions (&gt; %d levels)", csMaxNestDepth), "DEPTH", r.DeepNestFuncs)
+	writeCrapSubcard(&b, r.Crap)
 	writeCSLooseTypes(&b, r.LooseTypeFiles, r.LooseTypeTotal)
 	writeCSTypingSubcard(&b, r.TypingFiles, r.PyFuncs, r.PyTyped)
 	writeCSDocSubcard(&b, r.DocFiles, r.DocPublic, r.DocDocumented)
@@ -973,7 +1004,12 @@ func writeCSMini(b *strings.Builder, val, label, sub, color, target string) {
 // HIGH · MEDIUM · LOW split) so the whole card reads at a glance.
 func writeCSHeader(b *strings.Builder, r CodeStructureReport) {
 	b.WriteString(`<div class="as-cs__minis-title">Code shape</div><div class="as-cs__minis">`)
-	writeCSMini(b, strconv.Itoa(r.CommentPercent)+"%", "comments", "of all lines", healthColor(r.CommentPercent), "")
+	if r.Crap.HasData() {
+		num, sub, pct := r.Crap.crapMini()
+		writeCSMini(b, num, "need a doc comment", sub, healthColor(100-pct*4), "crap")
+	} else {
+		writeCSMini(b, strconv.Itoa(r.CommentPercent)+"%", "comments", "of all lines", healthColor(r.CommentPercent), "")
+	}
 	if r.WorstNest.Value > 0 {
 		writeCSMini(b, strconv.Itoa(r.WorstNest.Value), "worst nesting", r.WorstNest.Symbol, healthColor(100-r.WorstNest.Value*15), nestTarget(r))
 	}

@@ -215,6 +215,7 @@ func RunWithProgress(rootPath string, cfg config.Config, progress func(string)) 
 	}
 	speccoverage.SetExtraSpecs(cfg.SpecPaths)
 	constructs.SetInspectDumps(cfg.InspectPaths)
+	constructs.SetCoveragePaths(cfg.CoveragePaths)
 
 	// 6) Report modules, run per platform tab.
 	step("Running report modules…")
